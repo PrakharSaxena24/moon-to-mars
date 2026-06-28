@@ -1,0 +1,4 @@
+# keep non-web files (design docs, etc.) out of the public Pages repo
+*.docx
+*.pdf
+.DS_Store
