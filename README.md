@@ -69,7 +69,7 @@ personnel evaluations.
 
 ## 📁 Files / ファイル構成
 ```
-moon_to_mars/
+OgasawaraSim/
 ├─ index.html   screens (canvas/editors → site map + dashboard → report)
 ├─ style.css    calm light business theme + site map + character states
 ├─ engine.js    window.PRS — deterministic sim: data model, detectors, scoring (no DOM)
