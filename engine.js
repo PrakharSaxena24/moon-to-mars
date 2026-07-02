@@ -172,7 +172,8 @@
     function FD(id, en, jp, st, roleId, ids, startMin, durMin, o) {
       o = o || {};
       return { id: id, name: L(en, jp), station: st, phase: pF, day: 'fishday', ownerRoleId: roleId,
-        assignedIds: ids.slice(), startDay: 2, dur: Math.max(0.01, durMin / 1440), startMin: startMin, durMin: durMin,
+        assignedIds: ids.slice(), startDay: 2, dur: Math.max(0.01, durMin / 1440),
+        startMin: startMin, durMin: durMin, baseStartMin: startMin, // baseStartMin = the promised time; guests judge lateness against it, not against a re-dragged block
         deps: o.deps || [], difficulty: o.diff || 2, neededResources: o.res || [], neededInfo: o.info || [],
         neededAuthority: o.auth || null, produces: o.produces || [], assumeOn: o.assumeOn || [],
         wrongFishPenaltyMin: o.wfPenalty || 0, guestFacing: !!o.guest };
@@ -437,7 +438,7 @@
       fixId: 'fixHandoffs', severity: 'high', taskIds: ['t_f_gearload', 't_f_route', 't_f_cook', 't_f_plate', 't_f_serve'],
       test: function (plan) {
         var fd = fishdaySchedule(plan);
-        return fd.idleTotal > IDLE_TOL || fd.wrongFish.length > 0 || fd.missing.length > 0 || fd.late.length > 0;
+        return fd.idleTotal > IDLE_TOL || fd.wrongFish.length > 0 || fd.missing.length > 0 || fd.late.length > 0 || fd.unresolved > 0;
       }
     }
   ];
@@ -598,16 +599,18 @@
     }
     var r = runCascade(false);
     if (r.wrongFish.length) r = runCascade(true);                     // wrong catch -> the galley switches dishes (+cook time)
-    var idleTotal = 0, reworkTotal = 0, availMin = 0, guestWaitMin = 0, byTask = {};
+    var idleTotal = 0, reworkTotal = 0, availMin = 0, guestWaitMin = 0, unresolved = 0, byTask = {};
     for (i = 0; i < fds.length; i++) {
       var td = fds[i], e = r.eff[td.id], n = Math.max(1, td.assignedIds.length);
       availMin += td.durMin * n; idleTotal += e.idleMin * n; reworkTotal += e.extension * n;
-      if (td.guestFacing) guestWaitMin += e.idleMin;
+      if (e.unresolved) unresolved++;
+      // guests judge lateness against the PROMISED time — re-dragging the block later doesn't hide it
+      if (td.guestFacing) guestWaitMin += Math.max(0, e.start - (td.baseStartMin != null ? td.baseStartMin : td.startMin));
       byTask[td.id] = e;
     }
     var serve = r.eff['t_f_serve'];
     return { byTask: byTask, idleTotal: idleTotal, reworkTotal: reworkTotal, availMin: availMin,
-      missing: missing, late: late, wrongFish: r.wrongFish, arrivals: r.arrivals,
+      missing: missing, late: late, wrongFish: r.wrongFish, arrivals: r.arrivals, unresolved: unresolved,
       efficiency: availMin > 0 ? Math.round(100 * availMin / (availMin + idleTotal + reworkTotal)) : 100,
       guestWaitMin: guestWaitMin, dinnerMin: serve ? serve.start : null };
   }
@@ -779,8 +782,10 @@
     sim.handFed = (sim.handFed || 0) + 1;
     return sim;
   }
-  // checkpoint inspector data: what this member holds, waits on (with ETA), does next
+  // checkpoint inspector data: what this member holds, waits on (with ETA), does next.
+  // Minute-clock sims only — a coarse (day-clock) sim has no schedule to inspect.
   function memberInfo(sim, pid) {
+    if (sim.mode !== 'minute' || !sim.sched) return null;
     var plan = sim.plan, p = byId(sim.participants, pid); if (!p) return null;
     var rid = p.roleId, now = sim.clockMin || 0, held = [], waiting = [], i;
     var arrForRole = (sim.sched && sim.sched.arrivals[rid]) || {};

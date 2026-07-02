@@ -139,6 +139,27 @@ var vandal = { seed: 1, overrides: { handoffs: {
 var healed = P.applyAllFixes(vandal), healedPlan = P.mergePlan(healed), healedFd = P.fishdaySchedule(healedPlan);
 ok(P.detect(healedPlan).length === 0 && healedFd.idleTotal === 0 && healedFd.efficiency === 100, 'fixHandoffs heals an erased/slowed/junk-arrowed plan back to clean 100%');
 
+// guests judge lateness against the PROMISED time: dragging dinner later cannot hide the wait
+var lateDinner = P.applyAllFixes(base);
+lateDinner.overrides.timing = { t_f_serve: { startMin: 1110 } };
+var ldFd = P.fishdaySchedule(P.mergePlan(lateDinner));
+ok(ldFd.guestWaitMin === 30 && ldFd.dinnerMin === 1110, 'dinner dragged to 18:30 still bills 30 min guest wait (' + ldFd.guestWaitMin + '/' + ldFd.dinnerMin + ')');
+
+// a dynamically-unresolvable arrow graph (mutual onTaskDone arrows) cannot score as clean
+var loopCfg = { seed: 1, overrides: { handoffs: {
+  h_loop: { cardId: 'ic_tackle', fromRoleId: 'chef', fromTaskId: 't_f_cook', toRoleId: 'specialist', toTaskId: 't_f_gearload', trigger: { type: 'onTaskDone', taskId: 't_f_cook' }, channel: 'radio', ifLate: 'idle', reworkKind: null, content: { en: 'x', jp: 'x' } },
+  h_tackle: null
+} } };
+var loopFd = P.fishdaySchedule(P.mergePlan(P.applyFix(loopCfg, 'setSafety')));
+ok(loopFd.unresolved > 0, 'a cyclic arrow graph marks tasks unresolved (' + loopFd.unresolved + ') instead of scoring clean');
+ok(P.detect(P.mergePlan(loopCfg)).map(function (d) { return d.id; }).indexOf('handoffTiming') >= 0, 'handoffTiming fires on an unresolvable arrow graph');
+
+// memberInfo is a minute-clock API: a coarse sim returns null instead of throwing
+var coarse = P.createSim(base); P.tick(coarse);
+var miCoarse = null, miThrew = false;
+try { miCoarse = P.memberInfo(coarse, 'p03'); } catch (e) { miThrew = true; }
+ok(!miThrew && miCoarse === null, 'memberInfo on a coarse sim returns null (no crash)');
+
 // editor merge surface: draw / erase arrows, retime a block
 ok(P.mergePlan({ seed: 1, overrides: { handoffs: { h_x: { cardId: 'ic_menu', fromRoleId: 'chef', fromTaskId: 't_f_menu', toRoleId: 'specialist', toTaskId: 't_f_gearload', trigger: { type: 'onTaskDone', taskId: 't_f_menu' }, channel: 'faceToFace', ifLate: 'assume', reworkKind: 'wrongFish', content: { en: 'x', jp: 'x' } } } } }).handoffs.length === 13, 'editor can draw a new arrow (12 -> 13)');
 ok(P.mergePlan({ seed: 1, overrides: { handoffs: { h_catch_chef: null } } }).handoffs.length === 11, 'editor can erase an arrow (12 -> 11)');
