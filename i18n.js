@@ -102,7 +102,7 @@
       // --- checkpoint inspector (§8 関所) ---
       inspTitle: 'Checkpoint',
       inspSub: 'Inspect each member: what they hold, what they wait on, what comes next. “Send now” hands a card over to unblock THIS run — the plan gap stays until you fix the plan.',
-      inspNowDoing: 'now', inspNext: 'next', inspIdleFree: 'not waiting on anything',
+      inspNowDoing: 'now', inspNext: 'next', inspIdleFree: 'not waiting on anything', inspMissing: 'no arrow drawn',
       sendNow: 'Send now', inspResume: 'Resume ▶',
       handFedNote: function (n) { return 'hand-fed ' + n + '× this run (plan unchanged)'; },
 
@@ -142,7 +142,7 @@
       p_fatigue_cause: 'The site lead carries crossing, fishing and teardown alone with no deputy, and burns out mid-trip.',
       p_fatigue_fix: 'Add a deputy and split movement, fishing and comms across more people.',
       p_fatigue_need: 'Site Lead deputy',
-      e_fatigue_label: 'Site-lead deputy & load', e_fatigue_off: 'No deputy (overloaded)', e_fatigue_on: 'Deputy Mori + spread the load',
+      e_fatigue_label: 'Site-lead deputy & load', e_fatigue_off: 'No deputy (overloaded)', e_fatigue_on: 'Deputy Sato + spread the load',
 
       p_reserve_title: 'No cash reserve',
       p_reserve_cause: 'If cards or comms fail on the island there is no cash buffer, and on-site spending stalls.',
@@ -284,7 +284,7 @@
       // --- checkpoint inspector (関所) ---
       inspTitle: 'チェックポイント',
       inspSub: '各メンバーの保有情報・待ち情報・次のタスクを確認。「今すぐ渡す」はこの実行だけを解除——計画のギャップは残ります。',
-      inspNowDoing: '現在', inspNext: '次', inspIdleFree: '待ち情報なし',
+      inspNowDoing: '現在', inspNext: '次', inspIdleFree: '待ち情報なし', inspMissing: '矢印未設定',
       sendNow: '今すぐ渡す', inspResume: '再開 ▶',
       handFedNote: function (n) { return 'この実行で手渡し' + n + '回（計画は未修正）'; },
 
@@ -324,7 +324,7 @@
       p_fatigue_cause: '現地責任者が渡航・釣行・撤収を一人で抱え、代理もなく途中で消耗する。',
       p_fatigue_fix: '代理を立て、移動・釣行・連絡を複数人で分担する。',
       p_fatigue_need: '現地責任者の代理',
-      e_fatigue_label: '現地責任者の代理・負荷', e_fatigue_off: '代理なし（過負荷）', e_fatigue_on: '代理 森＋負荷分散',
+      e_fatigue_label: '現地責任者の代理・負荷', e_fatigue_off: '代理なし（過負荷）', e_fatigue_on: '代理 佐藤＋負荷分散',
 
       p_reserve_title: '現金予備費がない',
       p_reserve_cause: '離島でカード・通信が不調だと現金の余裕がなく、現地の支出が止まる。',

@@ -112,6 +112,33 @@ P.intervene(isim, 'ic_tackle', 'specialist');
 ok(isim.sched.byTask.t_f_gearload.start === 330 && isim.handFed === 1, 'intervene(ic_tackle) unblocks the live gear-load (hand-fed 1x)');
 ok(P.score(isim).idleMin === gfd.idleTotal, 'plan gap survives the hand-feed: score still bills ' + gfd.idleTotal + ' idle min');
 
+// the canonical channel-latency table (§6.1) — the pricing of 報連相 — pinned exactly
+ok(P.CHANNELS.faceToFace === 0 && P.CHANNELS.radio === 1 && P.CHANNELS.phone === 2 && P.CHANNELS.chat === 10 && P.CHANNELS.board === 30, 'channel latency pinned: 対面0 · 無線1 · 電話2 · チャット10 · 掲示板30');
+ok(gfd.idleTotal === 220 && gfd.reworkTotal === 90 && gfd.late[0].lateMin === 40, 'gappy ledger pinned exactly: 220 idle + 90 rework person-min, tackle 40 min late');
+
+// drawing a FASTER duplicate arrow is a legitimate alternate fix (min-arrival per pair)
+var dupFd = P.fishdaySchedule(P.mergePlan({ seed: 1, overrides: { handoffs: { h_tackle2: { cardId: 'ic_tackle', fromRoleId: 'logi', fromTaskId: 't_f_tackleprep', toRoleId: 'specialist', toTaskId: 't_f_gearload', trigger: { type: 'onTaskDone', taskId: 't_f_tackleprep' }, channel: 'faceToFace', ifLate: 'idle', reworkKind: null, content: { en: 'x', jp: 'x' } } } } }));
+ok(dupFd.late.length === 0 && dupFd.byTask.t_f_gearload.idleMin === 0, 'a faster duplicate arrow clears the late pair without touching the slow one');
+
+// IDLE_CAP: erasing a needed wait-arrow charges 60 capped minutes and flags the pair missing
+var capFd = P.fishdaySchedule(P.mergePlan({ seed: 1, overrides: { handoffs: { h_ground_chef: null } } }));
+var capMiss = capFd.missing.filter(function (m) { return m.taskId === 't_f_sideprep' && m.cardId === 'ic_ground'; }).length;
+ok(capFd.byTask.t_f_sideprep.idleMin === 60 && capMiss === 1, 'erased wait-arrow -> IDLE_CAP 60 min idle + missing pair (side prep / ic_ground)');
+
+// beforeTaskStart trigger (§6.1, third trigger type) resolves consumer start − lead
+var btsPlan = P.mergePlan({ seed: 1, overrides: { handoffs: { h_food: { trigger: { type: 'beforeTaskStart', taskId: 't_f_menu', leadMin: 20 } } } } });
+var btsH = btsPlan.handoffs.filter(function (h) { return h.id === 'h_food'; })[0];
+ok(P.resolveSendMin(btsPlan, btsH) === 280 && P.staticArrival(btsPlan, btsH) === 280, 'beforeTaskStart resolves to consumer start − lead (05:00−20 = 04:40)');
+
+// fixHandoffs heals a hand-vandalized plan (erased + slowed + junk arrows) back to clean
+var vandal = { seed: 1, overrides: { handoffs: {
+  h_food: null,
+  h_catch_chef: { channel: 'board' },
+  h_junk: { cardId: 'ic_tackle', fromRoleId: 'logi', fromTaskId: 't_f_tackleprep', toRoleId: 'specialist', toTaskId: 't_f_gearload', trigger: { type: 'atMinute', value: 700 }, channel: 'board', ifLate: 'idle', reworkKind: null, content: { en: 'x', jp: 'x' } }
+} } };
+var healed = P.applyAllFixes(vandal), healedPlan = P.mergePlan(healed), healedFd = P.fishdaySchedule(healedPlan);
+ok(P.detect(healedPlan).length === 0 && healedFd.idleTotal === 0 && healedFd.efficiency === 100, 'fixHandoffs heals an erased/slowed/junk-arrowed plan back to clean 100%');
+
 // editor merge surface: draw / erase arrows, retime a block
 ok(P.mergePlan({ seed: 1, overrides: { handoffs: { h_x: { cardId: 'ic_menu', fromRoleId: 'chef', fromTaskId: 't_f_menu', toRoleId: 'specialist', toTaskId: 't_f_gearload', trigger: { type: 'onTaskDone', taskId: 't_f_menu' }, channel: 'faceToFace', ifLate: 'assume', reworkKind: 'wrongFish', content: { en: 'x', jp: 'x' } } } } }).handoffs.length === 13, 'editor can draw a new arrow (12 -> 13)');
 ok(P.mergePlan({ seed: 1, overrides: { handoffs: { h_catch_chef: null } } }).handoffs.length === 11, 'editor can erase an arrow (12 -> 11)');
@@ -122,6 +149,12 @@ console.log('\n=== DETERMINISM ===');
 var a = JSON.stringify(scoreOf({ seed: 42, overrides: {} }));
 var b = JSON.stringify(scoreOf({ seed: 42, overrides: {} }));
 ok(a === b, 'same seed -> identical score()');
+// a FRESH module instance (no shared state) reproduces the identical score
+delete require.cache[require.resolve('./engine.js')];
+var P2 = require('./engine.js');
+var s2f = P2.createSim({ seed: 42, overrides: {} }), g2 = 0;
+while (!s2f.finished && g2++ < 500) P2.tick(s2f);
+ok(JSON.stringify(P2.score(s2f)) === a, 'fresh engine instance -> identical score (no hidden module state)');
 
 console.log('\n=== gradient table ===');
 var steps = [['gappy', base]];

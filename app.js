@@ -30,6 +30,11 @@
   // fishday hand-authored edits (drawn/erased arrows, re-timed blocks) — §7 editor output
   var fdOv = { timing: {}, handoffs: {} };
   function fdReset() { fdOv = { timing: {}, handoffs: {} }; }
+  // fixHandoffs must win over stale hand-edits/erasures of the canonical arrows,
+  // or the fix-pack button would appear to do nothing (the hand-edit re-breaks it)
+  function fdClearFixConflicts() {
+    P.canonHandoffs().forEach(function (h) { if (fdOv.handoffs.hasOwnProperty(h.id)) delete fdOv.handoffs[h.id]; });
+  }
   function buildCfg() {
     var cfg = { seed: 1, overrides: {} }, k;
     DETS.forEach(function (d) { if (fixed[DET_FIX[d]]) cfg = P.applyFix(cfg, DET_FIX[d]); });
@@ -56,7 +61,7 @@
     document.querySelectorAll('[data-i18n]').forEach(function (el) { var v = T()[el.getAttribute('data-i18n')]; if (typeof v === 'string') el.textContent = v; });
     $('lang-en').classList.toggle('on', L === 'en'); $('lang-ja').classList.toggle('on', L === 'ja');
     paintSetup(); buildRules(); buildLegend();
-    if (!$('run').classList.contains('hidden') && sim) { renderSim(sim); }
+    if (!$('run').classList.contains('hidden') && sim) { buildSitemap(); figEls = {}; $('figs').innerHTML = ''; renderSim(sim); }
     if (!$('report').classList.contains('hidden') && lastResult) renderReport(lastResult);
   }
 
@@ -72,7 +77,7 @@
       var n = dayGapCount(seg), clean = n === 0;
       return '<button class="day-btn' + (seg === daySel ? ' on' : '') + '" data-day="' + seg + '">' +
         '<span class="db-name">' + dayLabel(seg) + '</span>' +
-        '<span class="db-gaps ' + (clean ? 'ok' : 'bad') + '">' + (clean ? '✓' : n + ' ' + T().fixGapLbl) + '</span></button>';
+        '<span class="db-gaps ' + (clean ? 'ok' : 'bad') + '">' + (clean ? '✓' : n + ' ' + (n === 1 ? T().fixGapLbl : T().fixGapLblN)) + '</span></button>';
     }).join('');
   }
 
@@ -103,7 +108,7 @@
       var chip = document.createElement('div'); chip.className = 'role-chip' + (unset ? ' unset' : '');
       chip.style.borderColor = unset ? 'var(--wait)' : 'transparent';
       chip.innerHTML = '<span class="rc-ic" style="background:' + rr.color + '">' + rr.icon + '</span>' +
-        '<span class="rc-body"><b>' + nm(rr.name) + '</b><small>' + (holder ? nm(holder.name) : '—') + (dep ? ' · ' + T().pnNeeded.slice(0, 0) : '') + '</small></span>';
+        '<span class="rc-body"><b>' + nm(rr.name) + '</b><small>' + (holder ? nm(holder.name) : '—') + (dep ? ' · ⇄ ' + nm(dep.name) : '') + '</small></span>';
       box.appendChild(chip);
     });
   }
@@ -223,7 +228,7 @@
     if (!from || !to || from.day !== 'fishday' || to.day !== 'fishday' || !from.assignedIds.length || !to.assignedIds.length) return null;
     var gf = fdBlockGeo(plan, from), gt = fdBlockGeo(plan, to);
     var si = 0; (to.neededInfo || []).forEach(function (cid, i2) { if (cid === h.cardId) si = i2; });
-    return { x1: gf.x + gf.w + 5, y1: gf.y + 13, x2: gt.x - 6, y2: gt.y + si * 11 + 6 };
+    return { x1: gf.x + gf.w + 8, y1: gf.y + 13, x2: gt.x - 6, y2: gt.y + si * 11 + 6 };
   }
   function drawFdArrows(plan) {
     var svg = $('fd-arrows'); if (!svg) return;
@@ -328,7 +333,7 @@
     var assume = (to.assumeOn || []).indexOf(cardId) >= 0;
     var id = 'h_' + cardId.replace('ic_', '') + '_' + to.ownerRoleId + '_' + (fdUid++);
     fdOv.handoffs[id] = { cardId: cardId, fromRoleId: from.ownerRoleId, fromTaskId: from.id, toRoleId: to.ownerRoleId, toTaskId: to.id,
-      trigger: { type: 'onTaskDone', taskId: from.id }, channel: 'radio', ifLate: assume ? 'assume' : 'idle',
+      trigger: { type: 'onTaskDone', taskId: from.id }, channel: 'faceToFace', ifLate: assume ? 'assume' : 'idle',
       reworkKind: assume ? 'wrongFish' : null, content: { en: nm2(card.name, 'en'), jp: nm2(card.name, 'jp') } };
     paintSetup();
     openArrowPanel(id);
@@ -400,7 +405,7 @@
       var p = document.createElement('div'); p.className = 'path'; p.style.left = ax + 'px'; p.style.top = ay + 'px'; p.style.width = len + 'px'; p.style.transform = 'rotate(' + ang + 'deg)';
       paths.appendChild(p);
     });
-    // the 16 hosted guests (served by the 8 staff) — a passive group, not workers
+    // the 13 hosted guests (served by the 11 duty-holders) — a passive group, not workers
     var pr = P.makeTemplate().project, gt = document.getElementById('guests-tag');
     if (!gt) { gt = document.createElement('div'); gt.id = 'guests-tag'; gt.className = 'guests-tag'; $('sitemap').appendChild(gt); }
     gt.innerHTML = '👥 <b>' + pr.guests + '</b> ' + T().guestsShort;
@@ -522,9 +527,17 @@
         var c = byId(sim.plan.infoCards, hc.cardId);
         return '<span class="ins-card ok" title="' + hhmm(hc.atMin) + '">' + nm(c ? c.name : hc.cardId).split('：')[0].split(':')[0] + (hc.own ? ' ◉' : ' ' + hhmm(hc.atMin)) + '</span>';
       }).join('');
+      var seenW = {};
       var waits = mi.waiting.map(function (w) {
+        seenW[w.cardId] = 1;
         var c = byId(sim.plan.infoCards, w.cardId);
         return '<span class="ins-card wait">⏳ ' + nm(c ? c.name : w.cardId).split('：')[0].split(':')[0] + ' → ' + hhmm(w.etaMin) +
+          ' <button class="btn sm primary ins-send" data-card="' + w.cardId + '" data-role="' + p.roleId + '">' + t.sendNow + '</button></span>';
+      }).join('');
+      // cards the current task waits on with NO arrow drawn (missing) — still hand-feedable
+      waits += mi.waitsOn.filter(function (w) { return w.cardId && !seenW[w.cardId]; }).map(function (w) {
+        var c = byId(sim.plan.infoCards, w.cardId);
+        return '<span class="ins-card wait">⏳ ' + nm(c ? c.name : w.cardId).split('：')[0].split(':')[0] + ' → ' + (w.missing ? t.inspMissing : hhmm(w.until)) +
           ' <button class="btn sm primary ins-send" data-card="' + w.cardId + '" data-role="' + p.roleId + '">' + t.sendNow + '</button></span>';
       }).join('');
       var cur = mi.currentTaskId ? nm(byId(sim.plan.tasks, mi.currentTaskId).name) : '—';
@@ -619,7 +632,10 @@
     $('individuals').innerHTML = th + rows;
   }
 
-  function applyFixAndRerun(fixId) { if (fixId && fixed.hasOwnProperty(fixId)) fixed[fixId] = true; launch(); }
+  function applyFixAndRerun(fixId) {
+    if (fixId && fixed.hasOwnProperty(fixId)) { fixed[fixId] = true; if (fixId === 'fixHandoffs') fdClearFixConflicts(); }
+    launch();
+  }
 
   // =========================================================================
   // RULES
@@ -647,7 +663,7 @@
     $('rules-modal').addEventListener('click', function (e) { if (e.target === $('rules-modal')) $('rules-modal').classList.remove('show'); });
 
     $('day-select').addEventListener('click', function (e) { var b = e.target.closest('.day-btn'); if (b) { daySel = b.dataset.day; paintSetup(); } });
-    $('editors').addEventListener('change', function (e) { var s = e.target.closest('.ed-sel'); if (s) { fixed[s.dataset.fix] = (s.value === 'on'); updatePlanUI(); } });
+    $('editors').addEventListener('change', function (e) { var s = e.target.closest('.ed-sel'); if (s) { fixed[s.dataset.fix] = (s.value === 'on'); if (s.dataset.fix === 'fixHandoffs' && s.value === 'on') fdClearFixConflicts(); updatePlanUI(); } });
     $('btn-auto').addEventListener('click', function () { for (var k in fixed) fixed[k] = true; fdReset(); paintSetup(); });
     $('btn-clear').addEventListener('click', function () { for (var k in fixed) fixed[k] = false; fdReset(); paintSetup(); });
     $('launch').addEventListener('click', launch);

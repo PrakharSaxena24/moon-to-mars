@@ -473,13 +473,11 @@
       ensure(o, 'staffing').t_ship = ['p06', 'p08'];
       ensure(o, 'info').ic_return = { recipientRoleIds: ['pm', 'owner', 'safetyLead', 'comms', 'siteLead'] };
     } else if (fixId === 'fixHandoffs') {
-      // write the canonical arrows (§5.3): re-time the tackle list, draw the two cook-consult arrows
+      // restore the FULL canonical arrow set (§5.3): re-times the tackle list, draws the two
+      // cook-consult arrows, and heals any hand-erased or hand-slowed canonical arrow, so the
+      // fix always returns the fishday to its zero-idle anchor no matter what the editor did.
       var HO = ensure(o, 'handoffs'), canon = canonHandoffs();
-      for (var hi = 0; hi < canon.length; hi++) {
-        var ch = canon[hi];
-        if (ch.id === 'h_tackle') HO.h_tackle = { trigger: ch.trigger, channel: ch.channel };
-        if (ch.id === 'h_menu_angler' || ch.id === 'h_menu_boat') HO[ch.id] = ch;
-      }
+      for (var hi = 0; hi < canon.length; hi++) HO[canon[hi].id] = canon[hi];
     }
     return cfg;
   }
@@ -536,21 +534,21 @@
     var fds = fishdayTasks(plan), i, j, k;
     var fdById = {}; for (i = 0; i < fds.length; i++) fdById[fds[i].id] = fds[i];
     var owner = {}; for (i = 0; i < plan.infoCards.length; i++) owner[plan.infoCards[i].id] = plan.infoCards[i].ownerRoleId;
-    // static design lens (billed to info, §9): needed arrows never drawn + arrows timed late
+    // static design lens (billed to info, §9), per (consuming task, card) pair — the §6.2
+    // checker's unit. Delivery = the EARLIEST drawn arrow, so a redundant slow arrow never
+    // bills a pair another (faster) arrow already feeds, and drawing a faster duplicate is
+    // a legitimate alternate fix for a late handoff.
     var missing = [], late = [];
     for (i = 0; i < fds.length; i++) {
       var t0 = fds[i];
       for (j = 0; j < t0.neededInfo.length; j++) {
         var cid0 = t0.neededInfo[j];
         if (owner[cid0] === t0.ownerRoleId) continue;                 // owner holds own cards from DAY_START
-        if (arrowsTo(plan, t0.ownerRoleId, cid0).length === 0) missing.push({ taskId: t0.id, cardId: cid0 });
+        var hs0 = arrowsTo(plan, t0.ownerRoleId, cid0), best0 = null, bestH0 = null;
+        for (k = 0; k < hs0.length; k++) { var a0 = staticArrival(plan, hs0[k]); if (a0 != null && (best0 == null || a0 < best0)) { best0 = a0; bestH0 = hs0[k]; } }
+        if (best0 == null) missing.push({ taskId: t0.id, cardId: cid0 });                 // no arrow (or none resolvable)
+        else if (best0 > t0.startMin) late.push({ id: bestH0.id, cardId: cid0, taskId: t0.id, lateMin: best0 - t0.startMin });
       }
-    }
-    for (i = 0; i < plan.handoffs.length; i++) {
-      var h0 = plan.handoffs[i], tgt = fdById[h0.toTaskId];
-      if (!tgt) continue;
-      var sa = staticArrival(plan, h0);
-      if (sa != null && sa > tgt.startMin) late.push({ id: h0.id, cardId: h0.cardId, taskId: tgt.id, lateMin: sa - tgt.startMin });
     }
     function runCascade(extendWF) {
       var eff = {}, wrongFish = [], arrivals = {}, guard = 0, changed = true;
