@@ -19,7 +19,7 @@
       canvasTitle: 'Project canvas',
       cvDays: 'Period', cvDaysUnit: 'days',
       cvLocation: 'Location', cvHeadcount: 'Participants', cvBudget: 'Budget cap', cvConstraints: 'Constraints', cvSuccess: 'Success conditions',
-      cvHeadcountNote: function (s, g) { return s + ' staff · ' + g + ' guests'; }, guestsShort: 'guests',
+      cvHeadcountNote: function (s, g, c) { return s + ' organizers · ' + (c || 0) + ' chefs · ' + g + ' guests'; }, guestsShort: 'guests',
       orgTitle: 'Org & roles',
       orgHint: 'Who is responsible for what. A role with no deputy or unclear authority is where people stall.',
       timelineTitle: 'Timeline (10 days)',
@@ -66,9 +66,52 @@
       // --- 6 individual values (spec §17) ---
       ivName: 'Member', ivAction: 'Can-act', ivDecision: 'Can-decide', ivLoad: 'Load', ivFatigue: 'Fatigue', ivCoop: 'Coordination', ivContribution: 'Contribution',
 
-      // --- character states (spec §9) ---
+      // --- character states (spec §9 + fishday §8) ---
       stWorking: 'Working', stConfused: 'Hesitating', stMeeting: 'Endless huddle', stWaiting: 'Waiting on approval',
       stTired: 'Exhausted', stOnFire: 'In crisis', stResolved: 'Resolved', stIdle: 'Idle',
+      stWaitInfo: 'Waiting on info (手待ち)', stRework: 'Redoing — wrong assumption (手戻り)',
+      legWaitInfo: 'waiting on info', legRework: 'rework',
+
+      // --- fishday editor (§7) ---
+      fdTitle: 'Fishing-day plan — timeline & info handoffs',
+      fdHint: 'Day 3 runs minute by minute. Drag a block to re-time it (5-min snap), drag its right edge to resize. Every hollow socket ● is a fact a task needs — draw an arrow from a producing port ○ (or tap the socket) so the info lands BEFORE the task starts. Channels add minutes: face-to-face +0 · radio +1 · phone +2 · chat +10 · board +30.',
+      fdArrowsLbl: 'Information handoffs (click an arrow to re-time it)',
+      fdReadyLbl: 'Ready-check:',
+      fdProjected: function (score, eff) { return 'Projected: ' + score + ' / 100 · efficiency ' + eff + '%'; },
+      fdReadyOk: '✓ Every handoff lands on time.',
+      fdDayLine: function (tm) { return 'Day 3 · ' + tm; },
+      rhMissing: function (card, task) { return '● “' + card + '” never handed to “' + task + '” — draw the arrow'; },
+      rhLate: function (card, task, n) { return '⚑ “' + card + '” lands ' + n + ' min after “' + task + '” starts'; },
+      rhWrongFish: function (card, task) { return '🐟 “' + task + '” will guess “' + card + '” — wrong-fish rework'; },
+      rhDep: function (task, dep) { return '⛓ “' + task + '” starts before “' + dep + '” finishes'; },
+      rhOverload: function (who) { return '⚠ ' + who + ' is double-booked'; },
+      rhUnstaffed: function (task) { return '⚠ “' + task + '” has nobody assigned'; },
+      rhDuty: function (role) { return '⚠ duty “' + role + '” is unassigned'; },
+      arFrom: 'From', arTo: 'To', arTrigger: 'Send when', arChannel: 'Channel (adds minutes)',
+      arTrigDone: 'when the producing task finishes', arTrigAt: 'at a set time',
+      arriveOk: function (tm) { return '✓ arrives ' + tm + ' — in time'; },
+      arriveLate: function (tm, n) { return '⚑ arrives ' + tm + ' — ' + n + ' min LATE'; },
+      arriveAssume: 'If late, the crew proceeds on a guess → wrong-fish rework.',
+      arDelete: 'Erase arrow',
+      chFaceToFace: 'Face-to-face 対面', chRadio: 'Radio 無線', chPhone: 'Phone 電話', chChat: 'Chat チャット', chBoard: 'Notice board 掲示板',
+
+      // --- run: efficiency readouts ---
+      effLbl: 'Efficiency 稼働効率',
+      idleLine: function (i, r) { return 'idle ' + i + ' min · rework ' + r + ' min'; },
+
+      // --- checkpoint inspector (§8 関所) ---
+      inspTitle: 'Checkpoint',
+      inspSub: 'Inspect each member: what they hold, what they wait on, what comes next. “Send now” hands a card over to unblock THIS run — the plan gap stays until you fix the plan.',
+      inspNowDoing: 'now', inspNext: 'next', inspIdleFree: 'not waiting on anything',
+      sendNow: 'Send now', inspResume: 'Resume ▶',
+      handFedNote: function (n) { return 'hand-fed ' + n + '× this run (plan unchanged)'; },
+
+      // --- fishday report chips ---
+      rcEff: function (e) { return 'Efficiency ' + e + '%'; },
+      rcIdle: function (n) { return 'Idle ' + n + ' min'; },
+      rcRework: function (n) { return 'Rework ' + n + ' min'; },
+      rcDinner: function (tm) { return 'Dinner served ' + tm; },
+      rcWrongFish: function (n) { return n + ' wrong-fish event' + (n === 1 ? '' : 's'); },
 
       // --- detectors / gaps (title · cause · fix · needed role) + setup editor copy ---
       p_safety_title: 'Safety lead has no abort authority',
@@ -113,6 +156,12 @@
       p_returnLogi_need: 'Logistics + Comms',
       e_returnLogi_label: 'Return shipping & headcount', e_returnLogi_off: '— unowned —', e_returnLogi_on: 'Logistics + crew + headcount route',
 
+      p_handoffTiming_title: 'Info handoffs missing or late (fishing day)',
+      p_handoffTiming_cause: 'The cook consult (menu → angler & boat) was never handed over, and the tackle list goes out morning-of on a slow channel — the angler idles at the port and the boat heads for the wrong fish, so the galley reworks dinner.',
+      p_handoffTiming_fix: 'Draw the menu arrows to the angler and the boat, and hand the tackle list over face-to-face when prep finishes (05:30).',
+      p_handoffTiming_need: 'Chef → Angler & Boat',
+      e_handoffTiming_label: 'Fishing-day info handoffs', e_handoffTiming_off: 'Menu arrows undrawn · tackle list late', e_handoffTiming_on: 'All arrows drawn & on time',
+
       // --- problem panel + fixpack labels ---
       pnCause: 'Why it stalls', pnNeeded: 'Needed', pnFix: 'The fix', pnStation: 'Stalls at',
       fixGapLbl: 'gap', fixGapLblN: 'gaps',
@@ -152,7 +201,7 @@
       canvasTitle: 'プロジェクトキャンバス',
       cvDays: '期間', cvDaysUnit: '日間',
       cvLocation: '場所', cvHeadcount: '参加人数', cvBudget: '予算上限', cvConstraints: '制約', cvSuccess: '成功条件',
-      cvHeadcountNote: function (s, g) { return '運営' + s + '名・ゲスト' + g + '名'; }, guestsShort: 'ゲスト',
+      cvHeadcountNote: function (s, g, c) { return '運営' + s + '名・料理' + (c || 0) + '名・ゲスト' + g + '名'; }, guestsShort: 'ゲスト',
       orgTitle: '体制・役割',
       orgHint: '誰が何の責任者か。代理がいない・権限が曖昧な役割こそ、人が止まる場所。',
       timelineTitle: 'タイムライン（10日間）',
@@ -202,6 +251,49 @@
       // --- character states ---
       stWorking: '作業中', stConfused: '迷い', stMeeting: '合議地獄', stWaiting: '確認待ち',
       stTired: '疲労', stOnFire: '炎上', stResolved: '解決', stIdle: '待機',
+      stWaitInfo: '手待ち（情報待ち）', stRework: '手戻り（思い込みのやり直し）',
+      legWaitInfo: '手待ち', legRework: '手戻り',
+
+      // --- fishday editor (§7) ---
+      fdTitle: '釣行日の計画——タイムラインと情報の受け渡し',
+      fdHint: '3日目は分刻みで動きます。ブロックをドラッグで移動（5分刻み）、右端で長さ変更。空いたソケット●は、そのタスクに必要な情報。生産ポート○から矢印を引く（またはソケットをタップ）と、タスク開始「前」に情報が届きます。伝達手段の遅延：対面+0・無線+1・電話+2・チャット+10・掲示板+30分。',
+      fdArrowsLbl: '情報の受け渡し（矢印をクリックで調整）',
+      fdReadyLbl: '準備チェック：',
+      fdProjected: function (score, eff) { return '予測：' + score + ' / 100・稼働効率 ' + eff + '%'; },
+      fdReadyOk: '✓ すべての受け渡しが間に合っています。',
+      fdDayLine: function (tm) { return '3日目・' + tm; },
+      rhMissing: function (card, task) { return '●「' + card + '」が「' + task + '」に未伝達——矢印を引く'; },
+      rhLate: function (card, task, n) { return '⚑「' + card + '」が「' + task + '」開始の' + n + '分後に到着'; },
+      rhWrongFish: function (card, task) { return '🐟「' + task + '」が「' + card + '」を推測で実行——魚違いの手戻り'; },
+      rhDep: function (task, dep) { return '⛓「' + task + '」が「' + dep + '」完了前に開始'; },
+      rhOverload: function (who) { return '⚠ ' + who + ' の時間が重複'; },
+      rhUnstaffed: function (task) { return '⚠「' + task + '」の担当者が未割当'; },
+      rhDuty: function (role) { return '⚠ 役割「' + role + '」が未割当'; },
+      arFrom: '送り手', arTo: '受け手', arTrigger: '送るタイミング', arChannel: '伝達手段（遅延）',
+      arTrigDone: '生産タスクの完了時', arTrigAt: '時刻指定',
+      arriveOk: function (tm) { return '✓ ' + tm + ' 着——間に合う'; },
+      arriveLate: function (tm, n) { return '⚑ ' + tm + ' 着——' + n + '分遅い'; },
+      arriveAssume: '遅れると推測で進行→魚違いの手戻りになります。',
+      arDelete: '矢印を消す',
+      chFaceToFace: '対面', chRadio: '無線', chPhone: '電話', chChat: 'チャット', chBoard: '掲示板',
+
+      // --- run: efficiency readouts ---
+      effLbl: '稼働効率',
+      idleLine: function (i, r) { return '手待ち ' + i + '分・手戻り ' + r + '分'; },
+
+      // --- checkpoint inspector (関所) ---
+      inspTitle: 'チェックポイント',
+      inspSub: '各メンバーの保有情報・待ち情報・次のタスクを確認。「今すぐ渡す」はこの実行だけを解除——計画のギャップは残ります。',
+      inspNowDoing: '現在', inspNext: '次', inspIdleFree: '待ち情報なし',
+      sendNow: '今すぐ渡す', inspResume: '再開 ▶',
+      handFedNote: function (n) { return 'この実行で手渡し' + n + '回（計画は未修正）'; },
+
+      // --- fishday report chips ---
+      rcEff: function (e) { return '稼働効率 ' + e + '%'; },
+      rcIdle: function (n) { return '手待ち ' + n + '分'; },
+      rcRework: function (n) { return '手戻り ' + n + '分'; },
+      rcDinner: function (tm) { return '夕食提供 ' + tm; },
+      rcWrongFish: function (n) { return '魚違い ' + n + '件'; },
 
       // --- detectors / gaps + editor copy ---
       p_safety_title: '安全責任者に中止権限がない',
@@ -245,6 +337,12 @@
       p_returnLogi_fix: '帰りの物流責任者（ロジ＋クルー）を立てて残置物を発送し、出発前に 連絡→PM で点呼を確認する。',
       p_returnLogi_need: 'ロジ＋連絡',
       e_returnLogi_label: '帰りの発送・点呼', e_returnLogi_off: '— 未割当 —', e_returnLogi_on: 'ロジ＋クルー＋点呼経路',
+
+      p_handoffTiming_title: '情報の受け渡しが未設定・遅延（釣行日）',
+      p_handoffTiming_cause: '料理長への相談（献立→釣り担当・船）が未伝達のうえ、釣具リストが当日朝に遅い手段で届く——釣り担当は港で手待ち、船は違う魚へ向かい、厨房で夕食の手戻りが起きる。',
+      p_handoffTiming_fix: '献立の矢印を釣り担当と船へ引き、釣具リストは準備完了時（05:30）に対面で渡す。',
+      p_handoffTiming_need: '料理長→釣り担当・船',
+      e_handoffTiming_label: '釣行日の情報受け渡し', e_handoffTiming_off: '献立未伝達・釣具リスト遅延', e_handoffTiming_on: '全矢印を定刻どおりに',
 
       // --- problem panel + fixpack ---
       pnCause: '止まる理由', pnNeeded: '必要な役割', pnFix: '修正', pnStation: '停止場所',

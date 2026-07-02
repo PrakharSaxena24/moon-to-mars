@@ -63,6 +63,16 @@
       </div>
     </div>
 
+    <div class="card hidden" id="fd-card">
+      <h2 data-i18n="fdTitle"></h2>
+      <div class="tag" data-i18n="fdHint" style="margin:-6px 0 12px;"></div>
+      <div class="fd-scroll" id="fd-scroll"><div class="fd-canvas" id="fd-canvas"></div></div>
+      <div class="dash-lbl" data-i18n="fdArrowsLbl" style="margin-top:12px;"></div>
+      <div class="fd-arrowlist" id="fd-arrowlist"></div>
+      <div class="planready" id="fd-ready"></div>
+      <div class="planhint" id="fd-projected"></div>
+    </div>
+
     <button class="btn primary" id="launch" style="width:100%;height:48px;font-size:16px;" data-i18n="launchBtn"></button>
   </section>
 
@@ -82,6 +92,12 @@
           <div class="dash-lbl" data-i18n="overallLbl"></div>
           <div class="bigreadout"><span id="dash-ready">100%</span></div>
           <div class="meter"><div class="bar"><i id="dash-ready-bar"></i></div></div>
+        </div>
+        <div class="dash-sec hidden" id="dash-fd">
+          <div class="dash-lbl" data-i18n="effLbl"></div>
+          <div class="bigreadout"><span id="dash-eff">100%</span></div>
+          <div class="meter"><div class="bar"><i id="dash-eff-bar"></i></div></div>
+          <div class="fd-idletxt" id="dash-idle"></div>
         </div>
         <div class="dash-sec">
           <div class="dash-lbl" data-i18n="budgetLbl"></div>
@@ -140,6 +156,29 @@
       <div><h2 id="detail-title"></h2><div class="ins-sub" id="detail-sub"></div></div></div>
     <div id="detail-body"></div>
     <div class="foot"><button class="btn" id="detail-close" data-i18n="closeBtn"></button></div>
+  </div>
+</div>
+
+<!-- ============ ARROW EDIT PANEL (fishday handoffs) ============ -->
+<div class="modal" id="arrow-modal">
+  <div class="sheet inspect-sheet">
+    <div class="inspect-head"><div class="ins-ic">📨</div>
+      <div><h2 id="ar-title"></h2><div class="ins-sub" id="ar-sub"></div></div></div>
+    <div id="ar-body"></div>
+    <div class="foot" style="display:flex;justify-content:space-between;">
+      <button class="btn sm ghost" id="ar-delete" data-i18n="arDelete"></button>
+      <button class="btn" id="ar-close" data-i18n="closeBtn"></button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ CHECKPOINT INSPECTOR (fishday 関所) ============ -->
+<div class="modal" id="inspect-modal">
+  <div class="sheet">
+    <h2 id="insp-title"></h2>
+    <div class="tag" id="insp-sub" style="margin-bottom:12px;"></div>
+    <div id="insp-body" class="insp-body"></div>
+    <div class="foot"><button class="btn primary" id="insp-resume" data-i18n="inspResume"></button></div>
   </div>
 </div>
 
