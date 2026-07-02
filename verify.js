@@ -98,6 +98,14 @@ var two = P.mergePlan({ seed: 1, overrides: { handoffs: {
 } } });
 ok(P.fishdaySchedule(two).byTask.t_f_menu.idleMin === 32, 'task idle = max(22, 32) of late inputs, not sum (' + P.fishdaySchedule(two).byTask.t_f_menu.idleMin + ')');
 
+// the ⏳ waitInfo visual: at 05:45 the angler is due (05:30) but the tackle list lands 06:10
+var wsim = P.createSim(base, 'fishday');
+while (wsim.clockMin < 345) P.tick(wsim);
+var wgl = null, wp8 = null;
+wsim.tasks.forEach(function (t) { if (t.id === 't_f_gearload') wgl = t; });
+wsim.participants.forEach(function (p) { if (p.id === 'p08') wp8 = p; });
+ok(wgl.state === 'waitinfo' && wp8.state === 'waitInfo' && wp8.station === 'port', 'at 05:45 gappy, gear-load waits on info and the angler shows 手待ち at the port (' + wgl.state + '/' + wp8.state + '@' + wp8.station + ')');
+
 // checkpoint intervene: unblocks the LIVE run; the plan gap survives a clean re-run
 var isim = P.createSim(base, 'fishday');
 P.intervene(isim, 'ic_tackle', 'specialist');
