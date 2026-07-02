@@ -154,6 +154,19 @@ var loopFd = P.fishdaySchedule(P.mergePlan(P.applyFix(loopCfg, 'setSafety')));
 ok(loopFd.unresolved > 0, 'a cyclic arrow graph marks tasks unresolved (' + loopFd.unresolved + ') instead of scoring clean');
 ok(P.detect(P.mergePlan(loopCfg)).map(function (d) { return d.id; }).indexOf('handoffTiming') >= 0, 'handoffTiming fires on an unresolvable arrow graph');
 
+// a trigger pointing at a DAY-CLOCK task (no startMin) is unresolvable — never a free on-time pass
+var nanCfg = { seed: 1, overrides: { handoffs: { h_tackle: { trigger: { type: 'onTaskDone', taskId: 't06' }, channel: 'faceToFace' } } } };
+var nanPlan = P.mergePlan(nanCfg), nanH = nanPlan.handoffs.filter(function (h) { return h.id === 'h_tackle'; })[0];
+var nanFd = P.fishdaySchedule(nanPlan);
+var nanMiss = nanFd.missing.filter(function (m) { return m.taskId === 't_f_gearload' && m.cardId === 'ic_tackle'; }).length;
+ok(P.resolveSendMin(nanPlan, nanH) === null && nanMiss === 1 && nanFd.byTask.t_f_gearload.idleMin === 60, 'NaN send-time (day-clock trigger task) counts as missing + IDLE_CAP, not on-time (' + nanFd.byTask.t_f_gearload.idleMin + ')');
+
+// a redundant unresolvable arrow cannot deadlock a pair another arrow already feeds on time
+var dead = P.applyAllFixes(base);
+dead.overrides.handoffs.h_dead = { cardId: 'ic_tackle', fromRoleId: 'specialist', fromTaskId: 't_f_gearload', toRoleId: 'specialist', toTaskId: 't_f_gearload', trigger: { type: 'onTaskDone', taskId: 't_f_gearload' }, channel: 'radio', ifLate: 'idle', reworkKind: null, content: { en: 'x', jp: 'x' } };
+var deadFd = P.fishdaySchedule(P.mergePlan(dead));
+ok(deadFd.unresolved === 0 && deadFd.idleTotal === 0 && deadFd.efficiency === 100, 'self-referencing junk arrow beside an on-time arrow: no deadlock, still clean');
+
 // memberInfo is a minute-clock API: a coarse sim returns null instead of throwing
 var coarse = P.createSim(base); P.tick(coarse);
 var miCoarse = null, miThrew = false;

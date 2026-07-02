@@ -510,12 +510,14 @@
     for (var i = 0; i < plan.handoffs.length; i++) { var h = plan.handoffs[i]; if (h.cardId === cardId && h.toRoleId === roleId) out.push(h); }
     return out;
   }
-  // plan-time (static) send/arrival — what the editor's readiness panel shows (§7.2)
+  // plan-time (static) send/arrival — what the editor's readiness panel shows (§7.2).
+  // A trigger that cannot resolve to a finite minute (missing task, or a day-clock task
+  // with no startMin) returns null — NaN must never masquerade as an on-time delivery.
   function resolveSendMin(plan, h) {
     var t;
-    if (h.trigger.type === 'atMinute') return h.trigger.value;
-    if (h.trigger.type === 'onTaskDone') { t = byId(plan.tasks, h.trigger.taskId); return t ? (t.startMin + t.durMin) : null; }
-    if (h.trigger.type === 'beforeTaskStart') { t = byId(plan.tasks, h.trigger.taskId || h.toTaskId); return t ? (t.startMin - (h.trigger.leadMin || 0)) : null; }
+    if (h.trigger.type === 'atMinute') return (typeof h.trigger.value === 'number' && isFinite(h.trigger.value)) ? h.trigger.value : null;
+    if (h.trigger.type === 'onTaskDone') { t = byId(plan.tasks, h.trigger.taskId); return (t && typeof t.startMin === 'number') ? (t.startMin + t.durMin) : null; }
+    if (h.trigger.type === 'beforeTaskStart') { t = byId(plan.tasks, h.trigger.taskId || h.toTaskId); return (t && typeof t.startMin === 'number') ? (t.startMin - (h.trigger.leadMin || 0)) : null; }
     return null;
   }
   function staticArrival(plan, h) { var s = resolveSendMin(plan, h); return s == null ? null : s + (CHANNELS[h.channel] || 0); }
@@ -567,17 +569,19 @@
           for (j = 0; j < t.neededInfo.length; j++) {
             var cid = t.neededInfo[j];
             if (owner[cid] === t.ownerRoleId) continue;
-            var hs = arrowsTo(plan, t.ownerRoleId, cid), best = null, bestH = null;
+            var hs = arrowsTo(plan, t.ownerRoleId, cid), best = null, bestH = null, pend = false;
             for (k = 0; k < hs.length; k++) {
               var hh = hs[k], a;
               if (hh.trigger.type === 'onTaskDone' && fdById[hh.trigger.taskId]) {
-                if (!eff[hh.trigger.taskId]) { ready = false; break; }
-                a = eff[hh.trigger.taskId].end + (CHANNELS[hh.channel] || 0);   // DYNAMIC: producer's effective finish
+                if (!eff[hh.trigger.taskId]) { pend = true; continue; }        // producer not scheduled yet (or cyclic)
+                a = eff[hh.trigger.taskId].end + (CHANNELS[hh.channel] || 0);  // DYNAMIC: producer's effective finish
               } else { a = staticArrival(plan, hh); }
-              if (a != null && (best == null || a < best)) { best = a; bestH = hh; }
+              if (a != null && isFinite(a) && (best == null || a < best)) { best = a; bestH = hh; }
             }
-            if (!ready) break;
             if (injections) for (k = 0; k < injections.length; k++) { var inj = injections[k]; if (inj.cardId === cid && inj.toRoleId === t.ownerRoleId && (best == null || inj.min < best)) { best = inj.min; bestH = null; } }
+            // defer only if an unresolved arrow could still change the outcome — an arrow that
+            // already feeds the pair on time makes any pending sibling irrelevant (min-over-arrows)
+            if (pend && !(best != null && best <= start)) { ready = false; break; }
             if (best == null) {                                       // arrow never drawn (迷い-side gap)
               if (t.assumeOn.indexOf(cid) >= 0) wf = true;            // guesses the habitual wrong default
               else { var capTo = t.startMin + IDLE_CAP; waits.push({ cardId: cid, missing: true, until: capTo }); if (capTo > start) start = capTo; }
