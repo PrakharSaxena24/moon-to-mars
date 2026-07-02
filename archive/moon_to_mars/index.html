@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Moon → Mars · Mission Director</title>
+<meta name="description" content="A management sim: read the task list, avoid busywork, put the right specialist on every job, and checkpoint the risky tasks. Bilingual EN/JP.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ============ HEADER ============ -->
+  <div class="topbar">
+    <div class="brand">
+      <div class="sub" data-i18n="subtitle"></div>
+      <h1 data-i18n="title"></h1>
+      <div class="tag" data-i18n="tagline"></div>
+    </div>
+    <div class="toprow">
+      <div class="lang">
+        <button id="lang-en" class="on" data-lang="en">English</button>
+        <button id="lang-ja" data-lang="ja">日本語</button>
+      </div>
+      <button class="btn sm ghost" id="rules-open" data-i18n="rulesBtn"></button>
+    </div>
+  </div>
+
+  <!-- ============ SETUP ============ -->
+  <section id="setup">
+    <div class="card goalcard">
+      <div class="goalrow">
+        <div class="goalbig" data-i18n="goalTitle"></div>
+        <div class="goaldesc"><b data-i18n="goalDesc"></b></div>
+      </div>
+      <div class="briefhow" data-i18n="briefHow"></div>
+      <ol class="brieflist">
+        <li data-i18n="brief1"></li><li data-i18n="brief2"></li>
+        <li data-i18n="brief3"></li><li data-i18n="brief4"></li>
+        <li data-i18n="brief5"></li>
+      </ol>
+      <div class="setup-grid">
+        <div class="row"><span class="lbl" data-i18n="dl"></span>
+          <span class="step"><button data-adj="dl" data-d="-1">−</button><b><span id="o-dl">15</span> <small class="muted2" data-i18n="dlUnit"></small></b><button data-adj="dl" data-d="1">+</button></span></div>
+        <div class="row"><span class="lbl" data-i18n="bud"></span>
+          <span class="step"><button data-adj="bud" data-d="-10000">−</button><b id="o-bud">130,000</b><button data-adj="bud" data-d="10000">+</button></span></div>
+        <div class="row"><span class="lbl"><span data-i18n="cmdLbl"></span><small data-i18n="cmdHint"></small></span>
+          <span class="step"><button data-adj="cmd" data-d="-1">−</button><b id="o-cmd">1</b><button data-adj="cmd" data-d="1">+</button></span></div>
+        <div class="row"><span class="lbl"><span data-i18n="empowerLbl"></span><small data-i18n="empowerHint"></small></span>
+          <button class="btn sm" id="empower-toggle"></button></div>
+      </div>
+      <div style="margin-top:12px;">
+        <div class="lbl" data-i18n="diffTitle" style="margin-bottom:8px;font-weight:600;"></div>
+        <div class="seg" id="diff-seg">
+          <button data-diff="easy" data-i18n="diffEasy"></button>
+          <button data-diff="medium" class="on" data-i18n="diffMedium"></button>
+          <button data-diff="hard" data-i18n="diffHard"></button>
+        </div>
+        <div class="diffDesc" id="diff-desc"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 data-i18n="timelineTitle"></h2>
+      <div class="tag" data-i18n="timelineHint" style="margin:-6px 0 12px;"></div>
+      <div id="timeline" class="timeline"></div>
+    </div>
+
+    <div class="card">
+      <h2 data-i18n="tasksTitle"></h2>
+      <div class="tag" data-i18n="tasksHint" style="margin:-6px 0 12px;"></div>
+      <div id="task-list" class="tasklist"></div>
+    </div>
+
+    <div class="card">
+      <h2 data-i18n="rosterTitle"></h2>
+      <div id="roster" class="roster"></div>
+      <div class="poolrow"><span class="muted"><span data-i18n="wagesLbl"></span>: <b id="p-wage">7,600</b></span></div>
+      <div class="planready" id="plan-ready"></div>
+      <div class="planhint" id="plan-hint"></div>
+      <div style="display:flex;gap:8px;margin-top:14px;">
+        <button class="btn sm ghost" id="btn-auto" data-i18n="autoBtn"></button>
+        <button class="btn sm ghost" id="btn-clear" data-i18n="clearBtn"></button>
+      </div>
+    </div>
+
+    <button class="btn primary" id="launch" style="width:100%;height:48px;font-size:16px;" data-i18n="launchBtn"></button>
+  </section>
+
+  <!-- ============ RUN ============ -->
+  <section id="run" class="hidden">
+    <div class="scene" id="scene">
+      <div class="stars" id="stars"></div>
+      <div class="nebula"></div>
+      <div class="shoot"></div>
+      <div class="moon"></div><div class="plabel l" id="lbl-moon"></div>
+      <div class="mars"></div><div class="plabel r" id="lbl-mars"></div>
+      <div class="route"></div>
+      <div class="route-done" id="route-done"></div>
+      <div id="worksites"></div>
+      <div class="control" id="control">
+        <div class="ttl" id="control-lbl"></div>
+        <div class="pod" id="pod"></div>
+      </div>
+      <div class="qcount" id="qcount"></div>
+      <div class="nowtag" id="nowtag"></div>
+      <div class="figs" id="figs"></div>
+      <div class="banner" id="banner"></div>
+      <div class="rocket" id="rocket">🚀</div>
+    </div>
+    <div class="legend" id="legend"></div>
+    <div class="speedrow"><span class="muted2" data-i18n="speedLbl"></span>
+      <button class="spd" data-spd="0.5">0.5×</button>
+      <button class="spd on" data-spd="1">1×</button>
+      <button class="spd" data-spd="2">2×</button>
+    </div>
+
+    <div class="hud">
+      <div class="meter m-build"><div class="top"><span data-i18n="mBuilding"></span><b id="m-build">0</b></div><div class="bar"><i id="m-build-bar"></i></div></div>
+      <div class="meter m-wait" id="m-wait-card"><div class="top"><span data-i18n="mWaiting"></span><b id="m-wait">0</b></div><div class="bar"><i id="m-wait-bar"></i></div></div>
+      <div class="meter gauge"><div class="top"><span data-i18n="gaugeLeader"></span></div><div class="ring" id="gauge-ring"><span id="gauge-val">0%</span></div></div>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><div class="v" id="s-prog">0%</div><div class="l" data-i18n="statProg"></div></div>
+      <div class="stat"><div class="v" id="s-day">0</div><div class="l" data-i18n="statDay"></div></div>
+      <div class="stat"><div class="v" id="s-bud">0</div><div class="l" data-i18n="statBud"></div></div>
+      <div class="stat" id="s-qual-card"><div class="v" id="s-qual">0</div><div class="l" data-i18n="statQuality"></div></div>
+    </div>
+
+    <div class="controls">
+      <button class="btn" id="btn-pause"></button>
+      <button class="btn" id="btn-empower"></button>
+      <button class="btn" id="btn-delegate"></button>
+      <button class="btn warn" id="btn-crisis" data-i18n="crisisBtn"></button>
+      <button class="btn ghost" id="btn-quit" data-i18n="quitBtn"></button>
+    </div>
+    <div class="logbox" id="logbox"></div>
+  </section>
+
+  <!-- ============ REPORT ============ -->
+  <section id="report" class="hidden">
+    <div class="card report">
+      <div class="grade-wrap">
+        <div class="muted" data-i18n="gradeLbl"></div>
+        <div class="grade" id="r-grade">B</div>
+        <div class="r-badge" id="r-badge"></div>
+        <div class="verdict" id="r-verdict"></div>
+      </div>
+      <div class="stats" style="margin-top:14px;">
+        <div class="stat"><div class="v" id="r-prog">—</div><div class="l" data-i18n="rStatProg"></div></div>
+        <div class="stat"><div class="v" id="r-day">—</div><div class="l" data-i18n="rStatDay"></div></div>
+        <div class="stat"><div class="v" id="r-work">—</div><div class="l" data-i18n="rStatWork"></div></div>
+        <div class="stat"><div class="v" id="r-qual">—</div><div class="l" data-i18n="rStatQuality"></div></div>
+      </div>
+    </div>
+    <div class="card"><h2 data-i18n="scorecardTitle"></h2><div class="scorecard" id="scorecard"></div></div>
+    <div class="card"><h2 data-i18n="debriefTitle"></h2><div class="debrief" id="debrief"></div></div>
+    <div style="display:flex;gap:8px;">
+      <button class="btn" id="btn-tweak" style="flex:1;" data-i18n="tweakBtn"></button>
+      <button class="btn primary" id="btn-again" style="flex:1;" data-i18n="againBtn"></button>
+    </div>
+  </section>
+</div>
+
+<!-- ============ CHECKPOINT INSPECTION ============ -->
+<div class="modal" id="inspect-modal">
+  <div class="sheet inspect-sheet">
+    <div class="inspect-head"><div class="ins-ic">🔍</div>
+      <div><h2 data-i18n="inspectTitle"></h2><div class="ins-sub" id="inspect-sub"></div></div></div>
+    <div class="ins-step" id="inspect-step"></div>
+    <div id="inspect-list"></div>
+    <div class="ins-foot"><button class="btn primary" id="inspect-approve" disabled></button></div>
+  </div>
+</div>
+
+<!-- ============ TASK DETAIL ============ -->
+<div class="modal" id="detail-modal">
+  <div class="sheet inspect-sheet">
+    <div class="inspect-head"><div class="ins-ic" id="detail-ic">📋</div>
+      <div><h2 id="detail-title"></h2><div class="ins-sub" id="detail-prog"></div></div></div>
+    <div id="detail-body"></div>
+    <div class="foot"><button class="btn" id="detail-close" data-i18n="closeBtn"></button></div>
+  </div>
+</div>
+
+<!-- ============ RULES ============ -->
+<div class="modal" id="rules-modal">
+  <div class="sheet">
+    <h2 data-i18n="rulesTitle"></h2>
+    <div id="rules-body"></div>
+    <div class="foot"><button class="btn" id="rules-close" data-i18n="closeBtn"></button></div>
+  </div>
+</div>
+
+<script src="engine.js"></script>
+<script src="i18n.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
