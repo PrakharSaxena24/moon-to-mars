@@ -9,7 +9,7 @@
   var STR = {
     en: {
       // --- header ---
-      title: 'Project Rehearsal',
+      title: 'Ogasawara Rehearsal',
       subtitle: 'Rehearse before you run',
       tagline: 'Set roles, authority, info, budget and report routes — then press Run and watch where people stall. Every stall is a gap in the plan, not a bad employee. Fix the gaps, re-run toward 100.',
       rulesBtn: 'How it works',
