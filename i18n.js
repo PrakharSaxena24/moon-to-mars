@@ -93,10 +93,10 @@
       arriveLate: function (tm, n) { return '⚑ arrives ' + tm + ' — ' + n + ' min LATE'; },
       arriveAssume: 'If late, the crew proceeds on a guess → wrong-fish rework.',
       arDelete: 'Erase arrow',
-      chFaceToFace: 'Face-to-face 対面', chRadio: 'Radio 無線', chPhone: 'Phone 電話', chChat: 'Chat チャット', chBoard: 'Notice board 掲示板',
+      chFaceToFace: 'Face-to-face', chRadio: 'Radio', chPhone: 'Phone', chChat: 'Chat', chBoard: 'Notice board',
 
       // --- run: efficiency readouts ---
-      effLbl: 'Efficiency 稼働効率',
+      effLbl: 'Efficiency',
       idleLine: function (i, r) { return 'idle ' + i + ' min · rework ' + r + ' min'; },
 
       // --- checkpoint inspector (§8 関所) ---
