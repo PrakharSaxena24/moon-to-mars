@@ -61,6 +61,7 @@
   function hhmm(min) { var h = Math.floor(min / 60), m = Math.round(min % 60); return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m; }
 
   var sim = null, timer = null, paused = false, BASE_TICK = 520, speedMult = 1, lastResult = null;
+  var appMode = 'live', runFn = null, livePausedForFix = false, liveState = null;
   function tickMs() { return Math.round(BASE_TICK / speedMult); }
 
   var BUB = { confused: '❓', meeting: '💬', waiting: '⏳', tired: '😣', onFire: '🔥', resolved: '✅', working: '', idle: '', waitInfo: '⏳', rework: '🔁' };
@@ -75,6 +76,7 @@
     $('lang-en').classList.toggle('on', L === 'en'); $('lang-ja').classList.toggle('on', L === 'ja');
     paintSetup(); buildRules(); buildLegend();
     if (!$('run').classList.contains('hidden') && sim && anim) { $('figs').innerHTML = ''; buildSitemap(); renderSim(sim); }
+    if (appMode === 'live' && liveState && !$('run').classList.contains('hidden')) renderLivePanel();
     if (!$('report').classList.contains('hidden') && lastResult) renderReport(lastResult);
   }
 
@@ -525,9 +527,10 @@
     anim.cascade = (sim.mode === 'minute') ? P.cascadeTrace(sim.plan) : { hops: [], has: false };
     anim.cascade.has = anim.cascade.hasFault;
     renderSim(sim); startAnim();
+    runFn = step;
     if (timer) clearInterval(timer); timer = setInterval(step, tickMs());
   }
-  function restartTimer() { if (timer) { clearInterval(timer); timer = setInterval(step, tickMs()); } }
+  function restartTimer() { if (timer) { clearInterval(timer); timer = setInterval(runFn || step, tickMs()); } }
   function step() {
     if (paused || !sim) return;
     if (sim.paused) return;                       // checkpoint: wait for Resume
@@ -634,7 +637,7 @@
         node.classList.toggle('terr-red', tv === 'red');
       }
     });
-    var ban = $('banner'); if (s.bannerOn) { ban.textContent = T().bannerText; ban.classList.add('show'); } else ban.classList.remove('show');
+    var ban = $('banner'); if (s.bannerOn && appMode !== 'live') { ban.textContent = T().bannerText; ban.classList.add('show'); } else ban.classList.remove('show');
     $('sitemap').classList.toggle('blocked', !!s.bannerOn);
     $('nowtag').textContent = s.mode === 'minute'
       ? T().fdDayLine(hhmm(s.clockMin))
@@ -866,6 +869,7 @@
 
   function bind() {
     document.querySelectorAll('.lang button').forEach(function (b) { b.addEventListener('click', function () { L = b.getAttribute('data-lang'); applyLang(); }); });
+    $('modesw').addEventListener('click', function (e) { var b = e.target.closest('button[data-mode]'); if (b && b.dataset.mode !== appMode) enterMode(b.dataset.mode); });
     $('rules-open').addEventListener('click', function () { $('rules-modal').classList.add('show'); });
     $('rules-close').addEventListener('click', function () { $('rules-modal').classList.remove('show'); });
     $('rules-modal').addEventListener('click', function (e) { if (e.target === $('rules-modal')) $('rules-modal').classList.remove('show'); });
@@ -942,6 +946,219 @@
     document.querySelectorAll('.spd').forEach(function (b) { b.addEventListener('click', function () { speedMult = parseFloat(b.dataset.spd); document.querySelectorAll('.spd').forEach(function (x) { x.classList.toggle('on', x === b); }); restartTimer(); }); });
   }
 
+  // =========================================================================
+  // LIVE (play-first) MODE — land inside the running fishing day, pause at each
+  // information gap, fix one thing (with a blast-radius preview), watch it resolve.
+  // Reuses the engine + renderSim. The classic org/budget/safety decisions are
+  // pre-sound, so the live puzzle is purely the temporal information axis.
+  // =========================================================================
+  var LIVE_CH = ['board', 'chat', 'radio', 'faceToFace'];
+  function ldPanel(id) { ['ld-brief', 'ld-prompt', 'ld-spot', 'ld-result'].forEach(function (p) { var e = $(p); if (e) e.classList.toggle('on', p === id); }); }
+  function closeModals() { ['detail-modal', 'inspect-modal', 'arrow-modal', 'rules-modal'].forEach(function (m) { var e = $(m); if (e) e.classList.remove('show'); }); }
+  function clearStationTints() { P.STATIONS.forEach(function (s) { var n = $('st-' + s.id); if (n) n.classList.remove('terr-green', 'terr-amber', 'terr-red'); }); }
+  function chIcon(ch) { return { board: '📋', chat: '💬', radio: '📻', phone: '📞', faceToFace: '🤝' }[ch] || '•'; }
+  function personName(task) { var pid = task.assignedIds[0], p = pid && byId(currentPlan().participants, pid); return p ? nm(p.name) : nm(P.role(task.ownerRoleId).name); }
+
+  function enterMode(m) {
+    appMode = m;
+    $('mode-live').classList.toggle('on', m === 'live');
+    $('mode-morning').classList.toggle('on', m === 'morning');
+    if (timer) { clearInterval(timer); timer = null; }
+    stopAnim(); closeModals(); $('report').classList.add('hidden');
+    if (m === 'live') { $('setup').classList.add('hidden'); startLive(); }
+    else {
+      document.body.classList.remove('running'); sim = null; paused = false; livePausedForFix = false;
+      $('run').classList.add('hidden'); $('live-dock').classList.add('hidden'); $('setup').classList.remove('hidden');
+      paintSetup();
+    }
+  }
+
+  function startLive() {
+    for (var k in fixed) fixed[k] = true; fixed.fixHandoffs = false;   // classic decisions sound; the arrows are the puzzle
+    fdReset(); mcReset(); daySel = 'fishday';
+    liveState = { fixes: 0, addressed: {}, phase: 'brief', currentGap: null, result: null };
+    launchLive();
+  }
+
+  function launchLive() {
+    sim = P.createSim({ seed: (Math.floor(Math.random() * 1e9) >>> 0) || 1, overrides: buildCfg().overrides }, 'fishday');
+    paused = false; livePausedForFix = false; document.body.classList.add('running');
+    closeModals(); speedMult = 2; document.querySelectorAll('.spd').forEach(function (x) { x.classList.toggle('on', x.getAttribute('data-spd') === '2'); });
+    $('setup').classList.add('hidden'); $('report').classList.add('hidden'); $('run').classList.remove('hidden');
+    $('figs').innerHTML = ''; $('banner').classList.remove('show'); $('live-dock').classList.remove('hidden');
+    animReset(); updateRunButtons(); buildSitemap();
+    anim.cascade = P.cascadeTrace(sim.plan); anim.cascade.has = anim.cascade.hasFault;
+    renderSim(sim); startAnim();
+    liveState.phase = 'brief'; renderLivePanel();
+    runFn = liveStep; if (timer) clearInterval(timer); timer = setInterval(liveStep, tickMs());
+  }
+
+  function liveStep() {
+    if (!sim || paused || livePausedForFix) return;
+    if (sim.paused && sim.checkpoint) { P.resume(sim); }         // Live ignores the fixed checkpoints
+    P.tick(sim); renderSim(sim);
+    var gap = nextLiveGap();
+    if (gap && (sim.clockMin || 0) >= gap.startMin - 0.001) { livePausedForFix = true; openGap(gap); return; }
+    if (sim.finished) liveFinish();
+  }
+
+  function nextLiveGap() {
+    var plan = currentPlan(), fd = P.fishdaySchedule(plan), out = [];
+    fd.missing.forEach(function (m) { out.push({ taskId: m.taskId, cardId: m.cardId, kind: 'missing' }); });
+    fd.late.forEach(function (l) { out.push({ taskId: l.taskId, cardId: l.cardId, kind: 'late' }); });
+    out = out.filter(function (g) { return !liveState.addressed[g.taskId + '|' + g.cardId]; });
+    out.forEach(function (g) { var t = byId(plan.tasks, g.taskId); g.startMin = t ? t.startMin : 9999; });
+    out.sort(function (a, b) { return a.startMin - b.startMin; });
+    return out[0] || null;
+  }
+
+  function openGap(gap) {
+    liveState.currentGap = gap; liveState.phase = 'prompt';
+    var plan = currentPlan(), to = byId(plan.tasks, gap.taskId);
+    clearStationTints(); var stn = $('st-' + to.station); if (stn) stn.classList.add('terr-red');
+    var pid = to.assignedIds[0], f = pid && anim.fig[pid];
+    if (f) { f.el.className = 'astro s-waitInfo'; if (f.bub) f.bub.textContent = '⏳'; }
+    renderLivePanel();
+  }
+
+  function renderLivePanel() {
+    var t = T();
+    if (liveState.phase === 'brief') {
+      $('ld-brief').innerHTML = '<div class="ld-txt"><h3>' + t.ldBriefT + '</h3><p>' + t.ldBriefP + '</p></div><div class="ld-chip">' + t.liveChip(liveState.fixes) + '</div>';
+      ldPanel('ld-brief');
+    } else if (liveState.phase === 'prompt') {
+      var g = liveState.currentGap, plan = currentPlan(), to = byId(plan.tasks, g.taskId);
+      $('ld-prompt').innerHTML = '<div class="ld-txt"><h3>' + t.ldFrozenT(personName(to)) + '</h3><p>' + t.ldFrozenP(nm(to.name)) + '</p></div><button class="btn primary glow" id="ld-fix">' + t.ldFixBtn + '</button>';
+      $('ld-fix').addEventListener('click', function () { liveState.phase = 'spot'; renderLivePanel(); });
+      ldPanel('ld-prompt');
+    } else if (liveState.phase === 'spot') { renderSpot(); }
+    else if (liveState.phase === 'result') { renderResult(); }
+  }
+
+  function renderSpot() {
+    var t = T(), g = liveState.currentGap, plan = currentPlan(), to = byId(plan.tasks, g.taskId), from = producerOf(plan, g.cardId), card = byId(plan.infoCards, g.cardId);
+    var cname = nm(card.name).split('：')[0].split(':')[0], sendMin = from ? from.startMin + from.durMin : to.startMin;
+    var chips = LIVE_CH.map(function (ch) {
+      var arr = sendMin + (P.CHANNELS[ch] || 0), onTime = arr <= to.startMin;
+      return '<button class="ld-opt ' + (onTime ? 'fast' : 'slow') + '" type="button" data-ch="' + ch + '">' +
+        '<span class="oc">' + chIcon(ch) + ' ' + t['ch' + ch.charAt(0).toUpperCase() + ch.slice(1)] + '</span>' +
+        '<span class="lat">+' + (P.CHANNELS[ch] || 0) + (L === 'ja' ? '分' : ' min') + '</span>' +
+        '<span class="verdict">' + (onTime ? (L === 'ja' ? '✓ 間に合う' : '✓ in time') : (L === 'ja' ? '⚑ 遅い' : '⚑ too late')) + '</span></button>';
+    }).join('');
+    $('ld-spot').innerHTML =
+      '<div class="ld-spot-head"><h3>' + t.spotTitle(cname) + '</h3><p class="ld-sub">' +
+      t.spotSub(from ? personName(from) : nm(P.role('chef').name), personName(to), hhmm(to.startMin)) + '</p></div>' +
+      '<div class="ld-opts" id="ld-opts">' + chips + '</div>' +
+      '<div class="ld-preview" id="ld-preview"><span class="pv-lbl">' + (L === 'ja' ? 'プレビュー' : 'Preview') + '</span><span id="ld-pv-txt">' + t.spotHover + '</span></div>';
+    var opts = $('ld-opts');
+    opts.querySelectorAll('.ld-opt').forEach(function (b) {
+      var ch = b.dataset.ch;
+      b.addEventListener('mouseenter', function () { previewChannel(g, ch, false); });
+      b.addEventListener('focus', function () { previewChannel(g, ch, false); });
+      b.addEventListener('click', function () { opts.querySelectorAll('.ld-opt').forEach(function (x) { x.classList.remove('sel'); }); b.classList.add('sel'); previewChannel(g, ch, true); });
+    });
+    ldPanel('ld-spot');
+  }
+
+  function hypCfg(g, ch) {
+    var cfg = buildCfg(), plan = currentPlan(), to = byId(plan.tasks, g.taskId), from = producerOf(plan, g.cardId);
+    var trig = { type: 'onTaskDone', taskId: from ? from.id : null };
+    cfg.overrides = cfg.overrides || {}; cfg.overrides.handoffs = cfg.overrides.handoffs || {};
+    if (g.kind === 'late') {
+      var ex = plan.handoffs.filter(function (h) { return h.cardId === g.cardId && h.toRoleId === to.ownerRoleId; })[0];
+      if (ex) cfg.overrides.handoffs[ex.id] = Object.assign({}, ex, { channel: ch, trigger: trig });
+    } else {
+      var assume = (to.assumeOn || []).indexOf(g.cardId) >= 0;
+      cfg.overrides.handoffs['hlive_' + g.cardId + '_' + to.ownerRoleId] = { cardId: g.cardId, fromRoleId: from.ownerRoleId, fromTaskId: from.id, toRoleId: to.ownerRoleId, toTaskId: to.id, trigger: trig, channel: ch, ifLate: assume ? 'assume' : 'idle', reworkKind: assume ? 'wrongFish' : null, content: { en: '', jp: '' } };
+    }
+    return cfg;
+  }
+
+  function previewChannel(g, ch, persist) {
+    var t = T(), cfg = hypCfg(g, ch), plan2 = P.mergePlan(cfg), fd2 = P.fishdaySchedule(plan2);
+    var to = byId(plan2.tasks, g.taskId), from = producerOf(plan2, g.cardId);
+    var sendMin = from ? from.startMin + from.durMin : to.startMin, arr = sendMin + (P.CHANNELS[ch] || 0), onTime = arr <= to.startMin;
+    var assume = (to.assumeOn || []).indexOf(g.cardId) >= 0;
+    paintBlast(fd2, plan2);
+    var pv = $('ld-preview'), txt = $('ld-pv-txt');
+    pv.className = 'ld-preview ' + (onTime ? 'fast' : 'slow');
+    txt.innerHTML = onTime ? t.spotOnTime(hhmm(arr)) : (assume ? t.spotLateWrong(hhmm(arr), arr - to.startMin) : t.spotLateIdle(hhmm(arr), arr - to.startMin));
+    var old = pv.querySelector('.ld-send'); if (old) old.remove();
+    if (persist) {
+      var b = document.createElement('button'); b.className = 'btn primary ld-send'; b.type = 'button';
+      b.textContent = onTime ? t.spotSend : t.spotSendLate;
+      b.addEventListener('click', function () { commitChannel(g, ch); });
+      pv.appendChild(b);
+    }
+  }
+
+  function paintBlast(fd2, plan2) {
+    clearStationTints();
+    var rank = { green: 1, amber: 2, red: 3 }, m = {};
+    function set(st, v) { if (!m[st] || rank[v] > rank[m[st]]) m[st] = v; }
+    ['port', 'vessel', 'mess'].forEach(function (st) { set(st, 'green'); });
+    fd2.late.forEach(function (x) { var t = byId(plan2.tasks, x.taskId); if (t) set(t.station, 'amber'); });
+    fd2.missing.forEach(function (x) { var t = byId(plan2.tasks, x.taskId); if (t) set(t.station, 'amber'); });
+    fd2.wrongFish.forEach(function (id) { var t = byId(plan2.tasks, id); if (t) set(t.station, 'red'); });
+    for (var st in m) { var n = $('st-' + st); if (n) n.classList.add('terr-' + m[st]); }
+  }
+
+  function commitChannel(g, ch) {
+    var plan = currentPlan(), to = byId(plan.tasks, g.taskId), from = producerOf(plan, g.cardId);
+    var trig = { type: 'onTaskDone', taskId: from ? from.id : null };
+    if (g.kind === 'late') {
+      var ex = plan.handoffs.filter(function (h) { return h.cardId === g.cardId && h.toRoleId === to.ownerRoleId; })[0];
+      if (ex) fdOv.handoffs[ex.id] = Object.assign({}, ex, { channel: ch, trigger: trig });
+    } else {
+      var assume = (to.assumeOn || []).indexOf(g.cardId) >= 0;
+      var id = 'h_' + g.cardId.replace('ic_', '') + '_' + to.ownerRoleId + '_' + (fdUid++);
+      fdOv.handoffs[id] = { cardId: g.cardId, fromRoleId: from.ownerRoleId, fromTaskId: from.id, toRoleId: to.ownerRoleId, toTaskId: to.id, trigger: trig, channel: ch, ifLate: assume ? 'assume' : 'idle', reworkKind: assume ? 'wrongFish' : null, content: { en: '', jp: '' } };
+    }
+    liveState.addressed[g.taskId + '|' + g.cardId] = true; liveState.fixes++;
+    var now = sim.clockMin;
+    sim = P.createSim({ seed: sim.cfg.seed, overrides: buildCfg().overrides }, 'fishday');
+    sim.paused = false;
+    var guard = 0; while ((sim.clockMin || 0) < now && !sim.finished && guard++ < 400) { if (sim.paused) { sim.paused = false; sim.checkpoint = null; } P.tick(sim); }
+    anim.cascade = P.cascadeTrace(sim.plan); anim.cascade.has = anim.cascade.hasFault;
+    clearStationTints(); renderSim(sim);
+    livePausedForFix = false; liveState.phase = 'brief'; liveState.currentGap = null; renderLivePanel();
+  }
+
+  function liveFinish() {
+    if (timer) { clearInterval(timer); timer = null; }
+    var sc = P.score(sim), fd = P.fishdaySchedule(currentPlan());
+    var win = sc.efficiency === 100 && sc.wrongFishCount === 0 && (fd.dinnerMin == null || fd.dinnerMin <= 1080);
+    liveState.phase = 'result'; liveState.result = { win: win, sc: sc, fd: fd };
+    renderResult(); if (win) fireFanfare();
+  }
+
+  function renderResult() {
+    var t = T(), r = liveState.result, el = $('ld-result'); if (!r) return;
+    if (r.win) {
+      el.className = 'ld-panel result win';
+      el.innerHTML = '<div class="ld-txt"><h3>' + t.resWinT + '</h3><p>' + t.resWinP(r.sc.efficiency) + '</p></div>' +
+        '<div class="ld-actions"><button class="btn primary" id="ld-rerun">' + t.ldRerun + '</button><button class="btn ghost" id="ld-report">' + t.ldReport + '</button></div>';
+    } else {
+      var fd = r.fd, g = (fd.missing[0] || fd.late[0]), gapText, pl = currentPlan();
+      if (g) gapText = '“' + nm(byId(pl.infoCards, g.cardId).name).split('：')[0].split(':')[0] + '” → “' + nm(byId(pl.tasks, g.taskId).name) + '”';
+      else gapText = (L === 'ja' ? '遅い受け渡し' : 'a late hand-off');
+      el.className = 'ld-panel result miss';
+      el.innerHTML = '<div class="ld-txt"><h3>' + t.resFailT + '</h3><p>' + t.resFailP(hhmm(fd.dinnerMin || 1110), gapText) + '</p></div>' +
+        '<div class="ld-actions"><button class="btn primary" id="ld-rerun">' + t.ldRerun + '</button><button class="btn ghost" id="ld-report">' + t.ldReport + '</button></div>';
+    }
+    $('ld-rerun').addEventListener('click', startLive);
+    $('ld-report').addEventListener('click', liveToReport);
+    ldPanel('ld-result');
+  }
+
+  function liveToReport() {
+    stopAnim(); if (timer) { clearInterval(timer); timer = null; }
+    lastResult = { trip: P.score(sim), day: P.daySummary(sim), segment: 'fishday' };
+    document.body.classList.remove('running');
+    $('run').classList.add('hidden'); $('live-dock').classList.add('hidden'); $('report').classList.remove('hidden');
+    renderReport(lastResult);
+  }
+
   // ---- init ----
-  bind(); applyLang();
+  bind(); applyLang(); enterMode('live');
 })();

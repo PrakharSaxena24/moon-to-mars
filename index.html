@@ -21,11 +21,17 @@
       </div>
     </div>
     <div class="toprow">
-      <div class="lang">
-        <button id="lang-en" class="on" data-lang="en">English</button>
-        <button id="lang-ja" data-lang="ja">日本語</button>
+      <div class="modesw" id="modesw">
+        <button id="mode-live" class="on" data-mode="live" data-i18n="modeLive"></button>
+        <button id="mode-morning" data-mode="morning" data-i18n="modeMorning"></button>
       </div>
-      <button class="btn sm ghost" id="rules-open" data-i18n="rulesBtn"></button>
+      <div class="row2">
+        <div class="lang">
+          <button id="lang-en" class="on" data-lang="en">English</button>
+          <button id="lang-ja" data-lang="ja">日本語</button>
+        </div>
+        <button class="btn sm ghost" id="rules-open" data-i18n="rulesBtn"></button>
+      </div>
     </div>
   </div>
 
@@ -125,6 +131,14 @@
           <div id="dash-perf" class="perfwrap"></div>
         </div>
       </aside>
+    </div>
+
+    <!-- LIVE MODE dock: cold-open briefing → freeze prompt → spotlight one-question fix → result -->
+    <div class="live-dock hidden" id="live-dock">
+      <div class="ld-panel" id="ld-brief"></div>
+      <div class="ld-panel" id="ld-prompt"></div>
+      <div class="ld-panel" id="ld-spot"></div>
+      <div class="ld-panel" id="ld-result"></div>
     </div>
 
     <div class="legend" id="legend"></div>
