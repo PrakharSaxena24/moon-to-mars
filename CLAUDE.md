@@ -499,3 +499,34 @@ three-proposal synthesis (Living Harbor / Chronicle / Sea-as-adversary) live in 
 - **i18n:** `dinnerIn/dinnerWillLate/dinnerOnNow/dinnerLateNow/fanfareText` added with full EN/JP parity.
 - **Verified:** `node verify.js` = **91 checks** green; headless-Chrome DOM screenshots of the fishday run in
   EN (gappy + clean) and JP show no JS errors, the living map, and correct territory/countdown/idle behaviour.
+
+---
+
+## 17. Play-first rebuild — two modes (2026-07-03, on `main`; plan-first era preserved on branch `planfirst`, pushed to GitHub)
+Layer 0 made the run *prettier* but the user's verdict held: still not exciting, and **"the barrier to start feels
+large."** A multi-agent studio (PM, cold-open, systems, UI, reference analyst + 2 critics, on Sonnet) converged
+unanimously: **invert the funnel — Play First, Plan Second** — and both critics added a second load-bearing pillar
+(**close the slow feedback loop**) and an honest recalibration (**target Into-the-Breach / Papers-Please-grade
+deterministic thriller**, not literal AoE/Nobunaga, given the fixed 24-person single-map design). Approved via an
+interactive mockup (`artifact revamp-coldopen-v1`). Stakes decision: **soft-fail** (a run can visibly lose, but the
+failure always names the PLAN GAP, never a person). Engine is **unchanged** (verify.js still 91/91).
+
+**A header mode switch chooses the front door:**
+- **▶ Live (default, play-first):** on load you land *inside* the running fishing day. The classic org/budget/safety
+  decisions are pre-sound (`startLive` sets all classic fixes, leaves `fixHandoffs` off), so the puzzle is purely the
+  **temporal information axis**. The sim runs; at each info-arrow gap (`nextLiveGap`, in time order) it **auto-pauses**
+  (no clock pressure on first contact) and the consuming crewmate freezes red. One tap → a scoped **spotlight**
+  (`renderSpot`): pick the hand-off channel; a **blast-radius preview** (`previewChannel`→`hypCfg` runs a hypothetical
+  `mergePlan`+`fishdaySchedule`+`projected`) paints the downstream stations and states the *local* consequence BEFORE
+  you commit. Commit (`commitChannel`) writes a real `overrides.handoffs` plan edit, re-solves, and continues from the
+  current minute. The day ends in a **win** (dinner 18:00, 100/A, fanfare) or a **soft-fail** (`liveFinish`) that names
+  the surviving gap. All deterministic; reuses `createSim`/`tick`/`renderSim`/`cascadeTrace`.
+- **📋 Plan first (Morning):** the preserved classic setup→run→report authoring board (the `planfirst` experience).
+
+**Implementation:** additive to `app.js` (mode system: `appMode`/`enterMode`/`startLive`/`launchLive`/`liveStep`/
+`nextLiveGap`/`openGap`/`renderSpot`/`hypCfg`/`previewChannel`/`paintBlast`/`commitChannel`/`liveFinish`/`renderResult`/
+`liveToReport`; `runFn` makes the tick loop mode-aware; banner suppressed in Live), `index.html` (header `.modesw` +
+`#live-dock` panels), `style.css` (mode switch + live-dock/spotlight/blast/result), `i18n.js` (live-mode strings, full
+EN/JP parity). **Verified** headless (EN): land-running, freeze prompt, spotlight + blast-radius, clean 100%/win, and
+the Morning toggle. **Backlog / next:** map-callout on the frozen crewmate; a 2nd verified "voyage" (§13 branch) for
+replayability; morning-mode fresh-gappy reset on toggle; Layer-2 adversary (`applyScenario`).
