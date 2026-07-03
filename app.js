@@ -199,7 +199,7 @@
       c.innerHTML =
         '<div class="ed-top"><span class="ed-ic" style="background:' + rr.color + '">' + rr.icon + '</span>' +
           '<span class="ed-label">' + t['e_' + d + '_label'] + '</span><span class="ed-chip" id="chip-' + d + '"></span></div>' +
-        '<div class="ed-cause" id="cause-' + d + '">' + t['p_' + d + '_cause'] + '</div>' +
+        '<details class="ed-more" id="cause-' + d + '"><summary>' + t.whyBtn + '</summary><div>' + t['p_' + d + '_cause'] + '</div></details>' +
         '<select class="ed-sel" data-fix="' + DET_FIX[d] + '">' +
           '<option value="off">' + t['e_' + d + '_off'] + '</option>' +
           '<option value="on">✓ ' + t['e_' + d + '_on'] + '</option></select>';
