@@ -447,7 +447,7 @@
     var pos = layout(s);
     s.participants.forEach(function (p) {
       var el = figEls[p.id];
-      if (!el) { el = document.createElement('div'); el.className = 'astro'; el.innerHTML = '<div class="hat"></div><div class="bdy"></div><div class="nm"></div><div class="bub"></div>'; $('figs').appendChild(el); figEls[p.id] = el; el._hat = el.querySelector('.hat'); el._bub = el.querySelector('.bub'); el.querySelector('.nm').textContent = nm(p.name); el._hat.style.borderColor = P.role(p.roleId).color; el._role = p.roleId; }
+      if (!el) { el = document.createElement('div'); el.className = 'astro'; el.innerHTML = '<div class="hat"></div><div class="bdy"></div><div class="nm"></div><div class="bub"></div>'; $('figs').appendChild(el); figEls[p.id] = el; el._hat = el.querySelector('.hat'); el._bub = el.querySelector('.bub'); el.querySelector('.nm').textContent = nm(p.name); el._role = p.roleId; }
       var ps = pos[p.id] || { left: '50%', top: '50%' };
       el.style.left = ps.left; el.style.top = ps.top;
       el.className = 'astro s-' + p.state;
