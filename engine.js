@@ -76,16 +76,16 @@
 
   // ---- the 9 role types (spec §10) ----
   var ROLES = [
-    { id: 'owner',      name: L('Project Owner', 'プロジェクトオーナー'), icon: '👑', color: '#caa53b' },
-    { id: 'pm',         name: L('PM / Lead', '総合責任者 / PM'),          icon: '📋', color: '#3a6ea5' },
-    { id: 'siteLead',   name: L('Site Lead', '現地責任者'),               icon: '🧭', color: '#2f9e6f' },
-    { id: 'budgetLead', name: L('Budget Lead', '予算責任者'),             icon: '🧮', color: '#9b6dd6' },
-    { id: 'safetyLead', name: L('Safety Lead', '安全責任者'),             icon: '⛑️', color: '#d9534f' },
-    { id: 'logi',       name: L('Logistics', 'ロジ担当'),                 icon: '📦', color: '#c77d2e' },
-    { id: 'comms',      name: L('Comms / Records', '連絡・記録'),         icon: '🎧', color: '#3a9ad6' },
-    { id: 'specialist', name: L('Angler / Specialist', '釣り担当'),       icon: '🎣', color: '#56923e' },
-    { id: 'chef',       name: L('Chef', '料理長・調理'),                  icon: '🍳', color: '#d97742' },
-    { id: 'crew',       name: L('Crew / Guest', 'ゲスト'),                icon: '🧑', color: '#8a93a6' }
+    { id: 'owner',      name: L('Project Owner', 'プロジェクトオーナー'), icon: '👑', color: '#b8892b' },
+    { id: 'pm',         name: L('PM / Lead', '総合責任者 / PM'),          icon: '📋', color: '#3d5a6c' },
+    { id: 'siteLead',   name: L('Site Lead', '現地責任者'),               icon: '🧭', color: '#5b6b45' },
+    { id: 'budgetLead', name: L('Budget Lead', '予算責任者'),             icon: '🧮', color: '#7a4a68' },
+    { id: 'safetyLead', name: L('Safety Lead', '安全責任者'),             icon: '⛑️', color: '#a13d2f' },
+    { id: 'logi',       name: L('Logistics', 'ロジ担当'),                 icon: '📦', color: '#b5622e' },
+    { id: 'comms',      name: L('Comms / Records', '連絡・記録'),         icon: '🎧', color: '#2f6b63' },
+    { id: 'specialist', name: L('Angler / Specialist', '釣り担当'),       icon: '🎣', color: '#c17a1f' },
+    { id: 'chef',       name: L('Chef', '料理長・調理'),                  icon: '🍳', color: '#8a6a3a' },
+    { id: 'crew',       name: L('Crew / Guest', 'ゲスト'),                icon: '🧑', color: '#8c7f65' }
   ];
   function role(id) { for (var i = 0; i < ROLES.length; i++) if (ROLES[i].id === id) return ROLES[i]; return ROLES[ROLES.length - 1]; }
 
