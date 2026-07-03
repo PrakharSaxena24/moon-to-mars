@@ -164,6 +164,40 @@ button{font-family:inherit;}
 .tl-stage.sel{box-shadow:0 0 0 2px var(--accent);}
 .tl-day.sel{outline:2px solid var(--accent);outline-offset:-1px;font-weight:800;}
 
+/* ---------- Mission Control planner ---------- */
+.mission-control{display:flex;flex-direction:column;gap:12px;}
+.mc-status{display:flex;justify-content:space-between;gap:12px;align-items:center;border:1px solid var(--line);border-radius:var(--r-md);padding:10px 12px;background:var(--bg1);}
+.mc-status b{font-family:var(--serif);font-size:15px;}
+.mc-status span{font-size:12px;color:var(--ink2);text-align:right;}
+.mc-status.ok{border-color:rgba(91,107,69,.42);background:rgba(91,107,69,.08);}
+.mc-status.bad{border-color:rgba(161,61,47,.35);background:rgba(161,61,47,.06);}
+.mc-grid{display:grid;grid-template-columns:1fr 1.15fr;gap:12px;}
+.mc-grid section{border:1px solid var(--line);border-radius:var(--r-md);background:var(--bg1);padding:10px;min-width:0;}
+.mc-grid h3{font-family:var(--serif);font-size:13px;margin:0 0 8px;color:var(--accent-dark);}
+.mc-people,.mc-envs,.mc-resources,.mc-spends{display:flex;flex-direction:column;gap:7px;}
+.mc-person{display:grid;grid-template-columns:28px 1fr;gap:7px;align-items:center;border:1px solid var(--line);border-radius:var(--r-sm);padding:6px 8px;background:var(--bg2);}
+.mc-role{grid-row:1 / 3;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;box-shadow:0 0 0 2px var(--bg1),0 0 0 3px rgba(184,137,43,.35);}
+.mc-person b{font-size:12.5px;line-height:1.1;}
+.mc-person small{font-size:11px;color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.mc-env{border:1px solid var(--line);border-left:3px solid var(--build);border-radius:var(--r-sm);padding:8px;background:var(--bg2);}
+.mc-env.bad{border-left-color:var(--wait);background:rgba(161,61,47,.05);}
+.mc-env-top,.mc-res-top{display:flex;justify-content:space-between;gap:8px;font-size:12px;margin-bottom:6px;}
+.mc-env-top b,.mc-res-top b{font-size:12.5px;}
+.mc-env-top span,.mc-res-top span{color:var(--ink2);font-variant-numeric:tabular-nums;}
+.mc-env label{display:grid;grid-template-columns:72px 1fr;align-items:center;gap:6px;font-size:11px;color:var(--ink3);margin-top:5px;}
+.mc-sel{width:100%;background:var(--bg1);color:var(--ink);border:1px solid var(--line2);border-radius:var(--r-sm);padding:5px 7px;font-family:inherit;font-size:11.5px;}
+.mc-note{font-size:10.5px;color:var(--ink3);margin-top:5px;}
+.mc-res{border:1px solid var(--line);border-left:3px solid var(--build);border-radius:var(--r-sm);padding:8px;background:var(--bg2);}
+.mc-res.bad{border-left-color:var(--wait);background:rgba(161,61,47,.05);}
+.mc-range{width:100%;accent-color:var(--accent);}
+.mc-res-bar{height:6px;background:var(--bg1);border:1px solid var(--line);border-radius:var(--r-sm);overflow:hidden;margin-top:4px;}
+.mc-res-bar i{display:block;height:100%;background:var(--build);}
+.mc-spend{border:1px solid var(--line);border-left:3px solid var(--build);border-radius:var(--r-sm);padding:8px;background:var(--bg2);display:flex;flex-direction:column;gap:2px;}
+.mc-spend.bad{border-left-color:var(--wait);background:rgba(161,61,47,.05);}
+.mc-spend b{font-size:12.5px;}
+.mc-spend span,.mc-spend small{font-size:11px;color:var(--ink2);}
+.mc-spend.bad small{color:var(--wait-dark);font-weight:700;}
+
 /* readiness + hint */
 .planready{display:flex;flex-wrap:wrap;gap:7px;align-items:center;margin-top:14px;}
 .pr-lbl{font-size:11px;color:var(--ink3);font-weight:700;text-transform:uppercase;letter-spacing:.5px;}
@@ -191,7 +225,7 @@ button{font-family:inherit;}
 .paths{position:absolute;inset:0;z-index:1;}
 .path{position:absolute;height:1.5px;background:repeating-linear-gradient(90deg,rgba(227,196,107,.3) 0 6px,transparent 6px 12px);transform-origin:left center;}
 
-.station{position:absolute;transform:translate(-50%,-50%);text-align:center;z-index:2;width:74px;}
+.station{position:absolute;transform:translate(-50%,-50%);text-align:center;z-index:3;width:74px;}
 .st-ic{
   width:42px;height:42px;margin:0 auto;border-radius:50%;background:var(--indigo);
   border:2px solid var(--accent);box-shadow:0 0 0 5px rgba(227,196,107,.08), 0 4px 10px rgba(0,0,0,.4);
@@ -205,8 +239,9 @@ button{font-family:inherit;}
 .station.stalled .st-ic{border-color:var(--wait);box-shadow:0 0 0 5px rgba(161,61,47,.22), 0 4px 10px rgba(0,0,0,.4);animation:pulse 1.1s ease-in-out infinite;}
 
 /* characters */
-.figs{position:absolute;inset:0;z-index:3;}
-.astro{position:absolute;width:22px;transform:translate(-50%,-50%);text-align:center;transition:left .6s ease,top .6s ease;will-change:left,top;}
+.figs{position:absolute;inset:0;z-index:4;}
+.astro{position:absolute;width:22px;transform:translate(-50%,-50%);text-align:center;transition:opacity .3s ease;will-change:left,top;}
+.astro.walking .bdy{animation:step .32s ease-in-out infinite;}
 .astro .hat{width:15px;height:15px;border-radius:50%;margin:0 auto;border:2.5px solid var(--redu);background:var(--bg1);}
 .astro .bdy{width:5px;height:10px;margin:1px auto 0;border-radius:2px;background:#cbb98c;}
 .astro .nm{font-size:8.5px;color:var(--ink);margin-top:1px;white-space:nowrap;background:rgba(246,239,220,.88);border-radius:2px;padding:0 2px;display:inline-block;}
@@ -229,6 +264,69 @@ button{font-family:inherit;}
 .nowtag{position:absolute;left:10px;top:10px;z-index:5;font-family:var(--serif);font-size:12px;font-weight:700;background:var(--bg1);border:1px solid var(--line2);color:var(--ink);padding:4px 11px;border-radius:var(--r-sm);box-shadow:0 3px 10px rgba(0,0,0,.3);}
 .guests-tag{position:absolute;right:10px;bottom:10px;z-index:5;font-size:11.5px;color:var(--accent-light);background:rgba(20,27,34,.65);border:1px dashed var(--indigo-line);padding:4px 10px;border-radius:var(--r-sm);}
 .guests-tag b{color:var(--bg1);}
+
+/* ============ Layer 0 "Living Harbor": sea · guests · boat · territory · juice ============ */
+/* sea shelf + micro-life — pure ambience behind the paths */
+.sealayer{position:absolute;inset:0;z-index:0;pointer-events:none;overflow:hidden;}
+.water{position:absolute;left:-6%;bottom:-8%;width:46%;height:52%;
+  background:radial-gradient(120% 100% at 20% 100%, rgba(61,90,108,.5), rgba(35,47,58,.12) 62%, transparent 80%);
+  border-top-right-radius:70% 90%;}
+.water::after{content:"";position:absolute;inset:0;opacity:.5;
+  background:repeating-linear-gradient(105deg, rgba(227,196,107,.10) 0 2px, transparent 2px 9px);
+  animation:shimmer 6s linear infinite;}
+.gull{position:absolute;left:-8%;width:11px;height:6px;opacity:.55;animation:gull-fly linear infinite;}
+.gull::before,.gull::after{content:"";position:absolute;top:0;width:6px;height:6px;border-top:1.6px solid var(--accent-light);border-radius:50% 50% 0 0/100% 100% 0 0;}
+.gull::before{left:0;transform:rotate(16deg);} .gull::after{right:0;transform:rotate(-16deg);}
+.splash{position:absolute;width:5px;height:5px;border-radius:50%;background:rgba(227,196,107,.75);opacity:0;animation:fish-jump 7s ease-in-out infinite;}
+
+/* ambient actors: 13 hosted guests + the boat (positions set by rAF) */
+.ambient{position:absolute;inset:0;z-index:2;pointer-events:none;}
+.guest{position:absolute;transform:translate(-50%,-50%);width:9px;transition:opacity .5s ease;will-change:left,top;}
+.guest .g-body{display:block;width:7px;height:7px;margin:0 auto;border-radius:50% 50% 50% 50%/60% 60% 40% 40%;
+  background:var(--redu);box-shadow:0 0 0 1px rgba(20,27,34,.35);animation:bob 1.7s ease-in-out infinite;}
+.guest.hushed{opacity:.3;} .guest.hushed .g-body{animation:none;}
+.boat{position:absolute;transform:translate(-50%,-50%);z-index:2;will-change:left,top;}
+.boat .boat-hull{font-size:18px;line-height:1;display:block;filter:drop-shadow(0 2px 3px rgba(0,0,0,.5));}
+.boat .wake{position:absolute;left:50%;top:66%;width:0;height:0;}
+.boat.sailing .boat-hull{animation:boat-rock 2.6s ease-in-out infinite;}
+.boat.sailing .wake{width:22px;height:6px;margin-left:-24px;background:radial-gradient(circle at 100% 50%, rgba(227,196,107,.35), transparent 70%);border-radius:50%;animation:pulse 1.6s ease-in-out infinite;}
+
+/* station "territory" tint — the map turns your colour as the day runs (Nobunaga) */
+.st-halo{position:absolute;left:50%;top:21px;width:54px;height:54px;transform:translate(-50%,-50%);border-radius:50%;
+  pointer-events:none;opacity:0;transition:opacity .5s ease, background .5s ease;z-index:-1;}
+.station.terr-green .st-halo{opacity:.85;background:radial-gradient(circle, rgba(91,107,69,.48), transparent 68%);}
+.station.terr-amber .st-halo{opacity:.95;background:radial-gradient(circle, rgba(193,122,31,.52), transparent 68%);}
+.station.terr-red .st-halo{opacity:1;background:radial-gradient(circle, rgba(161,61,47,.58), transparent 68%);}
+.station.terr-green .st-ic{border-color:var(--build-light);}
+.station.terr-amber .st-ic{border-color:var(--idle);}
+.station.terr-red   .st-ic{border-color:var(--wait);}
+
+/* the cascade comet: rolls 港→船→食堂 while a fault is live (見せ場 #2) */
+.cascade-pulse{position:absolute;width:14px;height:14px;transform:translate(-50%,-50%);z-index:5;pointer-events:none;display:none;border-radius:50%;
+  background:radial-gradient(circle, rgba(217,83,79,.95), rgba(161,61,47,.15) 60%, transparent 72%);
+  box-shadow:0 0 12px 4px rgba(161,61,47,.5);}
+.cascade-pulse.show{display:block;}
+
+/* live pressure: 18:00 dinner countdown chip */
+.dinnertag{position:absolute;right:10px;top:10px;z-index:6;font-family:var(--serif);font-size:12px;font-weight:700;
+  background:var(--bg1);border:1px solid var(--line2);color:var(--ink);padding:4px 11px;border-radius:var(--r-sm);box-shadow:0 3px 10px rgba(0,0,0,.3);}
+.dinnertag.soon{border-color:var(--idle);color:var(--idle-dark);}
+.dinnertag.late{background:var(--wait);border-color:var(--wait-dark);color:var(--bg1);animation:pulse 1s ease-in-out infinite;}
+
+/* dinner-served fanfare — the age-up moment */
+.fanfare{position:absolute;left:50%;top:44%;transform:translate(-50%,-50%) scale(.6);z-index:9;pointer-events:none;opacity:0;
+  font-family:var(--serif);font-size:19px;font-weight:800;color:#3a260b;text-align:center;
+  background:linear-gradient(180deg,var(--accent-light),var(--accent));padding:14px 26px;border-radius:var(--r-md);
+  box-shadow:0 10px 30px rgba(184,137,43,.5), inset 0 1px 0 rgba(255,255,255,.4);border:1px solid var(--accent-dark);}
+.fanfare.show{animation:fanfare 2.6s ease forwards;}
+
+/* idle meter (climbs live) + score-float (+N) */
+.idlemeter{margin-top:6px;}
+.idlemeter .bar i{background:linear-gradient(90deg,var(--idle),var(--wait));}
+.idlemeter .bar i.ok{background:var(--build);} .idlemeter .bar i.mid{background:var(--idle);} .idlemeter .bar i.bad{background:var(--wait);}
+#fd-projected{position:relative;}
+#fd-projected.bump{animation:bump .6s ease;}
+.score-float{position:absolute;right:12px;top:0;font-weight:800;font-size:15px;color:var(--build-dark);pointer-events:none;animation:floatup 1s ease forwards;}
 
 /* dashboard — a paper HUD panel pinned beside the night map */
 .dashboard{background:var(--panel);border:1px solid var(--line2);border-radius:var(--r-lg);padding:15px;box-shadow:var(--shadow2);align-self:start;}
@@ -381,6 +479,15 @@ button{font-family:inherit;}
 @keyframes bob{0%,100%{transform:translate(-50%,-50%) translateY(0);}50%{transform:translate(-50%,-50%) translateY(-3px);}}
 @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.6;}}
 @keyframes badgepop{0%{transform:scale(.5);opacity:0;}70%{transform:scale(1.1);}100%{transform:scale(1);opacity:1;}}
+/* Living Harbor motion */
+@keyframes step{0%,100%{transform:translateY(0) rotate(-5deg);}50%{transform:translateY(-1px) rotate(5deg);}}
+@keyframes shimmer{to{background-position:60px 0;}}
+@keyframes gull-fly{0%{left:-8%;transform:translateY(0);}50%{transform:translateY(-11px);}100%{left:108%;transform:translateY(5px);}}
+@keyframes fish-jump{0%,86%{opacity:0;transform:translateY(0) scale(.5);}90%{opacity:.85;transform:translateY(-11px) scale(1);}96%{opacity:.6;transform:translateY(-3px) scale(.85);}100%{opacity:0;transform:translateY(2px) scale(.5);}}
+@keyframes boat-rock{0%,100%{transform:rotate(-5deg);}50%{transform:rotate(5deg);}}
+@keyframes fanfare{0%{opacity:0;transform:translate(-50%,-50%) scale(.6);}14%{opacity:1;transform:translate(-50%,-50%) scale(1.08);}30%{transform:translate(-50%,-50%) scale(1);}80%{opacity:1;transform:translate(-50%,-58%) scale(1);}100%{opacity:0;transform:translate(-50%,-74%) scale(.95);}}
+@keyframes bump{0%{transform:scale(1);}40%{transform:scale(1.05);}100%{transform:scale(1);}}
+@keyframes floatup{0%{opacity:0;transform:translateY(4px);}20%{opacity:1;}100%{opacity:0;transform:translateY(-22px);}}
 
 /* ---------- responsive ---------- */
 @media(max-width:760px){
@@ -396,6 +503,9 @@ button{font-family:inherit;}
   .topbar{flex-direction:column;}
   .toprow{align-items:flex-start;flex-direction:row;}
   .canvas-grid,.org,.editors,.scorecard{grid-template-columns:1fr;}
+  .mc-grid{grid-template-columns:1fr;}
+  .mc-status{align-items:flex-start;flex-direction:column;}
+  .mc-status span{text-align:left;}
   .sitemap{height:clamp(330px,52vh,460px);}
   .station{width:60px;} .st-ic{width:36px;height:36px;font-size:17px;} .st-nm{font-size:10px;}
   .astro{width:18px;} .astro .hat{width:13px;height:13px;} .astro .nm{font-size:7.5px;}
@@ -405,5 +515,8 @@ button{font-family:inherit;}
 }
 @media(prefers-reduced-motion:reduce){
   .astro,.astro.s-rework,.station.stalled .st-ic,.astro.s-onFire .hat,.fd-socket.miss,.r-badge.show{animation:none !important;}
+  .astro.walking .bdy,.guest .g-body,.gull,.splash,.water::after,.boat.sailing .boat-hull,.boat.sailing .wake,.dinnertag.late,#fd-projected.bump{animation:none !important;}
+  .fanfare.show{animation:none !important;opacity:1;transform:translate(-50%,-50%);}
+  .score-float{animation:none !important;opacity:1;}
   .banner{transition:none !important;}
 }

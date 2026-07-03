@@ -27,6 +27,13 @@
 
   // which design decisions the player has closed (true = fixed)
   var fixed = { setSafety: false, grantAuth: false, shareInfo: false, setReport: false, rebalance: false, fixReserve: false, setReturn: false, fixHandoffs: false };
+  // Mission Control board edits: budget envelopes, usable reserves, and resource counts.
+  var mcOv = { lines: {}, resources: {}, reserve: null };
+  function mcReset() { mcOv = { lines: {}, resources: {}, reserve: null }; }
+  function mcClearFixConflicts(fixId) {
+    if (fixId === 'grantAuth') delete mcOv.lines.bl_meals;
+    if (fixId === 'fixReserve') { mcOv.reserve = null; if (mcOv.resources.res_cash) delete mcOv.resources.res_cash; }
+  }
   // fishday hand-authored edits (drawn/erased arrows, re-timed blocks) — §7 editor output
   var fdOv = { timing: {}, handoffs: {} };
   function fdReset() { fdOv = { timing: {}, handoffs: {} }; }
@@ -39,6 +46,12 @@
     var cfg = { seed: 1, overrides: {} }, k;
     DETS.forEach(function (d) { if (fixed[DET_FIX[d]]) cfg = P.applyFix(cfg, DET_FIX[d]); });
     var o = cfg.overrides;
+    if (mcOv.reserve != null || Object.keys(mcOv.lines).length || Object.keys(mcOv.resources).length) {
+      o.budget = o.budget || {};
+      if (mcOv.reserve != null) o.budget.reserve = mcOv.reserve;
+      for (k in mcOv.lines) { ((o.budget.lines = o.budget.lines || {})[k] = o.budget.lines[k] || {}); Object.assign(o.budget.lines[k], mcOv.lines[k]); }
+      for (k in mcOv.resources) { ((o.budget.resources = o.budget.resources || {})[k] = o.budget.resources[k] || {}); Object.assign(o.budget.resources[k], mcOv.resources[k]); }
+    }
     for (k in fdOv.timing) { (o.timing = o.timing || {})[k] = fdOv.timing[k]; }
     for (k in fdOv.handoffs) { (o.handoffs = o.handoffs || {})[k] = fdOv.handoffs[k]; }
     return cfg;
@@ -47,7 +60,7 @@
   function activeProblemIds() { return P.detect(currentPlan()).map(function (p) { return p.id; }); }
   function hhmm(min) { var h = Math.floor(min / 60), m = Math.round(min % 60); return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m; }
 
-  var sim = null, timer = null, paused = false, BASE_TICK = 520, speedMult = 1, lastResult = null, figEls = {};
+  var sim = null, timer = null, paused = false, BASE_TICK = 520, speedMult = 1, lastResult = null;
   function tickMs() { return Math.round(BASE_TICK / speedMult); }
 
   var BUB = { confused: '❓', meeting: '💬', waiting: '⏳', tired: '😣', onFire: '🔥', resolved: '✅', working: '', idle: '', waitInfo: '⏳', rework: '🔁' };
@@ -61,14 +74,14 @@
     document.querySelectorAll('[data-i18n]').forEach(function (el) { var v = T()[el.getAttribute('data-i18n')]; if (typeof v === 'string') el.textContent = v; });
     $('lang-en').classList.toggle('on', L === 'en'); $('lang-ja').classList.toggle('on', L === 'ja');
     paintSetup(); buildRules(); buildLegend();
-    if (!$('run').classList.contains('hidden') && sim) { buildSitemap(); figEls = {}; $('figs').innerHTML = ''; renderSim(sim); }
+    if (!$('run').classList.contains('hidden') && sim && anim) { $('figs').innerHTML = ''; buildSitemap(); renderSim(sim); }
     if (!$('report').classList.contains('hidden') && lastResult) renderReport(lastResult);
   }
 
   // =========================================================================
   // SETUP
   // =========================================================================
-  function paintSetup() { buildDaySelect(); buildCanvas(); buildOrg(); buildTimeline(); buildEditors(); buildFishday(); updatePlanUI(); }
+  function paintSetup() { buildDaySelect(); buildCanvas(); buildOrg(); buildTimeline(); buildMissionControl(); buildEditors(); buildFishday(); updatePlanUI(); }
 
   function buildDaySelect() {
     var box = $('day-select'); if (!box) return;
@@ -131,6 +144,52 @@
     box.innerHTML = '<div class="tl-rail">' + rail + '</div><div class="tl-blocks">' + blocks + '</div>';
   }
 
+  function roleOpts(val, allowNone) {
+    var html = allowNone ? '<option value="">—</option>' : '';
+    ['owner', 'pm', 'siteLead', 'budgetLead', 'safetyLead', 'logi', 'comms', 'specialist', 'chef'].forEach(function (rid) {
+      html += '<option value="' + rid + '"' + (val === rid ? ' selected' : '') + '>' + P.role(rid).icon + ' ' + nm(P.role(rid).name) + '</option>';
+    });
+    return html;
+  }
+  function payOpts(val) {
+    return ['cash', 'card', 'invoice'].map(function (m) { return '<option value="' + m + '"' + (val === m ? ' selected' : '') + '>' + T()['pay_' + m] + '</option>'; }).join('');
+  }
+  function buildMissionControl() {
+    var box = $('mission-control'); if (!box) return;
+    var plan = currentPlan(), br = P.budgetReadiness(plan), t = T();
+    var gapCount = br.gaps.length + br.events.filter(function (ev) { return !ev.ok; }).length + br.resources.filter(function (r) { return !r.ok; }).length;
+    var roles = ['budgetLead', 'logi', 'siteLead', 'chef', 'safetyLead', 'comms'];
+    var people = roles.map(function (rid) {
+      var rr = P.role(rid), ro = plan.roles[rid], pp = ro && ro.holder ? byId(plan.participants, ro.holder) : null;
+      var auth = ro && ro.authority ? (ro.authority.canPay ? t.mcCanPay(nf(ro.authority.payCap === Infinity ? plan.budget.total : ro.authority.payCap)) : t.mcNoPay) : '';
+      return '<div class="mc-person"><span class="mc-role" style="background:' + rr.color + '">' + rr.icon + '</span><b>' + nm(rr.name) + '</b><small>' + (pp ? nm(pp.name) : '—') + ' · ' + auth + '</small></div>';
+    }).join('');
+    var envelopes = br.envelopes.map(function (ln) {
+      return '<div class="mc-env' + (ln.ok ? '' : ' bad') + '" data-line="' + ln.id + '">' +
+        '<div class="mc-env-top"><b>' + nm(ln.name) + '</b><span>¥' + nf(ln.cap) + '</span></div>' +
+        '<label>' + t.mcApprover + '<select class="mc-sel" data-mc="line" data-line="' + ln.id + '" data-field="approverRoleId">' + roleOpts(ln.approverRoleId || '', true) + '</select></label>' +
+        '<label>' + t.mcPayMethod + '<select class="mc-sel" data-mc="line" data-line="' + ln.id + '" data-field="payMethod">' + payOpts(ln.payMethod || 'cash') + '</select></label>' +
+        '<div class="mc-note">' + t.mcReceipt + ': ' + ln.receiptRule + '</div></div>';
+    }).join('');
+    var resources = br.resources.map(function (r) {
+      var pct = Math.max(0, Math.min(100, Math.round(r.planned / Math.max(1, r.target) * 100)));
+      return '<div class="mc-res' + (r.ok ? '' : ' bad') + '"><div class="mc-res-top"><b>' + nm(r.name) + '</b><span>' + nf(r.planned) + ' / ' + nf(r.target) + ' ' + nm(r.unit) + '</span></div>' +
+        '<input class="mc-range" type="range" min="0" max="' + Math.max(r.target * 2, r.planned, 1) + '" step="' + (r.unit.en === 'yen' ? 10000 : 1) + '" value="' + r.planned + '" data-mc="resource" data-resource="' + r.id + '">' +
+        '<div class="mc-res-bar"><i style="width:' + pct + '%"></i></div></div>';
+    }).join('');
+    var events = br.events.map(function (ev) {
+      var line = br.envelopes.filter(function (ln) { return ln.id === ev.lineId; })[0];
+      return '<div class="mc-spend' + (ev.ok ? '' : ' bad') + '"><b>' + nm(ev.name) + '</b><span>¥' + nf(ev.amount) + ' · ' + (line ? nm(line.name) : ev.lineId) + ' · ' + T()['pay_' + ev.requiredMethod] + '</span>' +
+        '<small>' + (ev.ok ? t.mcSpendOk : t.mcSpendBlocked) + '</small></div>';
+    }).join('');
+    box.innerHTML =
+      '<div class="mc-status ' + (gapCount ? 'bad' : 'ok') + '"><b>' + (gapCount ? t.mcStatusBad(gapCount) : t.mcStatusOk) + '</b><span>' + t.mcStatusSub + '</span></div>' +
+      '<div class="mc-grid"><section><h3>' + t.mcPeople + '</h3><div class="mc-people">' + people + '</div></section>' +
+      '<section><h3>' + t.mcEnvelopes + '</h3><div class="mc-envs">' + envelopes + '</div></section>' +
+      '<section><h3>' + t.mcResources + '</h3><div class="mc-resources">' + resources + '</div></section>' +
+      '<section><h3>' + t.mcSpendDrills + '</h3><div class="mc-spends">' + events + '</div></section></div>';
+  }
+
   function buildEditors() {
     var t = T(), box = $('editors'); box.innerHTML = '';
     var head = $('ed-head'); if (head) head.textContent = t.planDayLine(dayLabel(daySel), detsForDay(daySel).length);
@@ -170,6 +229,7 @@
     $('plan-hint').className = 'planhint' + (gaps ? '' : ' good');
     buildDaySelect();
     $('launch').textContent = t.runDayBtn(dayLabel(daySel));
+    buildMissionControl();
     buildFishday();
   }
 
@@ -177,7 +237,13 @@
   // FISHDAY EDITOR — timeline lanes + info-arrow overlay (§7)
   // =========================================================================
   var PXM = 0.8, FD_T0 = P.DAY_START_MIN, FD_T1 = P.DAY_END_MIN, LANE_H = 40, LBL_W = 108, RULER_H = 26;
-  var fdDrag = null, fdWire = null, arrowEdit = null, fdUid = 1;
+  var fdDrag = null, fdWire = null, arrowEdit = null, fdUid = 1, fdLastProj = null;
+  // AoE-style resource-tick: float a "+N" over the projection when a fix raises the score
+  function floatDelta(host, txt, cls) {
+    if (!host) return;
+    var f = document.createElement('span'); f.className = 'score-float ' + (cls || 'up'); f.textContent = txt;
+    host.appendChild(f); setTimeout(function () { if (f.parentNode) f.parentNode.removeChild(f); }, 1000);
+  }
   function fdX(min) { return LBL_W + (min - FD_T0) * PXM; }
   function fdMin(x) { return clamp(Math.round(((x - LBL_W) / PXM + FD_T0) / 5) * 5, FD_T0, FD_T1); }
   function cardOwnerOf(plan, cid) { var c = byId(plan.infoCards, cid); return c ? c.ownerRoleId : null; }
@@ -268,9 +334,14 @@
     $('fd-ready').innerHTML = '<span class="pr-lbl">' + t.fdReadyLbl + '</span>' +
       (chips.length ? chips.slice(0, 8).map(function (c) { return '<span class="pr-item bad">' + c + '</span>'; }).join('') + (chips.length > 8 ? '<span class="pr-item bad">+' + (chips.length - 8) + '</span>' : '')
                     : '<span class="pr-item ok">' + t.fdReadyOk + '</span>');
-    var proj = P.projected(buildCfg());
-    $('fd-projected').textContent = t.fdProjected(proj.score, proj.efficiency);
-    $('fd-projected').className = 'planhint' + (chips.length ? '' : ' good');
+    var proj = P.projected(buildCfg()), pe = $('fd-projected');
+    pe.textContent = t.fdProjected(proj.score, proj.efficiency);
+    pe.className = 'planhint' + (chips.length ? '' : ' good');
+    if (fdLastProj != null && proj.score > fdLastProj) {
+      floatDelta(pe, '+' + (proj.score - fdLastProj)); pe.classList.add('bump');
+      setTimeout(function () { pe.classList.remove('bump'); }, 620);
+    }
+    fdLastProj = proj.score;
   }
 
   // ---- block drag / resize / arrow wire (Pointer Events) ----
@@ -388,12 +459,25 @@
   // RUN
   // =========================================================================
   var ADJ = [['command', 'port'], ['command', 'clinic'], ['command', 'finance'], ['command', 'lodging'], ['port', 'vessel'], ['lodging', 'mess'], ['mess', 'finance'], ['finance', 'clinic']];
+
+  // ---- Layer 0 "Living Harbor": rAF motion for figures, guests, boat, cascade ----
+  // The engine still OWNS every position (which station a unit belongs to, where the
+  // boat is); the renderer only interpolates the journey so people WALK instead of
+  // teleporting, and the map breathes with 13 hosted guests + sea life. Nothing here
+  // feeds back into the sim — it is pure presentation over deterministic state.
+  var DOCK = { x: 0.155, y: 0.52 }, SEA = { x: 0.05, y: 0.93 };  // boat path: port → open sea
+  var GULLS = 3, FISH = 3, HUSH_R2 = 0.032;                       // hush radius² around a stalled holder
+  var STALL_STATES = { confused: 1, meeting: 1, waiting: 1, tired: 1, onFire: 1, waitInfo: 1, rework: 1 };
+  var anim = null;
+  function mapDims() { var m = $('sitemap'); return { w: m.clientWidth || 900, h: m.clientHeight || 480 }; }
+  function animReset() { anim = { running: false, raf: null, last: 0, w: 0, h: 0, fig: {}, guest: {}, boat: null, hotPts: [], cascade: { hops: [], has: false }, fanfared: false }; }
+
   function buildSitemap() {
     var box = $('stations'); box.innerHTML = '';
     P.STATIONS.forEach(function (s) {
       var d = document.createElement('div'); d.className = 'station'; d.id = 'st-' + s.id;
       d.style.left = (s.x * 100) + '%'; d.style.top = (s.y * 100) + '%';
-      d.innerHTML = '<div class="st-badge" id="badge-' + s.id + '"></div><div class="st-ic">' + s.icon + '</div><div class="st-nm">' + nm(s.name) + '</div><div class="st-ring" id="ring-' + s.id + '"></div>';
+      d.innerHTML = '<div class="st-badge" id="badge-' + s.id + '"></div><div class="st-halo"></div><div class="st-ic">' + s.icon + '</div><div class="st-nm">' + nm(s.name) + '</div><div class="st-ring" id="ring-' + s.id + '"></div>';
       box.appendChild(d);
     });
     // paths between stations (computed from the map's pixel size)
@@ -405,10 +489,28 @@
       var p = document.createElement('div'); p.className = 'path'; p.style.left = ax + 'px'; p.style.top = ay + 'px'; p.style.width = len + 'px'; p.style.transform = 'rotate(' + ang + 'deg)';
       paths.appendChild(p);
     });
-    // the 13 hosted guests (served by the 11 duty-holders) — a passive group, not workers
+    // sea + micro-life layer (water shelf, drifting gulls, jumping fish) — pure ambience
+    var sea = document.getElementById('sealayer');
+    if (!sea) { sea = document.createElement('div'); sea.id = 'sealayer'; sea.className = 'sealayer'; map.insertBefore(sea, $('paths')); }
+    var life = '<div class="water"></div>';
+    for (var gi = 0; gi < GULLS; gi++) life += '<span class="gull" style="top:' + (8 + gi * 9) + '%;animation-delay:' + (-gi * 5.5) + 's;animation-duration:' + (17 + gi * 4) + 's"></span>';
+    for (var fi = 0; fi < FISH; fi++) life += '<span class="splash" style="left:' + (6 + fi * 7) + '%;top:' + (80 + (fi % 2) * 8) + '%;animation-delay:' + (fi * 2.3) + 's"></span>';
+    sea.innerHTML = life;
+    // ambient layer: 13 hosted guests + the boat (positions driven by rAF)
+    var amb = document.getElementById('ambient');
+    if (!amb) { amb = document.createElement('div'); amb.id = 'ambient'; amb.className = 'ambient'; map.insertBefore(amb, $('figs')); }
+    amb.innerHTML = '<div class="boat" id="boat"><span class="boat-hull">⛵</span><span class="wake"></span></div>';
+    for (var i = 0; i < P.GUESTS; i++) amb.innerHTML += '<div class="guest" id="gg' + i + '"><span class="g-body"></span></div>';
+    // legend of who the small figures are (kept, restyled)
     var pr = P.makeTemplate().project, gt = document.getElementById('guests-tag');
-    if (!gt) { gt = document.createElement('div'); gt.id = 'guests-tag'; gt.className = 'guests-tag'; $('sitemap').appendChild(gt); }
+    if (!gt) { gt = document.createElement('div'); gt.id = 'guests-tag'; gt.className = 'guests-tag'; map.appendChild(gt); }
     gt.innerHTML = '👥 <b>' + pr.guests + '</b> ' + T().guestsShort;
+    // wire the rAF caches to the fresh DOM
+    var dims = mapDims(); anim.w = dims.w; anim.h = dims.h;
+    anim.guest = {};
+    for (var g = 0; g < P.GUESTS; g++) { var ge = $('gg' + g); anim.guest['g' + g] = { el: ge, cx: dims.w * 0.5, cy: dims.h * 0.6 }; }
+    var be = $('boat'); anim.boat = { el: be, cx: DOCK.x * dims.w, cy: DOCK.y * dims.h };
+    anim.fig = {};
   }
 
   function launch() {
@@ -417,8 +519,12 @@
     $('detail-modal').classList.remove('show'); $('inspect-modal').classList.remove('show'); $('arrow-modal').classList.remove('show');
     speedMult = 1; document.querySelectorAll('.spd').forEach(function (x) { x.classList.toggle('on', x.getAttribute('data-spd') === '1'); });
     $('setup').classList.add('hidden'); $('report').classList.add('hidden'); $('run').classList.remove('hidden');
-    figEls = {}; $('figs').innerHTML = ''; $('banner').classList.remove('show');
-    updateRunButtons(); buildSitemap(); renderSim(sim);
+    $('figs').innerHTML = ''; $('banner').classList.remove('show');
+    var ff = $('fanfare'); if (ff) ff.classList.remove('show');
+    animReset(); updateRunButtons(); buildSitemap();
+    anim.cascade = (sim.mode === 'minute') ? P.cascadeTrace(sim.plan) : { hops: [], has: false };
+    anim.cascade.has = anim.cascade.hasFault;
+    renderSim(sim); startAnim();
     if (timer) clearInterval(timer); timer = setInterval(step, tickMs());
   }
   function restartTimer() { if (timer) { clearInterval(timer); timer = setInterval(step, tickMs()); } }
@@ -430,43 +536,133 @@
     if (sim.finished) finish();
   }
 
-  function layout(s) {
+  // px target for each duty-holder: its engine station + a small stack offset
+  function figTargets(s) {
     var pos = {}, bucket = {}; s.stations.forEach(function (st) { bucket[st.id] = []; });
     s.participants.forEach(function (p) { bucket[p.station].push(p); });
+    var W = anim.w, H = anim.h;
     s.stations.forEach(function (st) {
       bucket[st.id].forEach(function (p, i) {
         var col = i % 3, row = Math.floor(i / 3);
-        var dx = (col - 1) * 17, dy = 26 + row * 16;
-        pos[p.id] = { left: 'calc(' + (st.x * 100) + '% + ' + dx + 'px)', top: 'calc(' + (st.y * 100) + '% + ' + dy + 'px)' };
+        pos[p.id] = { x: st.x * W + (col - 1) * 17, y: st.y * H + 26 + row * 16 };
       });
     });
     return pos;
   }
 
+  // ---- the continuous animation loop (walking, guests, boat, cascade) ----
+  function startAnim() { if (!anim.running) { anim.running = true; anim.last = 0; anim.raf = requestAnimationFrame(frame); } }
+  function stopAnim() { if (anim && anim.raf) cancelAnimationFrame(anim.raf); if (anim) { anim.running = false; anim.raf = null; } }
+  function frame(ts) {
+    if (!anim || !anim.running) return;
+    if ($('run').classList.contains('hidden')) { anim.running = false; return; }
+    var dt = anim.last ? Math.min(0.05, (ts - anim.last) / 1000) : 0.016; anim.last = ts;
+    var phase = ts / 2600, kFig = Math.min(1, dt * 3.4), kAmb = Math.min(1, dt * 2.2);
+    // duty-holders ease toward the targets renderSim set (they WALK there)
+    for (var pid in anim.fig) {
+      var f = anim.fig[pid]; if (!f.el) continue;
+      f.cx += (f.tx - f.cx) * kFig; f.cy += (f.ty - f.cy) * kFig;
+      var moving = Math.abs(f.tx - f.cx) > 1.2 || Math.abs(f.ty - f.cy) > 1.2;
+      f.el.classList.toggle('walking', moving);
+      f.el.style.left = f.cx + 'px'; f.el.style.top = f.cy + 'px';
+    }
+    // guests wander (seeded); hush + freeze near a stalled duty-holder
+    if (sim) {
+      var seed = (sim.cfg && sim.cfg.seed) || 1, acts = P.ambientActors(seed, phase), hot = anim.hotPts || [];
+      for (var a = 0; a < acts.length; a++) {
+        var g = acts[a], gs = anim.guest[g.id]; if (!gs) continue;
+        var hush = false;
+        for (var h = 0; h < hot.length; h++) { var dxg = g.x - hot[h].x, dyg = g.y - hot[h].y; if (dxg * dxg + dyg * dyg < HUSH_R2) { hush = true; break; } }
+        gs.el.classList.toggle('hushed', hush);
+        if (!hush) { gs.cx += (g.x * anim.w - gs.cx) * kAmb; gs.cy += (g.y * anim.h - gs.cy) * kAmb; }
+        gs.el.style.left = gs.cx + 'px'; gs.el.style.top = gs.cy + 'px';
+      }
+      // the boat sails its arc, derived from the schedule
+      var bs = P.boatState(sim), b = anim.boat;
+      if (b && b.el) {
+        var bx = (DOCK.x + (SEA.x - DOCK.x) * bs.param) * anim.w, by = (DOCK.y + (SEA.y - DOCK.y) * bs.param) * anim.h;
+        b.cx += (bx - b.cx) * kAmb; b.cy += (by - b.cy) * kAmb;
+        b.el.style.left = b.cx + 'px'; b.el.style.top = b.cy + 'px';
+        b.el.classList.toggle('sailing', bs.atSea);
+      }
+    }
+    updateCascade(ts);
+    anim.raf = requestAnimationFrame(frame);
+  }
+
+  // the signature 見せ場: a red comet rolls 港→船→食堂 while a fault is live
+  function updateCascade(ts) {
+    var pulse = $('cascade-pulse'); if (!pulse) return;
+    var c = anim.cascade;
+    if (!c || !c.has || c.hops.length < 2 || paused || (sim && sim.paused)) { pulse.classList.remove('show'); return; }
+    var HOP = 1000, hops = c.hops, span = (hops.length - 1) * HOP, total = span + 900, tt = ts % total;
+    if (tt >= span) { pulse.classList.remove('show'); return; }
+    var seg = Math.floor(tt / HOP), frac = (tt % HOP) / HOP;
+    var A = P.station(hops[seg].station), B = P.station(hops[Math.min(hops.length - 1, seg + 1)].station);
+    var x = (A.x + (B.x - A.x) * frac) * anim.w, y = (A.y + (B.y - A.y) * frac) * anim.h;
+    pulse.style.left = x + 'px'; pulse.style.top = y + 'px'; pulse.classList.add('show');
+  }
+
   function renderSim(s) {
-    var pos = layout(s);
+    var pos = figTargets(s);
+    anim.hotPts = [];
     s.participants.forEach(function (p) {
-      var el = figEls[p.id];
-      if (!el) { el = document.createElement('div'); el.className = 'astro'; el.innerHTML = '<div class="hat"></div><div class="bdy"></div><div class="nm"></div><div class="bub"></div>'; $('figs').appendChild(el); figEls[p.id] = el; el._hat = el.querySelector('.hat'); el._bub = el.querySelector('.bub'); el.querySelector('.nm').textContent = nm(p.name); el._role = p.roleId; }
-      var ps = pos[p.id] || { left: '50%', top: '50%' };
-      el.style.left = ps.left; el.style.top = ps.top;
-      el.className = 'astro s-' + p.state;
-      el._bub.textContent = BUB[p.state] || '';
+      var f = anim.fig[p.id];
+      if (!f) {
+        var el = document.createElement('div'); el.className = 'astro'; el.innerHTML = '<div class="hat"></div><div class="bdy"></div><div class="nm"></div><div class="bub"></div>';
+        $('figs').appendChild(el); el.querySelector('.nm').textContent = nm(p.name);
+        var st0 = P.station(p.station); f = anim.fig[p.id] = { el: el, bub: el.querySelector('.bub'), cx: st0.x * anim.w, cy: st0.y * anim.h, tx: st0.x * anim.w, ty: st0.y * anim.h };
+        el.style.left = f.cx + 'px'; el.style.top = f.cy + 'px';
+      }
+      var t = pos[p.id]; if (t) { f.tx = t.x; f.ty = t.y; }
+      f.el.className = 'astro s-' + p.state;
+      f.bub.textContent = BUB[p.state] || '';
+      if (STALL_STATES[p.state]) { var st = P.station(p.station); anim.hotPts.push({ x: st.x, y: st.y }); }
     });
-    // stations: crew count + dominant problem badge
+    // stations: crew count + dominant problem badge + "territory" tint (green/amber/red)
+    var terr = P.stationReadiness(s);
     s.stations.forEach(function (st) {
       var ring = $('ring-' + st.id); if (ring) { ring.textContent = st.crewIds.length ? st.crewIds.length : ''; ring.classList.toggle('show', st.crewIds.length > 0); }
       var badge = $('badge-' + st.id), node = $('st-' + st.id);
       var hot = st.dominantProblem && st.crewIds.length;
       if (badge) { badge.textContent = hot ? ('⛔ ' + T()['p_' + st.dominantProblem.id + '_title']) : ''; badge.classList.toggle('show', !!hot); }
-      if (node) node.classList.toggle('stalled', !!hot);
+      if (node) {
+        node.classList.toggle('stalled', !!hot);
+        var tv = terr[st.id] || 'none';
+        node.classList.toggle('terr-green', tv === 'green');
+        node.classList.toggle('terr-amber', tv === 'amber');
+        node.classList.toggle('terr-red', tv === 'red');
+      }
     });
     var ban = $('banner'); if (s.bannerOn) { ban.textContent = T().bannerText; ban.classList.add('show'); } else ban.classList.remove('show');
     $('sitemap').classList.toggle('blocked', !!s.bannerOn);
     $('nowtag').textContent = s.mode === 'minute'
       ? T().fdDayLine(hhmm(s.clockMin))
       : T().dayLine(Math.min(P.DAYS, Math.ceil(s.day)), P.DAYS) + (s.phaseLabel ? ' · ' + nm(s.phaseLabel) : '');
+    updatePressure(s);
     renderDashboard(s);
+  }
+
+  // minute-mode pressure: a live countdown to the 18:00 dinner + the fanfare payoff
+  function updatePressure(s) {
+    var tag = $('dinnertag'); if (!tag) return;
+    if (s.mode !== 'minute') { tag.classList.add('hidden'); return; }
+    tag.classList.remove('hidden');
+    var t = T(), DINNER = 1080, now = s.clockMin, dm = s.sched ? s.sched.dinnerMin : null;
+    var willLate = dm != null && dm > DINNER;
+    if (now < DINNER) { tag.textContent = t.dinnerIn(hhmm(DINNER - now)) + (willLate ? ' · ' + t.dinnerWillLate(dm - DINNER) : ''); }
+    else { tag.textContent = (dm != null && dm <= DINNER) ? t.dinnerOnNow : t.dinnerLateNow; }
+    tag.className = 'dinnertag' + (willLate || now > DINNER ? ' late' : (DINNER - now <= 120 ? ' soon' : ''));
+    // fanfare: dinner served on time — the age-up moment, fired once
+    if (!anim.fanfared && s.sched && dm != null && dm <= DINNER && s.sched.wrongFish.length === 0) {
+      var serve = s.sched.byTask['t_f_serve'];
+      if (serve && now >= serve.start) { anim.fanfared = true; fireFanfare(); }
+    }
+  }
+  function fireFanfare() {
+    var ff = $('fanfare'); if (!ff) return;
+    ff.textContent = T().fanfareText; ff.classList.remove('show'); void ff.offsetWidth; ff.classList.add('show');
+    setTimeout(function () { ff.classList.remove('show'); }, 2600);
   }
 
   function renderDashboard(s) {
@@ -479,7 +675,15 @@
       $('dash-eff').textContent = sc.efficiency + '%';
       $('dash-eff-bar').style.width = sc.efficiency + '%';
       $('dash-eff-bar').className = sc.efficiency >= 98 ? 'ok' : (sc.efficiency >= 90 ? 'mid' : 'bad');
-      $('dash-idle').textContent = t.idleLine(sc.idleMin, sc.reworkMin);
+      // idle accrued SO FAR (climbs live as the clock passes each waiting task's start)
+      var idleSoFar = 0;
+      if (s.sched) s.tasks.forEach(function (tk) {
+        if (tk.scope !== 'in') return; var e = s.sched.byTask[tk.id]; if (!e) return;
+        idleSoFar += Math.max(0, Math.min(s.clockMin, e.start) - tk.startMin) * Math.max(1, tk.assignedIds.length);
+      });
+      $('dash-idle').textContent = t.idleLine(Math.round(idleSoFar), sc.reworkMin);
+      var ib = $('dash-idle-bar');
+      if (ib) { var iw = Math.min(100, idleSoFar / 2.2); ib.style.width = iw + '%'; ib.className = idleSoFar <= 0 ? 'ok' : (iw > 40 ? 'bad' : 'mid'); }
     }
     $('dash-ready').textContent = sc.score + '%';
     $('dash-ready-bar').style.width = sc.score + '%';
@@ -576,7 +780,7 @@
   function finish() {
     clearInterval(timer); timer = null;
     lastResult = { trip: P.score(sim), day: (sim.segment !== 'all' ? P.daySummary(sim) : null), segment: sim.segment };
-    setTimeout(function () { document.body.classList.remove('running'); $('run').classList.add('hidden'); $('report').classList.remove('hidden'); renderReport(lastResult); }, 700);
+    setTimeout(function () { stopAnim(); document.body.classList.remove('running'); $('run').classList.add('hidden'); $('report').classList.remove('hidden'); renderReport(lastResult); }, 700);
   }
 
   var CAT_ORDER = ['objective', 'schedule', 'roles', 'info', 'budget', 'safety', 'quality', 'health'];
@@ -633,7 +837,11 @@
   }
 
   function applyFixAndRerun(fixId) {
-    if (fixId && fixed.hasOwnProperty(fixId)) { fixed[fixId] = true; if (fixId === 'fixHandoffs') fdClearFixConflicts(); }
+    if (fixId && fixed.hasOwnProperty(fixId)) {
+      fixed[fixId] = true;
+      if (fixId === 'fixHandoffs') fdClearFixConflicts();
+      mcClearFixConflicts(fixId);
+    }
     launch();
   }
 
@@ -650,7 +858,7 @@
   // =========================================================================
   function toSetup() {
     if (timer) { clearInterval(timer); timer = null; }
-    sim = null; paused = false; document.body.classList.remove('running');
+    stopAnim(); sim = null; paused = false; document.body.classList.remove('running');
     $('detail-modal').classList.remove('show');
     $('report').classList.add('hidden'); $('run').classList.add('hidden'); $('setup').classList.remove('hidden');
     paintSetup();
@@ -663,9 +871,41 @@
     $('rules-modal').addEventListener('click', function (e) { if (e.target === $('rules-modal')) $('rules-modal').classList.remove('show'); });
 
     $('day-select').addEventListener('click', function (e) { var b = e.target.closest('.day-btn'); if (b) { daySel = b.dataset.day; paintSetup(); } });
-    $('editors').addEventListener('change', function (e) { var s = e.target.closest('.ed-sel'); if (s) { fixed[s.dataset.fix] = (s.value === 'on'); if (s.dataset.fix === 'fixHandoffs' && s.value === 'on') fdClearFixConflicts(); updatePlanUI(); } });
-    $('btn-auto').addEventListener('click', function () { for (var k in fixed) fixed[k] = true; fdReset(); paintSetup(); });
-    $('btn-clear').addEventListener('click', function () { for (var k in fixed) fixed[k] = false; fdReset(); paintSetup(); });
+    $('editors').addEventListener('change', function (e) {
+      var s = e.target.closest('.ed-sel'); if (!s) return;
+      fixed[s.dataset.fix] = (s.value === 'on');
+      if (s.dataset.fix === 'fixHandoffs' && s.value === 'on') fdClearFixConflicts();
+      if (s.dataset.fix === 'grantAuth') {
+        if (s.value === 'on') mcClearFixConflicts('grantAuth');
+        else mcOv.lines.bl_meals = { approverRoleId: null };
+      }
+      if (s.dataset.fix === 'fixReserve') {
+        if (s.value === 'on') mcClearFixConflicts('fixReserve');
+        else { mcOv.reserve = 0; mcOv.resources.res_cash = { planned: 0 }; }
+      }
+      updatePlanUI();
+    });
+    $('mission-control').addEventListener('change', function (e) {
+      var el = e.target;
+      if (el.dataset.mc === 'line') {
+        var line = mcOv.lines[el.dataset.line] || (mcOv.lines[el.dataset.line] = {});
+        line[el.dataset.field] = el.value || null;
+        var p = currentPlan(), m = null; p.budget.lines.forEach(function (ln) { if (ln.id === 'bl_meals') m = ln; });
+        fixed.grantAuth = !!(m && m.approverRoleId && m.payMethod);
+        updatePlanUI();
+      }
+    });
+    $('mission-control').addEventListener('input', function (e) {
+      var el = e.target;
+      if (el.dataset.mc === 'resource') {
+        var val = parseInt(el.value, 10) || 0;
+        if (el.dataset.resource === 'res_cash') { mcOv.reserve = val; fixed.fixReserve = val >= (currentPlan().budget.reserveTarget || 300000); }
+        (mcOv.resources[el.dataset.resource] = mcOv.resources[el.dataset.resource] || {}).planned = val;
+        updatePlanUI();
+      }
+    });
+    $('btn-auto').addEventListener('click', function () { for (var k in fixed) fixed[k] = true; fdReset(); mcReset(); paintSetup(); });
+    $('btn-clear').addEventListener('click', function () { for (var k in fixed) fixed[k] = false; fdReset(); mcReset(); paintSetup(); });
     $('launch').addEventListener('click', launch);
 
     // fishday editor: drag blocks / draw & edit arrows (§7)

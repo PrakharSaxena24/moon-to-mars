@@ -52,6 +52,12 @@
     </div>
 
     <div class="card">
+      <h2 data-i18n="mcTitle"></h2>
+      <div class="tag" data-i18n="mcHint" style="margin:-6px 0 12px;"></div>
+      <div id="mission-control" class="mission-control"></div>
+    </div>
+
+    <div class="card">
       <h2 data-i18n="designTitle"></h2>
       <div class="tag" data-i18n="designHint" style="margin:-6px 0 12px;"></div>
       <div id="day-select" class="day-select"></div>
@@ -86,8 +92,11 @@
         <div class="paths" id="paths"></div>
         <div id="stations"></div>
         <div class="figs" id="figs"></div>
+        <div class="cascade-pulse" id="cascade-pulse"></div>
         <div class="banner" id="banner"></div>
         <div class="nowtag" id="nowtag"></div>
+        <div class="dinnertag hidden" id="dinnertag"></div>
+        <div class="fanfare" id="fanfare"></div>
       </div>
       <aside class="dashboard" id="dashboard">
         <div class="dash-head"><span class="dash-day" id="dash-day"></span><span class="dash-phase" id="dash-phase"></span></div>
@@ -101,6 +110,7 @@
           <div class="bigreadout"><span id="dash-eff">100%</span></div>
           <div class="meter"><div class="bar"><i id="dash-eff-bar"></i></div></div>
           <div class="fd-idletxt" id="dash-idle"></div>
+          <div class="meter idlemeter"><div class="bar"><i id="dash-idle-bar"></i></div></div>
         </div>
         <div class="dash-sec">
           <div class="dash-lbl" data-i18n="budgetLbl"></div>

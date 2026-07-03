@@ -58,6 +58,26 @@ function dayRun(cfg, seg) { var s = P.createSim(cfg, seg); var g = 0; while (!s.
   ok(fx.grade === 'A' && fx.gaps === 0 && fx.clean, seg + ' day -> clean A when fixed (' + fx.tasksDone + '/' + fx.tasksTotal + ')');
 });
 
+console.log('\n=== MISSION CONTROL · budgeting planner ===');
+var br0 = P.budgetReadiness(P.mergePlan(base));
+ok(br0.ready === false, 'gappy Mission Control budget plan is not ready');
+ok(br0.gaps.filter(function (g) { return g.type === 'BUDGET_AUTH'; }).length === 1, 'Mission Control flags missing meals approver');
+ok(br0.gaps.filter(function (g) { return g.type === 'RESERVE_SHORT'; }).length === 1, 'Mission Control flags missing cash reserve');
+ok(br0.resources.filter(function (r) { return r.id === 'res_cash'; })[0].ok === false, 'cash resource starts under target');
+ok(br0.events.filter(function (ev) { return ev.id === 'sp_meals'; })[0].ok === false, 'morning food spend is blocked before budgeting fix');
+var mcCfg = { seed: 1, overrides: { budget: {
+  reserve: 300000,
+  lines: { bl_meals: { approverRoleId: 'budgetLead', payMethod: 'cash' } },
+  resources: { res_cash: { planned: 300000 }, res_ice: { planned: 55 } }
+} } };
+var mcPlan = P.mergePlan(mcCfg), mcBr = P.budgetReadiness(mcPlan), mcDets = P.detect(mcPlan).map(function (d) { return d.id; });
+ok(mcBr.gaps.length === 0, 'Mission Control overrides clear budget readiness gaps');
+ok(mcBr.ready === true, 'Mission Control ready flag requires envelopes, spends, and resources');
+ok(mcDets.indexOf('budgetAuth') < 0 && mcDets.indexOf('reserve') < 0, 'Mission Control budget edits remove budgetAuth/reserve detectors');
+ok(mcBr.resources.filter(function (r) { return r.id === 'res_ice'; })[0].planned === 55, 'Mission Control resource override updates ice count');
+ok(P.makeTemplate().budget.reserve === 0, 'Mission Control merge does not mutate the template');
+ok(P.projected(mcCfg).categories.budget === 10, 'Mission Control edits are reflected in projected budget score');
+
 console.log('\n=== FISHDAY · temporal information axis (minute clock) ===');
 function fishRun(cfg) {
   var sim = P.createSim(cfg, 'fishday'), g = 0, pauses = [];
@@ -194,6 +214,40 @@ console.log('\n=== gradient table ===');
 var steps = [['gappy', base]];
 var acc = base; ['setSafety', 'grantAuth', 'shareInfo', 'setReport', 'rebalance', 'fixReserve', 'setReturn', 'fixHandoffs'].forEach(function (fx) { acc = P.applyFix(acc, fx); steps.push(['+' + fx, acc]); });
 steps.forEach(function (st) { var s = scoreOf(st[1]); console.log('  ' + (st[0] + '            ').slice(0, 14) + ' ' + s.grade + ' ' + ('  ' + s.score).slice(-3) + ' /100  gaps=' + s.problemCount + ' goal%=' + s.goalPct); });
+
+console.log('\n=== LAYER 0 — living-harbor cosmetic helpers (pure, no scoring impact) ===');
+// ambientActors: 13 seeded guests, deterministic, in-range, animate with phase
+var aa1 = P.ambientActors(7, 0.3), aa2 = P.ambientActors(7, 0.3), aa3 = P.ambientActors(7, 1.9);
+ok(aa1.length === P.GUESTS, 'ambientActors returns ' + P.GUESTS + ' guests (' + aa1.length + ')');
+ok(JSON.stringify(aa1) === JSON.stringify(aa2), 'ambientActors deterministic for same (seed,phase)');
+ok(JSON.stringify(aa1) !== JSON.stringify(aa3), 'ambientActors animates with phase');
+ok(aa1.every(function (g) { return g.x >= 0 && g.x <= 1 && g.y >= 0 && g.y <= 1; }), 'ambientActors positions stay in [0,1]');
+
+// helper: run a fishday sim to a given minute (auto-resuming checkpoints)
+function fishdayAt(cfg, minute) { var s = P.createSim(cfg, 'fishday'), g = 0; while (!s.finished && (s.clockMin || 0) < minute && g++ < 500) { if (s.paused) P.resume(s); P.tick(s); } return s; }
+function fishdayEnd(cfg) { var s = P.createSim(cfg, 'fishday'), g = 0; while (!s.finished && g++ < 500) { if (s.paused) P.resume(s); P.tick(s); } return s; }
+
+// boatState: docked at dawn, at sea mid-morning, docked by day's end
+var simEnd = fishdayEnd(P.applyAllFixes(base));
+ok(P.boatState(P.createSim(base, 'fishday')).param === 0, 'boat docked at dawn (param 0)');
+ok(P.boatState(fishdayAt(P.applyAllFixes(base), 660)).atSea, 'boat is at sea mid-morning');
+ok(P.boatState(simEnd).param < 0.05, 'boat back at dock by day end');
+
+// stationReadiness: gappy paints red/amber; a clean day paints no red
+var srG = P.stationReadiness(fishdayAt(base, 780)), srC = P.stationReadiness(simEnd);
+ok(Object.keys(srG).some(function (k) { return srG[k] === 'red' || srG[k] === 'amber'; }), 'gappy fishday paints red/amber territory');
+ok(!Object.keys(srC).some(function (k) { return srC[k] === 'red'; }), 'clean fishday paints no red territory');
+
+// cascadeTrace: gappy has a time-ordered fault; a clean plan has none
+var ctG = P.cascadeTrace(P.mergePlan(base)), ctC = P.cascadeTrace(P.mergePlan(P.applyAllFixes(base)));
+ok(ctG.hasFault && ctG.hops.length >= 2, 'gappy cascade has a fault (' + ctG.hops.map(function (h) { return h.station; }).join('→') + ')');
+ok(!ctC.hasFault && ctC.hops.length === 0, 'clean cascade has no fault');
+ok((function () { for (var i = 1; i < ctG.hops.length; i++) if (ctG.hops[i].atMin < ctG.hops[i - 1].atMin) return false; return true; })(), 'cascade hops are time-ordered');
+
+// purity: cosmetic helpers must never perturb the score (no hidden state / no score-RNG)
+var scBefore = JSON.stringify(scoreOf(base));
+P.ambientActors(1, 0.5); P.cascadeTrace(P.mergePlan(base)); P.stationReadiness(P.createSim(base, 'fishday')); P.boatState(P.createSim(base, 'fishday'));
+ok(JSON.stringify(scoreOf(base)) === scBefore, 'cosmetic helpers do not perturb score() (pure)');
 
 console.log('\n' + (fail === 0 ? 'ALL ' + pass + ' CHECKS PASSED ✓' : pass + ' passed, ' + fail + ' FAILED ✗'));
 process.exit(fail === 0 ? 0 : 1);

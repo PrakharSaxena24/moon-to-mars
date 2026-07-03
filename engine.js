@@ -337,7 +337,20 @@
           { id: 'bl_tackle',    name: L('Gear / tackle', '道具'), cap: 200000, spent: 0, approverRoleId: 'logi',     payMethod: 'cash', receiptRule: 'photo' },
           { id: 'bl_onsite',    name: L('On-site / misc', '現地費'), cap: 300000, spent: 0, approverRoleId: 'siteLead', payMethod: 'cash', receiptRule: 'lenient' }
         ],
-        reserve: 0   // GAP F: no cash reserve
+        reserve: 0,   // GAP F: no cash reserve
+        reserveTarget: 300000,
+        resources: [
+          { id: 'res_cash', name: L('Cash reserve', '現金予備費'), unit: L('yen', '円'), planned: 0, target: 300000, ownerRoleId: 'budgetLead' },
+          { id: 'res_ice', name: L('Ice for catch', '漁獲用の氷'), unit: L('kg', 'kg'), planned: 40, target: 40, ownerRoleId: 'logi' },
+          { id: 'res_fuel', name: L('Boat fuel buffer', '船の燃料余裕'), unit: L('hours', '時間'), planned: 2, target: 2, ownerRoleId: 'siteLead' },
+          { id: 'res_food', name: L('Dinner portions', '夕食の食数'), unit: L('portions', '食'), planned: 18, target: 18, ownerRoleId: 'chef' }
+        ],
+        spendEvents: [
+          { id: 'sp_meals', lineId: 'bl_meals', taskId: 't_f_food', name: L('Morning food buy', '朝の食材購入'), amount: 85000, actorRoleId: 'chef', requiredMethod: 'cash', requiresApproval: true, receiptRequired: true },
+          { id: 'sp_ice', lineId: 'bl_tackle', taskId: 't_f_icing', name: L('Extra ice after catch tally', '釣果後の氷追加'), amount: 18000, actorRoleId: 'logi', requiredMethod: 'cash', requiresApproval: false, receiptRequired: true },
+          { id: 'sp_fallback', lineId: 'bl_onsite', taskId: 't_f_sideprep', name: L('Fallback food if catch is low', '不漁時の代替食材'), amount: 60000, actorRoleId: 'siteLead', requiredMethod: 'cash', requiresApproval: true, receiptRequired: true },
+          { id: 'sp_fuel', lineId: 'bl_boat', taskId: 't_f_depart', name: L('Fuel / dock fee', '燃料・港使用料'), amount: 45000, actorRoleId: 'siteLead', requiredMethod: 'card', requiresApproval: true, receiptRequired: true }
+        ]
       },
 
       risks: [
@@ -373,6 +386,9 @@
     if (o.budget) {
       if (o.budget.lines) for (k in o.budget.lines) { var bl = lineById(plan, k); if (bl) for (var lk in o.budget.lines[k]) bl[lk] = o.budget.lines[k][lk]; }
       if (typeof o.budget.reserve === 'number') plan.budget.reserve = o.budget.reserve;
+      if (typeof o.budget.reserveTarget === 'number') plan.budget.reserveTarget = o.budget.reserveTarget;
+      if (o.budget.resources) for (k in o.budget.resources) { var br = byId(plan.budget.resources || [], k); if (br) for (var bk in o.budget.resources[k]) br[bk] = o.budget.resources[k][bk]; }
+      if (o.budget.spendEvents) for (k in o.budget.spendEvents) { var se = byId(plan.budget.spendEvents || [], k); if (se) for (var sk in o.budget.spendEvents[k]) se[sk] = o.budget.spendEvents[k][sk]; }
     }
     if (o.risks) for (k in o.risks) { var rk2 = byId(plan.risks, k); if (rk2) for (var xk in o.risks[k]) rk2[xk] = o.risks[k][xk]; }
     if (o.comms) for (k in o.comms) { var cr = byId(plan.commRules, k); if (cr) for (var mk in o.comms[k]) cr[mk] = o.comms[k][mk]; }
@@ -426,7 +442,7 @@
     {
       id: 'reserve', category: 'budget', state: 'waiting', station: 'finance', roleId: 'budgetLead',
       fixId: 'fixReserve', severity: 'low', taskIds: ['t11', 't_settle'],
-      test: function (plan) { return !(plan.budget.reserve > 0); }
+      test: function (plan) { return !(plan.budget.reserve >= (plan.budget.reserveTarget || 300000)); }
     },
     {
       id: 'returnLogi', category: 'roles', state: 'confused', station: 'port', roleId: 'logi',
@@ -622,6 +638,131 @@
   function wrongFishTasks(plan) { return fishdaySchedule(plan).wrongFish; }
   function reworkMinutes(plan) { return fishdaySchedule(plan).reworkTotal; }
   function efficiency(plan) { return fishdaySchedule(plan).efficiency; }
+
+  // ===========================================================================
+  // Layer 0 — "Living Harbor" COSMETIC VIEW HELPERS (pure, read-only, DOM-free).
+  // These feed the renderer only. They NEVER touch score()/fishdaySchedule and
+  // never consume the score-path RNG, so the teaching gradient is untouched
+  // (verify.js asserts they are additive). All outputs are deterministic given
+  // their inputs (same seed+phase / same sim => same picture).
+  // ===========================================================================
+
+  // 13 hosted guests as seeded ambient wanderers. They own no duties and are
+  // outside the efficiency denominator (unchanged), so animating them cannot move
+  // any score — pure life on the map. `phase` advances with wall-clock in the
+  // renderer; the function itself is pure. Returns normalized map coords [0..1].
+  function ambientActors(seed, phase) {
+    var out = [], base = (seed >>> 0) || 1, ph = phase || 0;
+    for (var i = 0; i < GUESTS; i++) {
+      var r = mulberry32((base ^ ((0x9E3779B9 * (i + 1)) >>> 0)) >>> 0);
+      var hx = 0.28 + r() * 0.46;                 // home x in the central "promenade/beach" band
+      var hy = 0.50 + r() * 0.22;                 // home y (below the edge stations)
+      var rad = 0.02 + r() * 0.05;               // wander radius
+      var f1 = 0.35 + r() * 0.8, f2 = 0.4 + r() * 0.8, p1 = r() * 6.2832, p2 = r() * 6.2832;
+      var actR = r();
+      var x = hx + rad * Math.cos(ph * f1 + p1);
+      var y = hy + rad * 0.6 * Math.sin(ph * f2 + p2);
+      out.push({ id: 'g' + i, x: x, y: y, home: { x: hx, y: hy },
+        act: actR < 0.16 ? 'cast' : (actR < 0.4 ? 'chat' : 'stroll') });
+    }
+    return out;
+  }
+
+  // Where the fishing boat is, DERIVED from the depart/return task states already
+  // solved in sim.sched — a cosmetic read of engine truth, no new state. param:
+  // 0 = docked at the port, 1 = out at the ground. Only meaningful on the minute
+  // clock; other segments keep the boat docked.
+  function boatState(sim) {
+    if (!sim || sim.mode !== 'minute' || !sim.sched) return { phase: 'dock', param: 0, atSea: false };
+    var now = sim.clockMin || 0, bt = sim.sched.byTask;
+    var dep = bt['t_f_depart'], ret = bt['t_f_return'], param = 0, ph = 'dock';
+    if (dep && now >= dep.start) {
+      if (ret && now >= ret.start) {
+        var dr = ret.end - ret.start; param = dr > 0 ? 1 - Math.max(0, Math.min(1, (now - ret.start) / dr)) : 0;
+        ph = param > 0.02 ? 'inbound' : 'dock';
+      } else if (now < dep.end) {
+        var dd = dep.end - dep.start; param = dd > 0 ? Math.max(0, Math.min(1, (now - dep.start) / dd)) : 1; ph = 'outbound';
+      } else { param = 1; ph = 'ground'; }
+    }
+    return { phase: ph, param: param, atSea: param > 0.02 };
+  }
+
+  // Per-station "territory" status from the CURRENT live task states (changes tick
+  // to tick, so the map colours in as the day runs, then greens as waits resolve).
+  // red = a task here is stalled / redoing (手戻り); amber = someone is waiting on
+  // info (手待ち); green = working or done; none = nothing in scope yet.
+  function stationReadiness(sim) {
+    var out = {}, rank = { none: 0, green: 1, amber: 2, red: 3 }, i;
+    for (i = 0; i < STATIONS.length; i++) out[STATIONS[i].id] = 'none';
+    if (!sim || !sim.tasks) return out;
+    for (i = 0; i < sim.tasks.length; i++) {
+      var t = sim.tasks[i]; if (t.scope !== 'in') continue;
+      var v = null;
+      if (t.state === 'stalled' || t.state === 'rework') v = 'red';
+      else if (t.state === 'waitinfo') v = 'amber';
+      else if (t.state === 'working' || t.state === 'done') v = 'green';
+      if (v && rank[v] > rank[out[t.station]]) out[t.station] = v;
+    }
+    return out;
+  }
+
+  // The signature cascade (見せ場): the ordered station hops a seeded fault ripples
+  // through (港→船→食堂), derived from the solved schedule — every idle/late/missing/
+  // wrong-fish task in start-time order, de-duplicated by station. hasFault=false on
+  // a clean plan (the ripple simply doesn't play, and the map greens instead).
+  function cascadeTrace(plan) {
+    var fd = fishdaySchedule(plan), fds = fishdayTasks(plan), byId = {}, i;
+    for (i = 0; i < fds.length; i++) byId[fds[i].id] = fds[i];
+    var aff = {};
+    fd.wrongFish.forEach(function (id) { aff[id] = 1; });
+    fd.missing.forEach(function (m) { aff[m.taskId] = 1; });
+    fd.late.forEach(function (l) { aff[l.taskId] = 1; });
+    for (i = 0; i < fds.length; i++) { var e = fd.byTask[fds[i].id]; if (e && e.idleMin > 0) aff[fds[i].id] = 1; }
+    var hops = Object.keys(aff).filter(function (id) { return byId[id]; }).map(function (id) {
+      var e = fd.byTask[id];
+      return { taskId: id, station: byId[id].station, atMin: (e && e.start != null) ? e.start : byId[id].startMin };
+    }).sort(function (a, b) { return a.atMin - b.atMin; });
+    var out = [];
+    hops.forEach(function (h) { if (!out.length || out[out.length - 1].station !== h.station) out.push(h); });
+    return { hops: out, hasFault: fd.wrongFish.length > 0 || fd.missing.length > 0 || fd.late.length > 0 };
+  }
+
+  // Mission Control budget lens: what the setup board teaches. This is a pure
+  // pre-run view over envelopes, usable payment paths, reserves, and spend events.
+  function budgetReadiness(plan) {
+    var target = plan.budget.reserveTarget || 300000;
+    var gaps = [], envelopeOut = [], eventOut = [], resourceOut = [], i;
+    for (i = 0; i < plan.budget.lines.length; i++) {
+      var line = plan.budget.lines[i];
+      var ok = !!line.approverRoleId && !!line.payMethod;
+      if (line.id === 'bl_meals' && !ok) gaps.push({ type: 'BUDGET_AUTH', lineId: line.id });
+      envelopeOut.push({ id: line.id, name: line.name, cap: line.cap, approverRoleId: line.approverRoleId || null,
+        payMethod: line.payMethod || null, receiptRule: line.receiptRule || 'required', ok: ok });
+    }
+    if (plan.budget.reserve < target) gaps.push({ type: 'RESERVE_SHORT', current: plan.budget.reserve, target: target });
+    var resources = plan.budget.resources || [];
+    for (i = 0; i < resources.length; i++) {
+      var r = clone(resources[i]);
+      if (r.id === 'res_cash') r.planned = plan.budget.reserve;
+      r.ok = r.planned >= r.target;
+      resourceOut.push(r);
+    }
+    var events = plan.budget.spendEvents || [];
+    for (i = 0; i < events.length; i++) {
+      var ev = events[i], ln = lineById(plan, ev.lineId), roleAuth = plan.roles[ev.actorRoleId] && plan.roles[ev.actorRoleId].authority;
+      var methodOk = !!ln && ln.payMethod === ev.requiredMethod;
+      var approverOk = !!ln && (!ev.requiresApproval || !!ln.approverRoleId);
+      var actorCanPay = !!roleAuth && roleAuth.canPay && roleAuth.payCap >= ev.amount;
+      var reserveBackstop = ev.requiredMethod === 'cash' && plan.budget.reserve >= Math.min(target, ev.amount);
+      eventOut.push({ id: ev.id, name: ev.name, amount: ev.amount, lineId: ev.lineId, taskId: ev.taskId,
+        actorRoleId: ev.actorRoleId, requiredMethod: ev.requiredMethod, methodOk: methodOk,
+        approverOk: approverOk, actorCanPay: actorCanPay, reserveBackstop: reserveBackstop,
+        receiptRequired: !!ev.receiptRequired, ok: methodOk && approverOk && (actorCanPay || reserveBackstop || !!ln.approverRoleId) });
+    }
+    return { reserve: plan.budget.reserve, reserveTarget: target, envelopes: envelopeOut,
+      resources: resourceOut, events: eventOut, gaps: gaps,
+      ready: gaps.length === 0 && eventOut.every(function (ev) { return ev.ok; }) && resourceOut.every(function (r) { return r.ok; }) };
+  }
 
   // live readiness hints for the authoring screen (§7.2) — pure, recomputed per edit
   function readiness(plan) {
@@ -994,8 +1135,11 @@
     CHANNELS: CHANNELS, CHECKPOINTS: CHECKPOINTS,
     fishdayTasks: fishdayTasks, resolveSendMin: resolveSendMin, staticArrival: staticArrival, infoArrival: infoArrival,
     fishdaySchedule: fishdaySchedule, idleMinutes: idleMinutes, wrongFishTasks: wrongFishTasks,
-    reworkMinutes: reworkMinutes, efficiency: efficiency, readiness: readiness, projected: projected,
-    resume: resume, intervene: intervene, memberInfo: memberInfo, canonHandoffs: canonHandoffs
+    reworkMinutes: reworkMinutes, efficiency: efficiency, budgetReadiness: budgetReadiness,
+    readiness: readiness, projected: projected,
+    resume: resume, intervene: intervene, memberInfo: memberInfo, canonHandoffs: canonHandoffs,
+    // Layer 0 cosmetic view helpers (pure, no scoring impact)
+    ambientActors: ambientActors, boatState: boatState, stationReadiness: stationReadiness, cascadeTrace: cascadeTrace
   };
   global.PRS = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

@@ -456,9 +456,46 @@ Design source (kept out of git via `.gitignore`): `シミュレーション型�
 ---
 
 ## 15. Status
-**Concept: COMPLETE. Implementation: MVP SHIPPED 2026-07-02.** All §12.6 phases done at
-`/Users/tanakai/aibos/OgasawaraSim`. The engine is headless-verified (`node verify.js`, **53 checks**: the
-classic gradient D→A plus the fishday temporal block — gappy = 8/D, 91% efficiency, 220 idle min, 2 wrong-fish,
-dinner 18:30; all fixes = 100/A, 100%, zero idle, dinner 18:00) and DOM-verified (32 Playwright checks across
-the editor, checkpoint inspector, intervene, report chips, and EN/JP parity — 210 keys per language).
-§13 contingency branches remain the Phase-2 backlog.
+**Concept: COMPLETE. Implementation: MVP SHIPPED 2026-07-02. Layer 0 "Living Harbor" SHIPPED 2026-07-03.**
+All §12.6 phases done at `/Users/tanakai/aibos/OgasawaraSim`. The engine is headless-verified (`node verify.js`,
+**91 checks**: the classic gradient D→A, the fishday temporal block — gappy = 8/D, 91% efficiency, 220 idle min,
+2 wrong-fish, dinner 18:30; all fixes = 100/A, 100%, zero idle, dinner 18:00 — plus the Layer 0 cosmetic-helper
+block) and DOM-verified. §13 contingency branches and Layers 1–4 (§16) remain the backlog.
+
+---
+
+## 16. Feel pass — "Age of Empires / Nobunaga's Ambition" direction (2026-07-03)
+The shipped MVP read as a *precomputed Gantt-replay with 11 dots* (three independent code-reads scored its
+"aliveness" 2/5). A design pass reframed the roadmap as five additive layers that inject the command/empire
+FEELING **without diluting the thesis** — governed by one law: **juice the diagnosis, never the reflex; surprise
+≠ randomness; 100 stays sacred; morale is an output not an input; live command is debt.** Full plan + the
+three-proposal synthesis (Living Harbor / Chronicle / Sea-as-adversary) live in the session history.
+
+- **Layer 0 — "Living Harbor" (✅ SHIPPED 2026-07-03).** Pure-cosmetic, zero thesis risk. See §16.1.
+- **Layer 2 — "The sea fights back":** deterministic adversary via `applyScenario` through the one `mergePlan`
+  choke point (comms-outage → seasickness/deputy → storm-day boss). *Backlog.*
+- **Layers 3–4 — characters + campaign:** named-people stat cards (traits + morale/loyalty as *read-offs*),
+  optional debt-logged live command, 10-day carryover ledger, ambition tiers, expedition chronicle. *Backlog.*
+- **Cut for now:** fog-of-war (user declined 2026-07-03).
+
+### 16.1 Layer 0 as built (additive — no engine/score/determinism change)
+- **Engine (`engine.js`): four DOM-free, deterministic, read-only helpers on `window.PRS`, none touching
+  `score()`/`fishdaySchedule`/score-path RNG** (`verify.js` asserts purity):
+  `ambientActors(seed,phase)` → 13 seeded guest positions; `boatState(sim)` → boat param 0..1 derived from the
+  depart/return task states; `stationReadiness(sim)` → per-station green/amber/red from *live* task states;
+  `cascadeTrace(plan)` → the ordered fault hops (港→船→食堂), `hasFault=false` on a clean plan.
+- **Renderer (`app.js`): a `requestAnimationFrame` loop** replaces the 0.6s teleport-slides — the 11 duty-holders
+  now **walk** continuously toward their engine-assigned station (engine still owns *which* station). It also
+  drives **13 wandering guests** (hushed + frozen near a stalled holder — bustle sharpens the diagnostic),
+  a **boat that sails** port→sea→port, and the **cascade comet**. The engine remains the single source of truth;
+  the loop is pure presentation and never writes back to the sim.
+- **Feel HUD:** stations tint **green/amber/red "territory"** (Nobunaga's map-turns-your-colour, live); a minute-mode
+  **18:00 dinner countdown** ("dinner in 07:40 · 30 min late at this rate"); a **climbing idle meter**; the
+  **cascade comet** rolls 港→船→食堂 while a fault is live; a **dinner-served fanfare** fires once on an on-time
+  clean serve; **floating "+N"** deltas pop over the projection when an editor arrow-draw raises the score.
+- **Ambience (`style.css`):** sea shelf + shimmer, drifting gulls, jumping fish; new keyframes are all
+  reduced-motion-guarded. **Layers:** sealayer z0 · paths z1 · ambient(guests+boat) z2 · stations z3 · figs z4 ·
+  cascade z5 · chips z6 · banner z7 · fanfare z9.
+- **i18n:** `dinnerIn/dinnerWillLate/dinnerOnNow/dinnerLateNow/fanfareText` added with full EN/JP parity.
+- **Verified:** `node verify.js` = **91 checks** green; headless-Chrome DOM screenshots of the fishday run in
+  EN (gappy + clean) and JP show no JS errors, the living map, and correct territory/countdown/idle behaviour.
