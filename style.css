@@ -237,7 +237,7 @@ button{font-family:inherit;}
 
 /* information motes — a handoff travelling its path (gold on time · hanko red late) */
 .motes{position:absolute;inset:0;z-index:3;pointer-events:none;}
-.mote{position:absolute;left:0;top:0;width:8px;height:8px;margin:-4px 0 0 -4px;border-radius:50%;opacity:0;will-change:transform,opacity;}
+.mote{position:absolute;left:0;top:0;width:8px;height:8px;margin:-4px 0 0 -4px;border-radius:50%;opacity:0;transition:opacity .25s ease;will-change:transform,opacity;}
 .mote.gold{background:radial-gradient(circle,#ffeeb0,rgba(227,196,107,.4) 65%,transparent 75%);box-shadow:0 0 9px 3px rgba(227,196,107,.5);}
 .mote.red{background:radial-gradient(circle,#ffb2a2,rgba(217,83,79,.45) 65%,transparent 75%);box-shadow:0 0 9px 3px rgba(217,83,79,.5);}
 .mote.on{opacity:1;}
@@ -294,7 +294,7 @@ button{font-family:inherit;}
 .astro.walking .pw{animation:trot .38s ease-in-out infinite;}
 .astro.s-working .pw{animation:bob 1.15s ease-in-out infinite;}
 .astro .nm{position:absolute;left:0;top:5px;transform:translateX(-50%);font-size:10px;font-weight:600;color:var(--ink);white-space:nowrap;
-  background:rgba(246,239,220,.92);border:1px solid var(--line2);border-radius:2px;padding:0 4px;line-height:1.4;max-width:74px;overflow:hidden;text-overflow:ellipsis;
+  background:rgba(246,239,220,.92);border:1px solid var(--line2);border-radius:2px;padding:0 4px;line-height:1.4;max-width:92px;overflow:hidden;text-overflow:ellipsis;
   opacity:0;transition:opacity .25s ease;pointer-events:none;}
 .astro .nm i{font-style:normal;margin-right:2px;}
 .astro .fig:hover ~ .nm{opacity:1;}
@@ -364,7 +364,7 @@ button{font-family:inherit;}
 .boat .mast{position:absolute;left:12px;bottom:6px;width:1.5px;height:14px;background:#4a3a22;}
 .boat .sail{position:absolute;left:3px;bottom:8px;width:0;height:0;border-bottom:11px solid rgba(240,231,208,.92);border-left:9px solid transparent;filter:drop-shadow(0 1px 2px rgba(0,0,0,.4));}
 .boat .sail::after{content:"";position:absolute;left:-5px;top:4px;width:4px;height:4px;border-radius:50%;background:var(--wait);}
-.boat .wk{position:absolute;left:0;top:0;width:12px;height:4px;margin:-2px 0 0 -6px;border-radius:50%;background:rgba(227,196,107,.3);opacity:0;will-change:transform,opacity;}
+.ambient .wk{position:absolute;left:0;top:0;width:12px;height:4px;margin:-2px 0 0 -6px;border-radius:50%;background:rgba(227,196,107,.3);opacity:0;will-change:transform,opacity;}
 
 /* station "territory" tint — the map turns your colour as the day runs (Nobunaga) */
 .st-halo{position:absolute;left:50%;top:21px;width:54px;height:54px;transform:translate(-50%,-50%);border-radius:50%;
@@ -378,6 +378,8 @@ button{font-family:inherit;}
 
 /* night falls with the minute clock: lanterns come on at the stations */
 .sitemap.night .st-ic{box-shadow:0 0 0 5px rgba(227,196,107,.1), 0 0 20px 3px rgba(227,196,107,.22), 0 4px 10px rgba(0,0,0,.45);}
+/* ...but a stalled station's red warning glow always outranks the cozy lantern */
+.sitemap.night .station.stalled .st-ic{box-shadow:0 0 0 5px rgba(161,61,47,.22), 0 4px 10px rgba(0,0,0,.4);}
 .sitemap.night .path{opacity:.85;}
 .sitemap.night .water{filter:brightness(.82);}
 
@@ -525,10 +527,13 @@ button{font-family:inherit;}
 .fd-rsz{position:absolute;right:-4px;top:0;width:14px;height:100%;cursor:ew-resize;border-radius:0 var(--r-sm) var(--r-sm) 0;}
 .fd-rsz:hover{background:rgba(184,137,43,.25);}
 .fd-port{position:absolute;right:-14px;top:50%;transform:translateY(-50%);width:11px;height:11px;border-radius:50%;background:var(--bg1);border:2.5px solid var(--accent);cursor:crosshair;z-index:5;}
-.fd-port::after{content:"";position:absolute;inset:-9px;}
+/* slop away from the block only — a leftward halo would sit on top of the resize handle */
+.fd-port::after{content:"";position:absolute;top:-7px;bottom:-7px;left:0;right:-8px;}
 .fd-port:hover{box-shadow:0 0 0 3px rgba(184,137,43,.3);}
 .fd-socket{position:absolute;left:-6px;width:10px;height:10px;border-radius:50%;border:2.5px solid var(--build);background:var(--build);cursor:pointer;z-index:5;}
-.fd-socket::after{content:"";position:absolute;inset:-9px;}
+/* slop leftward into the lane only — sockets stack at 11px pitch (no vertical slop) and the
+   block body to the right must stay draggable (no rightward slop) */
+.fd-socket::after{content:"";position:absolute;top:-2px;bottom:-2px;left:-8px;right:-2px;}
 .fd-socket.late{border-color:var(--idle);background:var(--bg1);}
 .fd-socket.miss{border-color:var(--wait);background:var(--bg1);animation:pulse 1.2s ease-in-out infinite;}
 .fd-arrows{position:absolute;inset:0;z-index:2;pointer-events:none;}
@@ -622,7 +627,7 @@ button{font-family:inherit;}
 .ld-actions{display:flex;gap:9px;flex-wrap:wrap;}
 .result.win .ld-txt h3{color:var(--build-dark);} .result.miss .ld-txt h3{color:var(--idle-dark);}
 .ld-opt:focus-visible,.modesw button:focus-visible{outline:2px solid var(--accent-light);outline-offset:2px;}
-.station:focus-visible,.warn:focus-visible,.fd-block:focus-visible,.fd-socket:focus-visible,.fd-port:focus-visible{outline:2px solid var(--accent-light);outline-offset:2px;}
+.station:focus-visible,.warn:focus-visible,.fd-block:focus-visible,.fd-socket:focus-visible{outline:2px solid var(--accent-light);outline-offset:2px;}
 .spd:focus-visible,.day-btn:focus-visible,.fd-ar-chip:focus-visible,.btn:focus-visible,.lang button:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
 .warn{cursor:pointer;}
 .station{cursor:pointer;}
@@ -659,10 +664,13 @@ button{font-family:inherit;}
 @media(prefers-reduced-motion:reduce){
   /* every decorative animation off; JS-driven motion is separately gated on the same media query */
   .astro,.astro::after,.astro .pw,.astro .lg,.astro .bub,.astro .sh,.astro.spot .sh,
-  .station.stalled .st-ic,.station.ping .st-ic,.station.ping-red .st-ic,.station.strike .st-ic,
+  .station.stalled .st-ic,.station.strike .st-ic,
   .fd-socket.miss,.r-badge.show,.guest .g-body,.gull,.splash,.water::after,
   .boat .bcore,.boat.sailing .bcore,.path,.dinnertag.late,#fd-projected.bump,
   .btn.glow,.ld-panel.on,.bigreadout.gold{animation:none !important;}
+  /* hand-off arrival cue stays visible without motion: a static ring while the class is held */
+  .station.ping .st-ic{animation:none !important;box-shadow:0 0 0 5px rgba(227,196,107,.5), 0 4px 10px rgba(0,0,0,.4) !important;}
+  .station.ping-red .st-ic{animation:none !important;box-shadow:0 0 0 5px rgba(217,83,79,.55), 0 4px 10px rgba(0,0,0,.4) !important;}
   .fanfare.show{animation:none !important;opacity:1;transform:translate(-50%,-50%);}
   .score-float{animation:none !important;opacity:1;}
   .banner{transition:none !important;}

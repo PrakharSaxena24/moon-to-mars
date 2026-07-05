@@ -39,12 +39,13 @@
   function fdReset() { fdOv = { timing: {}, handoffs: {} }; }
   // fixHandoffs must win over stale hand-edits/erasures of the canonical arrows,
   // or the fix-pack button would appear to do nothing (the hand-edit re-breaks it).
-  // Block re-timings on the arrows' endpoint tasks re-break it the same way, so they go too.
+  // ANY block re-timing can re-break the zero-idle anchor through the dep chain
+  // (engine contract: fixHandoffs returns the fishday to its anchor no matter what
+  // the editor did) — so applying the fix resets every fishday timing edit too.
   function fdClearFixConflicts() {
+    fdOv.timing = {};
     P.canonHandoffs().forEach(function (h) {
       if (fdOv.handoffs.hasOwnProperty(h.id)) delete fdOv.handoffs[h.id];
-      if (fdOv.timing.hasOwnProperty(h.fromTaskId)) delete fdOv.timing[h.fromTaskId];
-      if (fdOv.timing.hasOwnProperty(h.toTaskId)) delete fdOv.timing[h.toTaskId];
     });
   }
   function buildCfg() {
@@ -294,7 +295,7 @@
         if (cardOwnerOf(plan, cid) === tk.ownerRoleId) return;
         var arr = P.infoArrival(plan, cid, tk.ownerRoleId);
         var cls = arr == null ? 'miss' : (arr <= tk.startMin ? 'ok' : 'late');
-        sock += '<span class="fd-socket ' + cls + '" tabindex="0" data-task="' + tk.id + '" data-card="' + cid + '" style="top:' + (si * 11 + 1) + 'px" title="● ' + nm(byId(plan.infoCards, cid).name) + '"></span>';
+        sock += '<span class="fd-socket ' + cls + '" tabindex="0" role="button" data-task="' + tk.id + '" data-card="' + cid + '" style="top:' + (si * 11 + 1) + 'px" title="● ' + nm(byId(plan.infoCards, cid).name) + '"></span>';
       });
       var port = (tk.produces || []).length ? '<span class="fd-port" data-task="' + tk.id + '" data-card="' + tk.produces[0] + '" title="○ ' + nm(byId(plan.infoCards, tk.produces[0]).name) + '"></span>' : '';
       var multi = tk.assignedIds.length > 1 ? '<i class="fd-x">×' + tk.assignedIds.length + '</i>' : '';
@@ -368,16 +369,19 @@
   }
 
   // ---- block drag / resize / arrow wire (Pointer Events) ----
-  // the best arrow currently feeding (task, card) for its owner — null if none drawn
+  // the best arrow currently feeding (task, card) for its owner — an arrow bound to THIS task
+  // wins over a same-role sibling, so the panel's deadline matches the tapped socket
   function feedArrow(plan, toTaskId, cardId) {
-    var to = byId(plan.tasks, toTaskId), best = null, bestArr = Infinity;
+    var to = byId(plan.tasks, toTaskId), best = null, bestArr = Infinity, bestTask = null, bestTaskArr = Infinity;
     if (!to) return null;
     plan.handoffs.forEach(function (h) {
       if (h.cardId !== cardId || h.toRoleId !== to.ownerRoleId) return;
       var a = P.staticArrival(plan, h);
-      if (a != null && a < bestArr) { bestArr = a; best = h; }
+      if (a == null) return;
+      if (h.toTaskId === toTaskId && a < bestTaskArr) { bestTaskArr = a; bestTask = h; }
+      if (a < bestArr) { bestArr = a; best = h; }
     });
-    return best;
+    return bestTask || best;
   }
   function fdSocketTap(sock) {
     var plan = currentPlan();
@@ -387,6 +391,7 @@
   }
   function fdPointerDown(ev) {
     if (ev.button != null && ev.button !== 0 && ev.pointerType === 'mouse') return;
+    if (fdWire && ev.pointerId !== fdWire.pid) { ev.preventDefault(); return; }   // a second finger can't hijack a live wire
     var port = ev.target.closest('.fd-port');
     if (port) {
       var r = $('fd-canvas').getBoundingClientRect();
@@ -443,6 +448,15 @@
     });
     return best;
   }
+  // a re-timed producer can strand an atMinute send before the card exists — re-clamp its arrows
+  function reclampArrows(taskId) {
+    var plan = currentPlan();
+    plan.handoffs.forEach(function (h) {
+      if (h.fromTaskId !== taskId || !h.trigger || h.trigger.type !== 'atMinute') return;
+      var pa = producedAt(plan, h);
+      if (h.trigger.value < pa) fdOv.handoffs[h.id] = Object.assign({}, h, { trigger: { type: 'atMinute', value: pa } });
+    });
+  }
   function fdPointerUp(ev) {
     if (fdWire) {
       if (fdWire.pid != null && ev.pointerId !== fdWire.pid) return;
@@ -463,9 +477,13 @@
     if (d.resize && d.newDur != null && d.newDur !== d.durMin) fdOv.timing[d.taskId] = { startMin: d.startMin, durMin: d.newDur };
     else if (!d.resize && d.newStart != null && d.newStart !== d.startMin) fdOv.timing[d.taskId] = { startMin: d.newStart, durMin: d.durMin };
     else return;
+    reclampArrows(d.taskId);
     paintSetup();
   }
-  function fdPointerCancel() { fdDrag = null; fdWireClear(); paintSetup(); }
+  function fdPointerCancel() {
+    if (!fdDrag && !fdWire) return;             // touch scrolls fire pointercancel constantly — only clean real gestures
+    fdDrag = null; fdWireClear(); paintSetup();
+  }
   // draw the arrow for (consumer task, card) from the task that produces the card
   function fdAutoDraw(toTaskId, cardId) {
     var plan = currentPlan(), to = byId(plan.tasks, toTaskId), from = producerOf(plan, cardId);
@@ -508,6 +526,7 @@
       '<div class="ar-row"><span class="dt-h">' + t.arChannel + '</span><select class="ar-sel" id="ar-ch">' + chOpts + '</select></div>' +
       '<div class="ar-arrive ' + (late ? 'late' : 'ok') + '">' + (arr == null ? '—' : (late ? t.arriveLate(hhmm(arr), arr - needBy) : t.arriveOk(hhmm(arr)))) + ' <span class="muted2">(' + (to ? nm(to.name) + ' ' + hhmm(needBy) : '') + ')</span></div>' +
       (h.ifLate === 'assume' ? '<div class="ar-note">' + t.arriveAssume + '</div>' : '');
+    modalOpening('arrow-modal');
     $('arrow-modal').classList.add('show');
     var cb = $('ar-close'); if (cb && !$('arrow-modal').contains(document.activeElement)) cb.focus();
   }
@@ -533,6 +552,7 @@
     fdOv.handoffs[arrowEdit] = null;
     arrowEdit = null;
     $('arrow-modal').classList.remove('show');
+    modalClosed();
     paintSetup();
   }
 
@@ -557,6 +577,11 @@
     anim = { running: false, raf: null, last: 0, w: 0, h: 0, fig: {}, guest: {}, boat: null, wakes: [], hotPts: [],
       cascade: { hops: [], has: false }, ghost: [], trail: [], strikeSeg: -1, chain: [], chainOn: false,
       motes: [], acts: null, actsAt: -1, tweens: {}, fanfared: false, skyKey: '' };
+    // dashboard readouts carry tween state on the DOM node — a fresh run must not
+    // tween from (or float a delta against) the previous run's final value
+    ['dash-eff', 'dash-ready'].forEach(function (id) {
+      var el = $(id); if (el) { el._v = null; el._shown = null; if (el.parentNode) el.parentNode.classList.remove('gold'); }
+    });
   }
   // one transform write per mover per frame, and only when it actually moved
   function setXY(el, x, y) {
@@ -642,27 +667,40 @@
     for (var gh = 0; gh < 3; gh++) { var gd = document.createElement('span'); gd.className = 'cghost'; map.appendChild(gd); anim.ghost.push(gd); }
     var oldc = map.querySelectorAll('.cstatic');
     for (var oc = 0; oc < oldc.length; oc++) oldc[oc].remove();
+    anim.chain = []; anim.chainOn = false;      // updateCascade rebuilds the RM chain from live state
   }
 
   // ---- P21: the hand-offs themselves fly the map — gold on time, hanko-red late ----
+  // Deliveries are per (role, card) and the EARLIEST arrow wins (the engine's min-over-arrows,
+  // so a superseded slow arrow never flies red over a plan the score calls clean).
   function buildMotes(s) {
     var box = $('motes'); if (box) box.innerHTML = '';
     anim.motes = [];
     if (!box || !s || s.mode !== 'minute') return;
-    var plan = s.plan;
+    var plan = s.plan, pairs = {};
     plan.handoffs.forEach(function (h) {
       var to = byId(plan.tasks, h.toTaskId), from = byId(plan.tasks, h.fromTaskId);
       if (!to || !from || to.day !== 'fishday' || from.day !== 'fishday') return;
       var send = P.resolveSendMin(plan, h), arr = P.staticArrival(plan, h);
       if (send == null || arr == null) return;
-      var A = P.station(from.station), B = P.station(to.station);
-      var late = arr > to.startMin;
+      var key = h.toRoleId + '|' + h.cardId;
+      if (!pairs[key] || arr < pairs[key].arr) pairs[key] = { arr: arr, send: send, h: h, from: from, to: to };
+    });
+    Object.keys(pairs).forEach(function (k) {
+      var b = pairs[k], A = P.station(b.from.station), B = P.station(b.to.station);
+      // late if ANY consuming task of this role needs the card before the winning arrival
+      var late = false;
+      plan.tasks.forEach(function (tk) {
+        if (tk.day === 'fishday' && tk.ownerRoleId === b.h.toRoleId && tk.assignedIds.length &&
+            (tk.neededInfo || []).indexOf(b.h.cardId) >= 0 && b.arr > tk.startMin) late = true;
+      });
       var el = document.createElement('span'); el.className = 'mote ' + (late ? 'red' : 'gold');
       box.appendChild(el);
       setXY(el, A.x * anim.w, A.y * anim.h);
-      anim.motes.push({ el: el, send: send, ax: A.x, ay: A.y, bx: B.x, by: B.y, late: late,
-        same: from.station === to.station, toSt: to.station, state: 0, t0: 0,
-        dur: 650 + Math.min(900, Math.max(0, arr - send) * 55) });
+      anim.motes.push({ el: el, role: b.h.toRoleId, card: b.h.cardId, send: b.send,
+        ax: A.x, ay: A.y, bx: B.x, by: B.y, late: late,
+        same: b.from.station === b.to.station, toSt: b.to.station, state: 0, t0: 0,
+        dur: 650 + Math.min(900, Math.max(0, b.arr - b.send) * 55) });
     });
   }
   function pingStation(stId, late) {
@@ -876,7 +914,8 @@
     el._v = target; el._t0 = 0; el._sfx = sfx;
     anim.tweens[el.id] = el;
     if (Math.abs(target - prev) >= 3) floatDelta(el.parentNode, (target > prev ? '+' : '') + (target - prev), target >= prev ? 'up' : 'down');
-    if (target === 100) { el.classList.remove('gold'); void el.offsetWidth; el.classList.add('gold'); }
+    // the gold pulse lives on the .bigreadout wrapper (the CSS carrier), reserved for exactly 100
+    if (target === 100 && el.parentNode) { var host = el.parentNode; host.classList.remove('gold'); void host.offsetWidth; host.classList.add('gold'); }
   }
   function updateTweens(ts) {
     for (var id in anim.tweens) {
@@ -1027,12 +1066,16 @@
     var bpct = Math.round(s.budget.spent / s.budget.total * 100);
     $('dash-budget-txt').textContent = '¥' + nf(s.budget.spent) + ' / ¥' + nf(s.budget.total);
     $('dash-budget-bar').style.width = bpct + '%';
-    // warnings
+    // warnings — rebuilt only when the list actually changes, so keyboard focus survives the tick
     var w = $('dash-warnings');
-    if (!s.problems.length) w.innerHTML = '<div class="warn-ok">' + t.noWarnings + '</div>';
-    else w.innerHTML = s.problems.map(function (p) {
-      return '<div class="warn sev-' + p.severity + '" data-station="' + p.station + '" tabindex="0" role="button"><span class="warn-ic">' + (p.severity === 'high' ? '⛔' : '⚠️') + '</span>' + t['p_' + p.id + '_title'] + '</div>';
-    }).join('');
+    var wsig = L + '|' + s.problems.map(function (p) { return p.id + p.severity; }).join(',');
+    if (w._sig !== wsig) {
+      w._sig = wsig;
+      if (!s.problems.length) w.innerHTML = '<div class="warn-ok">' + t.noWarnings + '</div>';
+      else w.innerHTML = s.problems.map(function (p) {
+        return '<div class="warn sev-' + p.severity + '" data-station="' + p.station + '" tabindex="0" role="button"><span class="warn-ic">' + (p.severity === 'high' ? '⛔' : '⚠️') + '</span>' + t['p_' + p.id + '_title'] + '</div>';
+      }).join('');
+    }
     // team performance (6 values)
     var team = sc.team;
     var rows = [['action', 'perf-good'], ['decision', 'perf-good'], ['coop', 'perf-good'], ['contribution', 'perf-good'], ['load', 'perf-stress'], ['fatigue', 'perf-stress']];
@@ -1053,6 +1096,19 @@
       '<span class="lg"><span class="lg-dot done">✓</span>' + t.legResolved + '</span>';
   }
   function updateRunButtons() { $('btn-pause').textContent = paused ? T().resumeBtn : T().pauseBtn; }
+
+  // ---- modal focus management: remember the invoker, restore focus on close ----
+  var lastFocus = null;
+  function modalOpening(id) {
+    if (!$(id).classList.contains('show')) {
+      var a = document.activeElement;
+      lastFocus = (a && a !== document.body) ? a : null;
+    }
+  }
+  function modalClosed() {
+    if (lastFocus && document.body.contains(lastFocus)) { try { lastFocus.focus(); } catch (e2) { } }
+    lastFocus = null;
+  }
 
   // ---- checkpoint inspector (関所, §8): inspect each member → intervene → resume ----
   function openInspector() {
@@ -1088,10 +1144,11 @@
         '<div class="ins-cards">' + held + (waits || '<span class="ins-none">' + t.inspIdleFree + '</span>') + '</div></div></div>';
     }).join('');
     var wasOpen = $('inspect-modal').classList.contains('show');
+    if (!wasOpen) modalOpening('inspect-modal');
     $('inspect-modal').classList.add('show');
     if (!wasOpen) $('insp-resume').focus();
   }
-  function closeInspector() { $('inspect-modal').classList.remove('show'); if (sim && sim.paused) P.resume(sim); }
+  function closeInspector() { $('inspect-modal').classList.remove('show'); if (sim && sim.paused) P.resume(sim); modalClosed(); }
 
   // ---- problem detail panel ----
   function openProblemPanel(stationId) {
@@ -1110,10 +1167,11 @@
         '<div class="dt-sec"><div class="dt-h">' + t.pnFix + '</div><p>' + t['p_' + p.id + '_fix'] + '</p></div>';
     }
     var wasOpen = $('detail-modal').classList.contains('show');
+    if (!wasOpen) modalOpening('detail-modal');
     $('detail-modal').classList.add('show');
     if (!wasOpen) $('detail-close').focus();
   }
-  function closeDetail() { $('detail-modal').classList.remove('show'); }
+  function closeDetail() { $('detail-modal').classList.remove('show'); modalClosed(); }
 
   // =========================================================================
   // REPORT
@@ -1226,9 +1284,9 @@
       if (m === 'live' && $('run').classList.contains('hidden')) enterMode('live');
       else if (m === 'morning' && $('setup').classList.contains('hidden')) enterMode('morning');
     });
-    $('rules-open').addEventListener('click', function () { $('rules-modal').classList.add('show'); });
-    $('rules-close').addEventListener('click', function () { $('rules-modal').classList.remove('show'); });
-    $('rules-modal').addEventListener('click', function (e) { if (e.target === $('rules-modal')) $('rules-modal').classList.remove('show'); });
+    $('rules-open').addEventListener('click', function () { modalOpening('rules-modal'); $('rules-modal').classList.add('show'); $('rules-close').focus(); });
+    $('rules-close').addEventListener('click', function () { $('rules-modal').classList.remove('show'); modalClosed(); });
+    $('rules-modal').addEventListener('click', function (e) { if (e.target === $('rules-modal')) { $('rules-modal').classList.remove('show'); modalClosed(); } });
 
     $('day-select').addEventListener('click', function (e) { var b = e.target.closest('.day-btn'); if (b) { daySel = b.dataset.day; paintSetup(); } });
     $('editors').addEventListener('change', function (e) {
@@ -1282,8 +1340,8 @@
     $('fd-arrowlist').addEventListener('click', function (e) { var c = e.target.closest('.fd-ar-chip'); if (c) openArrowPanel(c.dataset.h); });
     $('ar-body') && $('arrow-modal').addEventListener('change', function (e) { if (e.target.closest('.ar-sel') || e.target.closest('.ar-time')) arrowPatch(); });
     $('ar-delete').addEventListener('click', arrowErase);
-    $('ar-close').addEventListener('click', function () { arrowEdit = null; $('arrow-modal').classList.remove('show'); });
-    $('arrow-modal').addEventListener('click', function (e) { if (e.target === $('arrow-modal')) { arrowEdit = null; $('arrow-modal').classList.remove('show'); } });
+    $('ar-close').addEventListener('click', function () { arrowEdit = null; $('arrow-modal').classList.remove('show'); modalClosed(); });
+    $('arrow-modal').addEventListener('click', function (e) { if (e.target === $('arrow-modal')) { arrowEdit = null; $('arrow-modal').classList.remove('show'); modalClosed(); } });
 
     // checkpoint inspector (§8)
     $('insp-body').addEventListener('click', function (e) {
@@ -1313,13 +1371,30 @@
 
     document.querySelectorAll('.spd').forEach(function (b) { b.addEventListener('click', function () { speedMult = parseFloat(b.dataset.spd); document.querySelectorAll('.spd').forEach(function (x) { x.classList.toggle('on', x === b); }); restartTimer(); }); });
 
-    // ---- keyboard access: Escape closes the top modal; Enter/Space activates map + editor targets ----
+    // ---- keyboard access: Escape closes the TOP modal (visual stacking = DOM order,
+    // rules on top); Tab is trapped inside an open dialog; Enter/Space activates targets ----
+    function topModal() {
+      var order = ['rules-modal', 'inspect-modal', 'arrow-modal', 'detail-modal'];
+      for (var i = 0; i < order.length; i++) if ($(order[i]).classList.contains('show')) return order[i];
+      return null;
+    }
     document.addEventListener('keydown', function (e) {
+      var top = topModal();
       if (e.key === 'Escape') {
-        if ($('arrow-modal').classList.contains('show')) { arrowEdit = null; $('arrow-modal').classList.remove('show'); }
-        else if ($('inspect-modal').classList.contains('show')) closeInspector();
-        else if ($('detail-modal').classList.contains('show')) closeDetail();
-        else if ($('rules-modal').classList.contains('show')) $('rules-modal').classList.remove('show');
+        if (top === 'rules-modal') $('rules-modal').classList.remove('show');
+        else if (top === 'inspect-modal') closeInspector();
+        else if (top === 'arrow-modal') { arrowEdit = null; $('arrow-modal').classList.remove('show'); modalClosed(); }
+        else if (top === 'detail-modal') closeDetail();
+        return;
+      }
+      if (e.key === 'Tab' && top) {              // aria-modal promises the background is inert — keep focus inside
+        var sheet = $(top).querySelector('.sheet');
+        var focusables = sheet.querySelectorAll('button, select, input, [tabindex], summary');
+        if (!focusables.length) return;
+        var first = focusables[0], last = focusables[focusables.length - 1], act = document.activeElement;
+        if (!sheet.contains(act)) { e.preventDefault(); first.focus(); }
+        else if (e.shiftKey && act === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && act === last) { e.preventDefault(); first.focus(); }
         return;
       }
       var el = e.target;
@@ -1328,7 +1403,7 @@
         if (el.classList.contains('station')) { e.preventDefault(); openProblemPanel(el.id.replace('st-', '')); }
         else if (el.classList.contains('warn') && el.dataset.station) { e.preventDefault(); openProblemPanel(el.dataset.station); }
         else if (el.classList.contains('fd-socket')) { e.preventDefault(); fdSocketTap(el); }
-        else if (el.classList.contains('fd-port')) { e.preventDefault(); }
+        else if (el.classList.contains('fd-block')) { e.preventDefault(); }   // Space must not scroll the editor away
         return;
       }
       // fishday blocks: ←/→ nudge ±5 min · Shift+←/→ resize ±5 min
@@ -1338,6 +1413,7 @@
         var d = e.key === 'ArrowLeft' ? -5 : 5;
         if (e.shiftKey) fdOv.timing[tk.id] = { startMin: tk.startMin, durMin: clamp(tk.durMin + d, 5, FD_T1 - tk.startMin) };
         else fdOv.timing[tk.id] = { startMin: clamp(tk.startMin + d, FD_T0, FD_T1 - tk.durMin), durMin: tk.durMin };
+        reclampArrows(tk.id);
         paintSetup();
         var nb = document.querySelector('.fd-block[data-task="' + tk.id + '"]'); if (nb) nb.focus();
       }
@@ -1357,8 +1433,12 @@
         for (k2 in anim.guest) { var g2 = anim.guest[k2]; g2.cx *= sx; g2.cy *= sy; }
         if (anim.boat) { anim.boat.cx *= sx; anim.boat.cy *= sy; }
         anim.trail.length = 0;
+        // px-anchored reduced-motion chain markers rebuild at the new scale next frame
+        if (anim.chainOn) { anim.chain.forEach(function (n) { n.remove(); }); anim.chain = []; anim.chainOn = false; }
         rebuildPaths();
         if (sim) renderSim(sim);
+        // renderSim repaints from engine state — a live freeze must keep its taxonomy + tint
+        if (appMode === 'live' && livePausedForFix && liveState && liveState.currentGap) paintGapFocus(liveState.currentGap);
       }, 130);
     });
   }
@@ -1371,7 +1451,7 @@
   // =========================================================================
   var LIVE_CH = ['board', 'chat', 'radio', 'faceToFace'];
   function ldPanel(id) { ['ld-brief', 'ld-prompt', 'ld-spot', 'ld-result'].forEach(function (p) { var e = $(p); if (e) e.classList.toggle('on', p === id); }); }
-  function closeModals() { ['detail-modal', 'inspect-modal', 'arrow-modal', 'rules-modal'].forEach(function (m) { var e = $(m); if (e) e.classList.remove('show'); }); }
+  function closeModals() { ['detail-modal', 'inspect-modal', 'arrow-modal', 'rules-modal'].forEach(function (m) { var e = $(m); if (e) e.classList.remove('show'); }); lastFocus = null; }
   function clearStationTints() { P.STATIONS.forEach(function (s) { var n = $('st-' + s.id); if (n) n.classList.remove('terr-green', 'terr-amber', 'terr-red'); }); }
   function chIcon(ch) { return { board: '📋', chat: '💬', radio: '📻', phone: '📞', faceToFace: '🤝' }[ch] || '•'; }
   function personName(task) { var pid = task.assignedIds[0], p = pid && byId(currentPlan().participants, pid); return p ? nm(p.name) : nm(P.role(task.ownerRoleId).name); }
@@ -1400,7 +1480,7 @@
       $('setup').classList.add('hidden'); startLive();
     } else {
       document.body.classList.remove('running'); sim = null; paused = false; livePausedForFix = false;
-      restoreMorning();
+      if (was === 'live') restoreMorning();     // only a Live detour wiped the plan — same-mode re-entry keeps it
       $('run').classList.add('hidden'); $('live-dock').classList.add('hidden'); $('setup').classList.remove('hidden');
       paintSetup();
     }
@@ -1471,10 +1551,10 @@
   function openGap(gap) {
     liveState.currentGap = gap; liveState.phase = 'prompt';
     paintGapFocus(gap);
-    renderLivePanel();
+    renderLivePanel(true);
   }
 
-  function renderLivePanel() {
+  function renderLivePanel(focusPrompt) {
     var t = T();
     if (liveState.phase === 'brief') {
       $('ld-brief').innerHTML = '<div class="ld-txt"><h3>' + t.ldBriefT + '</h3><p>' + t.ldBriefP + '</p></div><div class="ld-chip">' + t.liveChip(liveState.fixes) + '</div>';
@@ -1487,6 +1567,7 @@
       $('ld-prompt').innerHTML = '<div class="ld-txt"><h3>' + head(personName(to)) + '</h3><p>' + body(nm(to.name)) + '</p></div><button class="btn primary glow" id="ld-fix">' + t.ldFixBtn + '</button>';
       $('ld-fix').addEventListener('click', function () { liveState.phase = 'spot'; renderLivePanel(); });
       ldPanel('ld-prompt');
+      if (focusPrompt) $('ld-fix').focus();    // the game paused FOR the player — hand them the control
     } else if (liveState.phase === 'spot') { renderSpot(); }
     else if (liveState.phase === 'result') { renderResult(); }
   }
@@ -1582,6 +1663,16 @@
     var guard = 0; while ((sim.clockMin || 0) < now && !sim.finished && guard++ < 400) { if (sim.paused) { sim.paused = false; sim.checkpoint = null; } P.tick(sim); }
     anim.cascade = P.cascadeTrace(sim.plan); anim.cascade.has = anim.cascade.hasFault;
     buildMotes(sim);                              // re-plan the flying hand-offs against the patched schedule
+    // deliveries that already flew before the freeze must not re-fly — but the one the
+    // player just committed SHOULD, as visible feedback for the fix
+    for (var mi = 0; mi < anim.motes.length; mi++) {
+      var m = anim.motes[mi];
+      if (m.send <= now) m.state = 2;
+      if (m.role === to.ownerRoleId && m.card === g.cardId) {
+        if (m.same || RM.matches) { m.state = 2; pingStation(m.toSt, m.late); }
+        else { m.state = 1; m.t0 = 0; m.el.classList.add('on'); }
+      }
+    }
     clearStationTints(); clearGapFocus(); renderSim(sim);
     livePausedForFix = false; liveState.phase = 'brief'; liveState.currentGap = null; renderLivePanel();
   }
@@ -1604,7 +1695,7 @@
     } else {
       var fd = r.fd, g = (fd.missing[0] || fd.late[0]), gapText, pl = currentPlan();
       if (g) gapText = '“' + nm(byId(pl.infoCards, g.cardId).name).split('：')[0].split(':')[0] + '” → “' + nm(byId(pl.tasks, g.taskId).name) + '”';
-      else gapText = (L === 'ja' ? '遅い受け渡し' : 'a late hand-off');
+      else gapText = t.resGapLate;
       el.className = 'ld-panel result miss';
       el.innerHTML = '<div class="ld-txt"><h3>' + t.resFailT + '</h3><p>' + t.resFailP(hhmm(fd.dinnerMin || 1110), gapText) + '</p></div>' +
         '<div class="ld-actions"><button class="btn primary" id="ld-rerun">' + t.ldRerun + '</button><button class="btn ghost" id="ld-report">' + t.ldReport + '</button></div>';
