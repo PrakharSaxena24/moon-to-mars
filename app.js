@@ -38,9 +38,14 @@
   var fdOv = { timing: {}, handoffs: {} };
   function fdReset() { fdOv = { timing: {}, handoffs: {} }; }
   // fixHandoffs must win over stale hand-edits/erasures of the canonical arrows,
-  // or the fix-pack button would appear to do nothing (the hand-edit re-breaks it)
+  // or the fix-pack button would appear to do nothing (the hand-edit re-breaks it).
+  // Block re-timings on the arrows' endpoint tasks re-break it the same way, so they go too.
   function fdClearFixConflicts() {
-    P.canonHandoffs().forEach(function (h) { if (fdOv.handoffs.hasOwnProperty(h.id)) delete fdOv.handoffs[h.id]; });
+    P.canonHandoffs().forEach(function (h) {
+      if (fdOv.handoffs.hasOwnProperty(h.id)) delete fdOv.handoffs[h.id];
+      if (fdOv.timing.hasOwnProperty(h.fromTaskId)) delete fdOv.timing[h.fromTaskId];
+      if (fdOv.timing.hasOwnProperty(h.toTaskId)) delete fdOv.timing[h.toTaskId];
+    });
   }
   function buildCfg() {
     var cfg = { seed: 1, overrides: {} }, k;
@@ -62,7 +67,12 @@
 
   var sim = null, timer = null, paused = false, BASE_TICK = 520, speedMult = 1, lastResult = null;
   var appMode = 'live', runFn = null, livePausedForFix = false, liveState = null;
+  var finishTimer = null;                  // finish()'s 700ms report reveal — cleared on any screen change
+  var morningSnap = null;                  // the Morning-authored plan, preserved across a Live detour
+  var lastDetailStation = null;            // so a language switch can re-render an open problem panel
+  var RM = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : { matches: false };
   function tickMs() { return Math.round(BASE_TICK / speedMult); }
+  function clearFinishTimer() { if (finishTimer) { clearTimeout(finishTimer); finishTimer = null; } }
 
   var BUB = { confused: '❓', meeting: '💬', waiting: '⏳', tired: '😣', onFire: '🔥', resolved: '✅', working: '', idle: '', waitInfo: '⏳', rework: '🔁' };
   var STATE_KEY = { working: 'stWorking', confused: 'stConfused', meeting: 'stMeeting', waiting: 'stWaiting', tired: 'stTired', onFire: 'stOnFire', resolved: 'stResolved', idle: 'stIdle', waitInfo: 'stWaitInfo', rework: 'stRework' };
@@ -75,9 +85,17 @@
     document.querySelectorAll('[data-i18n]').forEach(function (el) { var v = T()[el.getAttribute('data-i18n')]; if (typeof v === 'string') el.textContent = v; });
     $('lang-en').classList.toggle('on', L === 'en'); $('lang-ja').classList.toggle('on', L === 'ja');
     paintSetup(); buildRules(); buildLegend();
-    if (!$('run').classList.contains('hidden') && sim && anim) { $('figs').innerHTML = ''; buildSitemap(); renderSim(sim); }
-    if (appMode === 'live' && liveState && !$('run').classList.contains('hidden')) renderLivePanel();
+    // mid-run: rebuild station labels but keep every walker where it stands (no teleport)
+    if (!$('run').classList.contains('hidden') && sim && anim) { buildSitemap(true); renderSim(sim); }
+    if (appMode === 'live' && liveState && !$('run').classList.contains('hidden')) {
+      renderLivePanel();
+      if (livePausedForFix && liveState.currentGap) paintGapFocus(liveState.currentGap);   // keep the freeze visuals
+    }
     if (!$('report').classList.contains('hidden') && lastResult) renderReport(lastResult);
+    // open modals re-render in the new language (their content is built, not data-i18n)
+    if ($('inspect-modal').classList.contains('show')) openInspector();
+    if ($('arrow-modal').classList.contains('show') && arrowEdit) openArrowPanel(arrowEdit);
+    if ($('detail-modal').classList.contains('show') && lastDetailStation) openProblemPanel(lastDetailStation);
   }
 
   // =========================================================================
@@ -101,7 +119,7 @@
     $('c-name').textContent = nm(pr.name);
     var g = $('canvas-grid');
     g.innerHTML =
-      cell('🎯', t.cvSuccess ? '' : '', nm(pr.goal), true) +
+      cell('🎯', t.cvGoal, nm(pr.goal), true) +
       cell('📅', t.cvDays, pr.days + ' ' + t.cvDaysUnit) +
       cell('📍', t.cvLocation, nm(pr.location)) +
       cell('👥', t.cvHeadcount, pr.headcount + ' (' + t.cvHeadcountNote(pr.staff, pr.guests, pr.chefs) + ')') +
@@ -171,7 +189,7 @@
         '<div class="mc-env-top"><b>' + nm(ln.name) + '</b><span>¥' + nf(ln.cap) + '</span></div>' +
         '<label>' + t.mcApprover + '<select class="mc-sel" data-mc="line" data-line="' + ln.id + '" data-field="approverRoleId">' + roleOpts(ln.approverRoleId || '', true) + '</select></label>' +
         '<label>' + t.mcPayMethod + '<select class="mc-sel" data-mc="line" data-line="' + ln.id + '" data-field="payMethod">' + payOpts(ln.payMethod || 'cash') + '</select></label>' +
-        '<div class="mc-note">' + t.mcReceipt + ': ' + ln.receiptRule + '</div></div>';
+        '<div class="mc-note">' + t.mcReceipt + ': ' + (t['receipt_' + ln.receiptRule] || ln.receiptRule) + '</div></div>';
     }).join('');
     var resources = br.resources.map(function (r) {
       var pct = Math.max(0, Math.min(100, Math.round(r.planned / Math.max(1, r.target) * 100)));
@@ -218,7 +236,7 @@
       var chip = $('chip-' + d), cause = $('cause-' + d), card = $('ed-' + d);
       var sel = document.querySelector('.ed-sel[data-fix="' + DET_FIX[d] + '"]');
       if (sel) sel.value = fixed[DET_FIX[d]] ? 'on' : 'off';
-      if (chip) { chip.textContent = isOpen ? ('⛔ ' + t.fixGapLbl) : '✓'; chip.className = 'ed-chip ' + (isOpen ? 'bad' : 'ok'); }
+      if (chip) { chip.textContent = isOpen ? ('⛔ ' + t.gapChip) : '✓'; chip.className = 'ed-chip ' + (isOpen ? 'bad' : 'ok'); }
       if (cause) cause.style.display = isOpen ? 'block' : 'none';
       if (card) card.classList.toggle('closed', !isOpen);
       if (isOpen) gaps++;
@@ -276,16 +294,19 @@
         if (cardOwnerOf(plan, cid) === tk.ownerRoleId) return;
         var arr = P.infoArrival(plan, cid, tk.ownerRoleId);
         var cls = arr == null ? 'miss' : (arr <= tk.startMin ? 'ok' : 'late');
-        sock += '<span class="fd-socket ' + cls + '" data-task="' + tk.id + '" data-card="' + cid + '" style="top:' + (si * 11 + 1) + 'px" title="● ' + nm(byId(plan.infoCards, cid).name) + '"></span>';
+        sock += '<span class="fd-socket ' + cls + '" tabindex="0" data-task="' + tk.id + '" data-card="' + cid + '" style="top:' + (si * 11 + 1) + 'px" title="● ' + nm(byId(plan.infoCards, cid).name) + '"></span>';
       });
       var port = (tk.produces || []).length ? '<span class="fd-port" data-task="' + tk.id + '" data-card="' + tk.produces[0] + '" title="○ ' + nm(byId(plan.infoCards, tk.produces[0]).name) + '"></span>' : '';
       var multi = tk.assignedIds.length > 1 ? '<i class="fd-x">×' + tk.assignedIds.length + '</i>' : '';
-      html += '<div class="fd-block' + (g.w < 60 ? ' sm' : '') + (e && e.wrongFish ? ' wf' : '') + '" data-task="' + tk.id + '" style="left:' + g.x + 'px;top:' + g.y + 'px;width:' + g.w + 'px" title="' + nm(tk.name) + '  ' + hhmm(tk.startMin) + '–' + hhmm(tk.startMin + tk.durMin) + '">' +
+      html += '<div class="fd-block' + (g.w < 60 ? ' sm' : '') + (e && e.wrongFish ? ' wf' : '') + '" tabindex="0" data-task="' + tk.id + '" style="left:' + g.x + 'px;top:' + g.y + 'px;width:' + g.w + 'px" title="' + nm(tk.name) + '  ' + hhmm(tk.startMin) + '–' + hhmm(tk.startMin + tk.durMin) + '">' +
         sock + '<span class="fd-bname">' + P.station(tk.station).icon + (g.w >= 60 ? ' ' + nm(tk.name) : '') + '</span>' + multi + port + '<span class="fd-rsz"></span></div>';
     });
     var box = $('fd-canvas');
     box.style.width = W + 'px'; box.style.height = H + 'px';
     box.innerHTML = html + '<svg class="fd-arrows" id="fd-arrows" width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '"></svg>';
+    // keep the lane labels pinned if the timeline is already panned
+    var sc2 = $('fd-scroll');
+    if (sc2 && sc2.scrollLeft) box.querySelectorAll('.fd-lbl').forEach(function (lb) { lb.style.transform = 'translateX(' + sc2.scrollLeft + 'px)'; });
     drawFdArrows(plan);
     buildFdArrowList(plan);
     buildFdReady(plan, fd);
@@ -347,27 +368,51 @@
   }
 
   // ---- block drag / resize / arrow wire (Pointer Events) ----
+  // the best arrow currently feeding (task, card) for its owner — null if none drawn
+  function feedArrow(plan, toTaskId, cardId) {
+    var to = byId(plan.tasks, toTaskId), best = null, bestArr = Infinity;
+    if (!to) return null;
+    plan.handoffs.forEach(function (h) {
+      if (h.cardId !== cardId || h.toRoleId !== to.ownerRoleId) return;
+      var a = P.staticArrival(plan, h);
+      if (a != null && a < bestArr) { bestArr = a; best = h; }
+    });
+    return best;
+  }
+  function fdSocketTap(sock) {
+    var plan = currentPlan();
+    if (sock.classList.contains('miss')) { fdAutoDraw(sock.dataset.task, sock.dataset.card); return; }
+    var ex = feedArrow(plan, sock.dataset.task, sock.dataset.card);   // late/ok: edit what feeds it
+    if (ex) openArrowPanel(ex.id);
+  }
   function fdPointerDown(ev) {
+    if (ev.button != null && ev.button !== 0 && ev.pointerType === 'mouse') return;
     var port = ev.target.closest('.fd-port');
     if (port) {
-      var svg = $('fd-arrows'), r = $('fd-canvas').getBoundingClientRect();
-      fdWire = { fromTask: port.dataset.task, cardId: port.dataset.card, ox: r.left, oy: r.top, x0: ev.clientX - r.left, y0: ev.clientY - r.top };
+      var r = $('fd-canvas').getBoundingClientRect();
+      fdWire = { fromTask: port.dataset.task, cardId: port.dataset.card, pid: ev.pointerId, ox: r.left, oy: r.top, x0: ev.clientX - r.left, y0: ev.clientY - r.top };
+      port.setPointerCapture && port.setPointerCapture(ev.pointerId);
       ev.preventDefault(); return;
     }
     var sock = ev.target.closest('.fd-socket');
-    if (sock) {
-      if (sock.classList.contains('miss')) fdAutoDraw(sock.dataset.task, sock.dataset.card);
-      ev.preventDefault(); return;
-    }
+    if (sock) { fdSocketTap(sock); ev.preventDefault(); return; }
+    if (fdWire) return;                                   // a wire is live — don't start a drag underneath it
     var blk = ev.target.closest('.fd-block'); if (!blk) return;
     var plan = currentPlan(), tk = byId(plan.tasks, blk.dataset.task); if (!tk) return;
     var resize = !!ev.target.closest('.fd-rsz');
-    fdDrag = { taskId: tk.id, el: blk, resize: resize, x0: ev.clientX, startMin: tk.startMin, durMin: tk.durMin };
+    fdDrag = { taskId: tk.id, el: blk, pid: ev.pointerId, resize: resize, x0: ev.clientX, startMin: tk.startMin, durMin: tk.durMin };
     blk.setPointerCapture && blk.setPointerCapture(ev.pointerId);
     ev.preventDefault();
   }
+  function fdWireClear() {
+    var svg = $('fd-arrows'), old = svg && svg.querySelector('.wire');
+    if (old) old.remove();
+    fdWire = null;
+  }
   function fdPointerMove(ev) {
     if (fdWire) {
+      if (fdWire.pid != null && ev.pointerId !== fdWire.pid) return;
+      if (ev.pointerType === 'mouse' && ev.buttons === 0) { fdWireClear(); return; }   // button released off-window
       var x = ev.clientX - fdWire.ox, y = ev.clientY - fdWire.oy, svg = $('fd-arrows');
       var old = svg.querySelector('.wire'); if (old) old.remove();
       var p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
@@ -375,6 +420,8 @@
       svg.appendChild(p); return;
     }
     if (!fdDrag) return;
+    if (fdDrag.pid != null && ev.pointerId !== fdDrag.pid) return;
+    if (ev.pointerType === 'mouse' && ev.buttons === 0) { fdDrag = null; paintSetup(); return; }  // self-heal a stuck drag
     var dMin = Math.round((ev.clientX - fdDrag.x0) / PXM / 5) * 5;
     if (fdDrag.resize) {
       var nd = clamp(fdDrag.durMin + dMin, 5, FD_T1 - fdDrag.startMin);
@@ -384,20 +431,41 @@
       fdDrag.el.style.left = fdX(ns) + 'px'; fdDrag.newStart = ns;
     }
   }
+  // wire drop test with touch slop: exact hit first, then any matching socket within 14px
+  function fdDropSocket(ev) {
+    var el = document.elementFromPoint(ev.clientX, ev.clientY);
+    var sock = el && el.closest ? el.closest('.fd-socket') : null;
+    if (sock && sock.dataset.card === fdWire.cardId) return sock;
+    var best = null, bestD = 15 * 15;
+    document.querySelectorAll('.fd-socket[data-card="' + fdWire.cardId + '"]').forEach(function (s) {
+      var r = s.getBoundingClientRect(), dx = ev.clientX - (r.left + r.width / 2), dy = ev.clientY - (r.top + r.height / 2);
+      var d = dx * dx + dy * dy; if (d < bestD) { bestD = d; best = s; }
+    });
+    return best;
+  }
   function fdPointerUp(ev) {
     if (fdWire) {
-      var el = document.elementFromPoint(ev.clientX, ev.clientY);
-      var sock = el && el.closest ? el.closest('.fd-socket') : null;
-      if (sock && sock.dataset.card === fdWire.cardId) fdAutoDraw(sock.dataset.task, sock.dataset.card);
-      fdWire = null; buildFishday(); updatePlanUI(); return;
+      if (fdWire.pid != null && ev.pointerId !== fdWire.pid) return;
+      var sock = fdDropSocket(ev);
+      fdDrag = null; fdWireClear();
+      if (sock) {
+        var ex = !sock.classList.contains('miss') && feedArrow(currentPlan(), sock.dataset.task, sock.dataset.card);
+        var to2 = byId(currentPlan().tasks, sock.dataset.task);
+        var onTime = ex && to2 && P.staticArrival(currentPlan(), ex) <= to2.startMin;
+        if (onTime) openArrowPanel(ex.id);                          // already fed on time — edit, don't duplicate
+        else fdAutoDraw(sock.dataset.task, sock.dataset.card);      // missing or late — draw (a faster duplicate is a legit fix)
+      }
+      buildFishday(); updatePlanUI(); return;
     }
     if (!fdDrag) return;
+    if (fdDrag.pid != null && ev.pointerId !== fdDrag.pid) return;
     var d = fdDrag; fdDrag = null;
     if (d.resize && d.newDur != null && d.newDur !== d.durMin) fdOv.timing[d.taskId] = { startMin: d.startMin, durMin: d.newDur };
     else if (!d.resize && d.newStart != null && d.newStart !== d.startMin) fdOv.timing[d.taskId] = { startMin: d.newStart, durMin: d.durMin };
     else return;
     paintSetup();
   }
+  function fdPointerCancel() { fdDrag = null; fdWireClear(); paintSetup(); }
   // draw the arrow for (consumer task, card) from the task that produces the card
   function fdAutoDraw(toTaskId, cardId) {
     var plan = currentPlan(), to = byId(plan.tasks, toTaskId), from = producerOf(plan, cardId);
@@ -415,6 +483,11 @@
 
   // ---- arrow edit panel ----
   var CH_LIST = ['faceToFace', 'radio', 'phone', 'chat', 'board'];
+  // the earliest minute a card can physically leave: its producing task's finish
+  function producedAt(plan, h) {
+    var from = byId(plan.tasks, h.fromTaskId);
+    return from && from.day === 'fishday' ? from.startMin + from.durMin : FD_T0;
+  }
   function openArrowPanel(hid) {
     var plan = currentPlan(), h = byId(plan.handoffs, hid); if (!h) return;
     arrowEdit = hid;
@@ -422,20 +495,21 @@
     $('ar-title').textContent = nm(card ? card.name : h.cardId);
     $('ar-sub').textContent = t.arFrom + ' ' + (from ? nm(from.name) : h.fromRoleId) + ' → ' + t.arTo + ' ' + (to ? nm(to.name) : h.toRoleId);
     var trigDone = h.trigger.type === 'onTaskDone';
-    var sendMin = P.resolveSendMin(plan, h);
+    var sendMin = P.resolveSendMin(plan, h), minSend = producedAt(plan, h);
     var chOpts = CH_LIST.map(function (c) {
-      return '<option value="' + c + '"' + (h.channel === c ? ' selected' : '') + '>' + t['ch' + c.charAt(0).toUpperCase() + c.slice(1)] + ' (+' + P.CHANNELS[c] + (L === 'ja' ? '分' : ' min') + ')</option>';
+      return '<option value="' + c + '"' + (h.channel === c ? ' selected' : '') + '>' + t['ch' + c.charAt(0).toUpperCase() + c.slice(1)] + ' (+' + P.CHANNELS[c] + t.chMin + ')</option>';
     }).join('');
     var arr = P.staticArrival(plan, h), needBy = to ? to.startMin : 0, late = arr == null || arr > needBy;
     $('ar-body').innerHTML =
       '<div class="ar-row"><span class="dt-h">' + t.arTrigger + '</span>' +
         '<select class="ar-sel" id="ar-trig"><option value="onTaskDone"' + (trigDone ? ' selected' : '') + '>' + t.arTrigDone + (from ? ' — ' + nm(from.name) : '') + '</option>' +
         '<option value="atMinute"' + (!trigDone ? ' selected' : '') + '>' + t.arTrigAt + '</option></select>' +
-        '<input class="ar-time" id="ar-time" type="time" step="300" value="' + hhmm(sendMin == null ? needBy : sendMin) + '"' + (trigDone ? ' disabled' : '') + '></div>' +
+        '<input class="ar-time" id="ar-time" type="time" step="300" min="' + hhmm(minSend) + '" value="' + hhmm(sendMin == null ? needBy : Math.max(sendMin, minSend)) + '"' + (trigDone ? ' disabled' : '') + '></div>' +
       '<div class="ar-row"><span class="dt-h">' + t.arChannel + '</span><select class="ar-sel" id="ar-ch">' + chOpts + '</select></div>' +
       '<div class="ar-arrive ' + (late ? 'late' : 'ok') + '">' + (arr == null ? '—' : (late ? t.arriveLate(hhmm(arr), arr - needBy) : t.arriveOk(hhmm(arr)))) + ' <span class="muted2">(' + (to ? nm(to.name) + ' ' + hhmm(needBy) : '') + ')</span></div>' +
       (h.ifLate === 'assume' ? '<div class="ar-note">' + t.arriveAssume + '</div>' : '');
     $('arrow-modal').classList.add('show');
+    var cb = $('ar-close'); if (cb && !$('arrow-modal').contains(document.activeElement)) cb.focus();
   }
   function arrowPatch() {
     if (!arrowEdit) return;
@@ -443,9 +517,14 @@
     var trig = $('ar-trig').value, ch = $('ar-ch').value, tv = $('ar-time').value;
     var patch = { channel: ch };
     if (trig === 'onTaskDone') patch.trigger = { type: 'onTaskDone', taskId: h.fromTaskId };
-    else { var mm = tv ? (parseInt(tv.slice(0, 2), 10) * 60 + parseInt(tv.slice(3, 5), 10)) : h.trigger.value || 0; patch.trigger = { type: 'atMinute', value: mm }; }
-    var prev = fdOv.handoffs[arrowEdit];
-    fdOv.handoffs[arrowEdit] = prev && prev !== null ? Object.assign({}, prev, patch) : patch;
+    else {
+      var mm = tv ? (parseInt(tv.slice(0, 2), 10) * 60 + parseInt(tv.slice(3, 5), 10)) : h.trigger.value || 0;
+      mm = Math.max(mm, producedAt(plan, h));           // a card can't be sent before it exists
+      patch.trigger = { type: 'atMinute', value: mm };
+    }
+    // always store the FULL merged arrow: fix-provided arrows have no template entry, and a
+    // partial patch would reach mergePlan's push-as-new branch as a malformed handoff
+    fdOv.handoffs[arrowEdit] = Object.assign({}, h, patch);
     paintSetup();
     openArrowPanel(arrowEdit);
   }
@@ -467,23 +546,26 @@
   // boat is); the renderer only interpolates the journey so people WALK instead of
   // teleporting, and the map breathes with 13 hosted guests + sea life. Nothing here
   // feeds back into the sim — it is pure presentation over deterministic state.
-  var DOCK = { x: 0.155, y: 0.52 }, SEA = { x: 0.05, y: 0.93 };  // boat path: port → open sea
+  // Every mover is positioned via transform:translate3d (composited); never left/top.
+  var DOCK = { x: 0.155, y: 0.52 }, SEA = { x: 0.05, y: 0.93 }, BOATC = { x: 0.01, y: 0.66 }; // quadratic arc through the bay
   var GULLS = 3, FISH = 3, HUSH_R2 = 0.032;                       // hush radius² around a stalled holder
   var STALL_STATES = { confused: 1, meeting: 1, waiting: 1, tired: 1, onFire: 1, waitInfo: 1, rework: 1 };
+  var YUKATA = ['#3d5a6c', '#7c4a5a', '#5b6b45', '#a3823c'];      // guest coat palette (washi-friendly)
   var anim = null;
   function mapDims() { var m = $('sitemap'); return { w: m.clientWidth || 900, h: m.clientHeight || 480 }; }
-  function animReset() { anim = { running: false, raf: null, last: 0, w: 0, h: 0, fig: {}, guest: {}, boat: null, hotPts: [], cascade: { hops: [], has: false }, fanfared: false }; }
-
-  function buildSitemap() {
-    var box = $('stations'); box.innerHTML = '';
-    P.STATIONS.forEach(function (s) {
-      var d = document.createElement('div'); d.className = 'station'; d.id = 'st-' + s.id;
-      d.style.left = (s.x * 100) + '%'; d.style.top = (s.y * 100) + '%';
-      d.innerHTML = '<div class="st-badge" id="badge-' + s.id + '"></div><div class="st-halo"></div><div class="st-ic">' + s.icon + '</div><div class="st-nm">' + nm(s.name) + '</div><div class="st-ring" id="ring-' + s.id + '"></div>';
-      box.appendChild(d);
-    });
-    // paths between stations (computed from the map's pixel size)
-    var map = $('sitemap'), W = map.clientWidth, H = map.clientHeight, paths = $('paths'); paths.innerHTML = '';
+  function animReset() {
+    anim = { running: false, raf: null, last: 0, w: 0, h: 0, fig: {}, guest: {}, boat: null, wakes: [], hotPts: [],
+      cascade: { hops: [], has: false }, ghost: [], trail: [], strikeSeg: -1, chain: [], chainOn: false,
+      motes: [], acts: null, actsAt: -1, tweens: {}, fanfared: false, skyKey: '' };
+  }
+  // one transform write per mover per frame, and only when it actually moved
+  function setXY(el, x, y) {
+    if (el._x === undefined || Math.abs(el._x - x) > 0.02 || Math.abs(el._y - y) > 0.02) {
+      el._x = x; el._y = y; el.style.transform = 'translate3d(' + x + 'px,' + y + 'px,0)';
+    }
+  }
+  function rebuildPaths() {
+    var W = anim.w, H = anim.h, paths = $('paths'); paths.innerHTML = '';
     ADJ.forEach(function (e) {
       var a = P.station(e[0]), b = P.station(e[1]);
       var ax = a.x * W, ay = a.y * H, bx = b.x * W, by = b.y * H;
@@ -491,34 +573,136 @@
       var p = document.createElement('div'); p.className = 'path'; p.style.left = ax + 'px'; p.style.top = ay + 'px'; p.style.width = len + 'px'; p.style.transform = 'rotate(' + ang + 'deg)';
       paths.appendChild(p);
     });
-    // sea + micro-life layer (water shelf, drifting gulls, jumping fish) — pure ambience
+  }
+
+  // keepActors=true (language switch / resize) reuses the ambient cast so nobody teleports
+  function buildSitemap(keepActors) {
+    var box = $('stations'); box.innerHTML = '';
+    P.STATIONS.forEach(function (s) {
+      var d = document.createElement('div'); d.className = 'station'; d.id = 'st-' + s.id;
+      d.setAttribute('data-st', s.id); d.setAttribute('tabindex', '0'); d.setAttribute('role', 'button');
+      d.style.left = (s.x * 100) + '%'; d.style.top = (s.y * 100) + '%';
+      d.innerHTML = '<div class="st-arch"></div><div class="st-badge" id="badge-' + s.id + '"></div><div class="st-halo"></div><div class="st-ic">' + s.icon + '</div><div class="st-nm">' + nm(s.name) + '</div><div class="st-ring" id="ring-' + s.id + '"></div>';
+      box.appendChild(d);
+    });
+    var map = $('sitemap');
+    var dims = mapDims(); anim.w = dims.w; anim.h = dims.h;
+    rebuildPaths();
+    // sea + micro-life layer (west-coast water band, drifting gulls, jumping fish) — pure ambience
     var sea = document.getElementById('sealayer');
     if (!sea) { sea = document.createElement('div'); sea.id = 'sealayer'; sea.className = 'sealayer'; map.insertBefore(sea, $('paths')); }
     var life = '<div class="water"></div>';
     for (var gi = 0; gi < GULLS; gi++) life += '<span class="gull" style="top:' + (8 + gi * 9) + '%;animation-delay:' + (-gi * 5.5) + 's;animation-duration:' + (17 + gi * 4) + 's"></span>';
-    for (var fi = 0; fi < FISH; fi++) life += '<span class="splash" style="left:' + (6 + fi * 7) + '%;top:' + (80 + (fi % 2) * 8) + '%;animation-delay:' + (fi * 2.3) + 's"></span>';
+    for (var fi = 0; fi < FISH; fi++) life += '<span class="splash" style="left:' + (3 + fi * 5) + '%;top:' + (55 + fi * 13) + '%;animation-delay:' + (fi * 2.3) + 's"></span>';
     sea.innerHTML = life;
-    // ambient layer: 13 hosted guests + the boat (positions driven by rAF)
+    // ambient layer: 13 hosted guests (coloured, with activities from the engine) + the skiff
     var amb = document.getElementById('ambient');
     if (!amb) { amb = document.createElement('div'); amb.id = 'ambient'; amb.className = 'ambient'; map.insertBefore(amb, $('figs')); }
-    amb.innerHTML = '<div class="boat" id="boat"><span class="boat-hull">⛵</span><span class="wake"></span></div>';
-    for (var i = 0; i < P.GUESTS; i++) amb.innerHTML += '<div class="guest" id="gg' + i + '"><span class="g-body"></span></div>';
+    var seed0 = (sim && sim.cfg && sim.cfg.seed) || 1;
+    var acts0 = P.ambientActors(seed0, 0);
+    if (!keepActors || !amb.firstChild) {
+      var ah = '<div class="boat" id="boat"><div class="bwrap"><div class="bcore"><span class="hull"></span><span class="mast"></span><span class="sail"></span></div></div></div>';
+      for (var wi = 0; wi < 3; wi++) ah += '<span class="wk" id="wk' + wi + '"></span>';
+      for (var i = 0; i < P.GUESTS; i++) {
+        var act = acts0[i] ? acts0[i].act : 'stroll';
+        ah += '<div class="guest g-' + act + '" id="gg' + i + '" style="--gc:' + YUKATA[i % YUKATA.length] + '"><span class="g-body"></span></div>';
+      }
+      amb.innerHTML = ah;
+    }
     // legend of who the small figures are (kept, restyled)
     var pr = P.makeTemplate().project, gt = document.getElementById('guests-tag');
     if (!gt) { gt = document.createElement('div'); gt.id = 'guests-tag'; gt.className = 'guests-tag'; map.appendChild(gt); }
     gt.innerHTML = '👥 <b>' + pr.guests + '</b> ' + T().guestsShort;
-    // wire the rAF caches to the fresh DOM
-    var dims = mapDims(); anim.w = dims.w; anim.h = dims.h;
+    // wire the rAF caches, preserving live coordinates across rebuilds (language switch, resize)
     anim.guest = {};
-    for (var g = 0; g < P.GUESTS; g++) { var ge = $('gg' + g); anim.guest['g' + g] = { el: ge, cx: dims.w * 0.5, cy: dims.h * 0.6 }; }
-    var be = $('boat'); anim.boat = { el: be, cx: DOCK.x * dims.w, cy: DOCK.y * dims.h };
+    for (var g = 0; g < P.GUESTS; g++) {
+      var ge = $('gg' + g), cast = acts0[g] && acts0[g].act === 'cast';
+      anim.guest['g' + g] = { el: ge, cast: cast,
+        homeX: cast ? 0.165 + (g % 4) * 0.013 : 0, homeY: cast ? 0.48 + ((g * 7) % 5) * 0.09 : 0,
+        cx: ge._cx != null ? ge._cx : dims.w * 0.5, cy: ge._cy != null ? ge._cy : dims.h * 0.62 };
+    }
+    var be = $('boat');
+    anim.boat = { el: be, cx: be._cx != null ? be._cx : DOCK.x * dims.w, cy: be._cy != null ? be._cy : DOCK.y * dims.h, lastParam: 0 };
+    anim.wakes = [];
+    for (var wj = 0; wj < 3; wj++) anim.wakes.push({ el: $('wk' + wj), x: 0, y: 0, t0: 0 });
+    // duty-holders: rewire any existing figures so a language switch keeps them mid-stride
     anim.fig = {};
+    var exist = $('figs').querySelectorAll('.astro');
+    for (var x2 = 0; x2 < exist.length; x2++) {
+      var ae = exist[x2], pid2 = ae.getAttribute('data-pid');
+      anim.fig[pid2] = { el: ae, bub: ae.querySelector('.bub'), nmEl: ae.querySelector('.nm'),
+        cx: ae._cx != null ? ae._cx : dims.w / 2, cy: ae._cy != null ? ae._cy : dims.h / 2,
+        tx: ae._cx != null ? ae._cx : dims.w / 2, ty: ae._cy != null ? ae._cy : dims.h / 2,
+        st: ae._st || '', lang: '' };
+    }
+    // cascade comet trail ghosts (pooled)
+    anim.ghost = [];
+    var oldg = map.querySelectorAll('.cghost');
+    for (var og = 0; og < oldg.length; og++) oldg[og].remove();
+    for (var gh = 0; gh < 3; gh++) { var gd = document.createElement('span'); gd.className = 'cghost'; map.appendChild(gd); anim.ghost.push(gd); }
+    var oldc = map.querySelectorAll('.cstatic');
+    for (var oc = 0; oc < oldc.length; oc++) oldc[oc].remove();
+  }
+
+  // ---- P21: the hand-offs themselves fly the map — gold on time, hanko-red late ----
+  function buildMotes(s) {
+    var box = $('motes'); if (box) box.innerHTML = '';
+    anim.motes = [];
+    if (!box || !s || s.mode !== 'minute') return;
+    var plan = s.plan;
+    plan.handoffs.forEach(function (h) {
+      var to = byId(plan.tasks, h.toTaskId), from = byId(plan.tasks, h.fromTaskId);
+      if (!to || !from || to.day !== 'fishday' || from.day !== 'fishday') return;
+      var send = P.resolveSendMin(plan, h), arr = P.staticArrival(plan, h);
+      if (send == null || arr == null) return;
+      var A = P.station(from.station), B = P.station(to.station);
+      var late = arr > to.startMin;
+      var el = document.createElement('span'); el.className = 'mote ' + (late ? 'red' : 'gold');
+      box.appendChild(el);
+      setXY(el, A.x * anim.w, A.y * anim.h);
+      anim.motes.push({ el: el, send: send, ax: A.x, ay: A.y, bx: B.x, by: B.y, late: late,
+        same: from.station === to.station, toSt: to.station, state: 0, t0: 0,
+        dur: 650 + Math.min(900, Math.max(0, arr - send) * 55) });
+    });
+  }
+  function pingStation(stId, late) {
+    var n = $('st-' + stId); if (!n) return;
+    var cls = late ? 'ping-red' : 'ping';
+    n.classList.remove('ping', 'ping-red'); void n.offsetWidth; n.classList.add(cls);
+    setTimeout(function () { n.classList.remove(cls); }, 560);
+  }
+  // called once per engine tick: launch motes whose send-minute the clock just crossed
+  function scheduleMotes(s) {
+    if (s.mode !== 'minute') return;
+    var now = s.clockMin;
+    for (var i = 0; i < anim.motes.length; i++) {
+      var m = anim.motes[i];
+      if (m.state !== 0 || now < m.send) continue;
+      if (now > m.send + 15) { m.state = 2; continue; }           // long past (fast-forward) — skip silently
+      m.state = 1; m.t0 = 0;
+      if (m.same || RM.matches) { m.state = 2; pingStation(m.toSt, m.late); }
+      else m.el.classList.add('on');
+    }
+  }
+  function updateMotes(ts) {
+    for (var i = 0; i < anim.motes.length; i++) {
+      var m = anim.motes[i]; if (m.state !== 1) continue;
+      if (!m.t0) m.t0 = ts;
+      var k = (ts - m.t0) / m.dur;
+      if (k >= 1) { m.state = 2; m.el.classList.remove('on'); pingStation(m.toSt, m.late); continue; }
+      var e = k * k * (3 - 2 * k);
+      var x = (m.ax + (m.bx - m.ax) * e) * anim.w;
+      var y = (m.ay + (m.by - m.ay) * e) * anim.h - Math.sin(k * Math.PI) * 12;
+      setXY(m.el, x, y);
+    }
   }
 
   function launch() {
+    stopAnim(); clearFinishTimer();                       // never stack a second rAF loop or a stale report reveal
     sim = P.createSim({ seed: (Math.floor(Math.random() * 1e9) >>> 0) || 1, overrides: buildCfg().overrides }, daySel);
-    paused = false; document.body.classList.add('running');
-    $('detail-modal').classList.remove('show'); $('inspect-modal').classList.remove('show'); $('arrow-modal').classList.remove('show');
+    paused = false; livePausedForFix = false; document.body.classList.add('running');
+    closeModals();
+    $('live-dock').classList.add('hidden');               // a morning run never shows the live dock
     speedMult = 1; document.querySelectorAll('.spd').forEach(function (x) { x.classList.toggle('on', x.getAttribute('data-spd') === '1'); });
     $('setup').classList.add('hidden'); $('report').classList.add('hidden'); $('run').classList.remove('hidden');
     $('figs').innerHTML = ''; $('banner').classList.remove('show');
@@ -526,6 +710,7 @@
     animReset(); updateRunButtons(); buildSitemap();
     anim.cascade = (sim.mode === 'minute') ? P.cascadeTrace(sim.plan) : { hops: [], has: false };
     anim.cascade.has = anim.cascade.hasFault;
+    buildMotes(sim);
     renderSim(sim); startAnim();
     runFn = step;
     if (timer) clearInterval(timer); timer = setInterval(step, tickMs());
@@ -539,71 +724,202 @@
     if (sim.finished) finish();
   }
 
-  // px target for each duty-holder: its engine station + a small stack offset
+  // px target for each duty-holder: its engine station + a fanned stack below it
+  // (anchor = the sprite's FEET; rows of 4, wide enough that name chips stay legible)
   function figTargets(s) {
     var pos = {}, bucket = {}; s.stations.forEach(function (st) { bucket[st.id] = []; });
     s.participants.forEach(function (p) { bucket[p.station].push(p); });
     var W = anim.w, H = anim.h;
     s.stations.forEach(function (st) {
+      var n = bucket[st.id].length;
       bucket[st.id].forEach(function (p, i) {
-        var col = i % 3, row = Math.floor(i / 3);
-        pos[p.id] = { x: st.x * W + (col - 1) * 17, y: st.y * H + 26 + row * 16 };
+        var col = i % 4, row = Math.floor(i / 4), rowN = Math.min(4, n - row * 4);
+        pos[p.id] = { x: st.x * W + (col - (rowN - 1) / 2) * 23, y: st.y * H + 36 + row * 24 };
       });
     });
     return pos;
   }
 
-  // ---- the continuous animation loop (walking, guests, boat, cascade) ----
+  // ---- the continuous animation loop (walking, guests, boat, motes, cascade) ----
   function startAnim() { if (!anim.running) { anim.running = true; anim.last = 0; anim.raf = requestAnimationFrame(frame); } }
   function stopAnim() { if (anim && anim.raf) cancelAnimationFrame(anim.raf); if (anim) { anim.running = false; anim.raf = null; } }
   function frame(ts) {
     if (!anim || !anim.running) return;
     if ($('run').classList.contains('hidden')) { anim.running = false; return; }
-    var dt = anim.last ? Math.min(0.05, (ts - anim.last) / 1000) : 0.016; anim.last = ts;
-    var phase = ts / 2600, kFig = Math.min(1, dt * 3.4), kAmb = Math.min(1, dt * 2.2);
-    // duty-holders ease toward the targets renderSim set (they WALK there)
+    var dt = anim.last ? Math.min(0.1, (ts - anim.last) / 1000) : 0.016; anim.last = ts;
+    var rm = RM.matches, phase = ts / 2600;
+    var kAmb = 1 - Math.exp(-2.2 * dt);                       // frame-rate independent easing
+    var WALK = 92 * Math.max(1, speedMult);                   // px/s — a brisk harbor walk, scaled with game speed
+    // duty-holders walk at constant speed toward the targets renderSim set, easing in on arrival
     for (var pid in anim.fig) {
       var f = anim.fig[pid]; if (!f.el) continue;
-      f.cx += (f.tx - f.cx) * kFig; f.cy += (f.ty - f.cy) * kFig;
-      var moving = Math.abs(f.tx - f.cx) > 1.2 || Math.abs(f.ty - f.cy) > 1.2;
-      f.el.classList.toggle('walking', moving);
-      f.el.style.left = f.cx + 'px'; f.el.style.top = f.cy + 'px';
+      var dx = f.tx - f.cx, dy = f.ty - f.cy, dist = Math.sqrt(dx * dx + dy * dy);
+      if (rm) { f.cx = f.tx; f.cy = f.ty; f.el.classList.remove('walking'); }
+      else if (dist > 0.35) {
+        var v = Math.min(WALK, 5 * dist);
+        var stp = Math.min(dist, v * dt);
+        f.cx += dx / dist * stp; f.cy += dy / dist * stp;
+        var moving = dist > 2.5;
+        f.el.classList.toggle('walking', moving);
+        if (moving && Math.abs(dx) > 3) f.el.classList.toggle('faceL', dx < 0);
+      } else { f.el.classList.remove('walking'); }
+      f.el._cx = f.cx; f.el._cy = f.cy;
+      setXY(f.el, f.cx, f.cy);
     }
-    // guests wander (seeded); hush + freeze near a stalled duty-holder
     if (sim) {
-      var seed = (sim.cfg && sim.cfg.seed) || 1, acts = P.ambientActors(seed, phase), hot = anim.hotPts || [];
+      // guests wander (engine-seeded, sampled ~15Hz — the easing below smooths between samples);
+      // hush + freeze near a stalled duty-holder
+      var seed = (sim.cfg && sim.cfg.seed) || 1;
+      if (!anim.acts || ts - anim.actsAt > 66) { anim.acts = P.ambientActors(seed, phase); anim.actsAt = ts; }
+      var acts = anim.acts, hot = anim.hotPts || [];
       for (var a = 0; a < acts.length; a++) {
-        var g = acts[a], gs = anim.guest[g.id]; if (!gs) continue;
-        var hush = false;
-        for (var h = 0; h < hot.length; h++) { var dxg = g.x - hot[h].x, dyg = g.y - hot[h].y; if (dxg * dxg + dyg * dyg < HUSH_R2) { hush = true; break; } }
+        var g = acts[a], gs = anim.guest[g.id]; if (!gs || !gs.el) continue;
+        var gx = gs.cast ? gs.homeX : g.x, gy = gs.cast ? gs.homeY : g.y;
+        var hush = false, nx = gs.cx / anim.w, ny = gs.cy / anim.h;
+        for (var h = 0; h < hot.length; h++) { var dxg = nx - hot[h].x, dyg = ny - hot[h].y; if (dxg * dxg + dyg * dyg < HUSH_R2) { hush = true; break; } }
         gs.el.classList.toggle('hushed', hush);
-        if (!hush) { gs.cx += (g.x * anim.w - gs.cx) * kAmb; gs.cy += (g.y * anim.h - gs.cy) * kAmb; }
-        gs.el.style.left = gs.cx + 'px'; gs.el.style.top = gs.cy + 'px';
+        if (!hush) {
+          if (rm) { gs.cx = gx * anim.w; gs.cy = gy * anim.h; }
+          else { gs.cx += (gx * anim.w - gs.cx) * kAmb; gs.cy += (gy * anim.h - gs.cy) * kAmb; }
+        }
+        gs.el._cx = gs.cx; gs.el._cy = gs.cy;
+        setXY(gs.el, gs.cx, gs.cy);
       }
-      // the boat sails its arc, derived from the schedule
+      // the boat sails a quadratic arc through the bay, bow to the heading, wake while under way
       var bs = P.boatState(sim), b = anim.boat;
       if (b && b.el) {
-        var bx = (DOCK.x + (SEA.x - DOCK.x) * bs.param) * anim.w, by = (DOCK.y + (SEA.y - DOCK.y) * bs.param) * anim.h;
-        b.cx += (bx - b.cx) * kAmb; b.cy += (by - b.cy) * kAmb;
-        b.el.style.left = b.cx + 'px'; b.el.style.top = b.cy + 'px';
+        var tq = bs.param, u = 1 - tq;
+        var bx = (u * u * DOCK.x + 2 * u * tq * BOATC.x + tq * tq * SEA.x) * anim.w;
+        var by = (u * u * DOCK.y + 2 * u * tq * BOATC.y + tq * tq * SEA.y) * anim.h;
+        if (rm) { b.cx = bx; b.cy = by; }
+        else { b.cx += (bx - b.cx) * kAmb; b.cy += (by - b.cy) * kAmb; }
+        b.el._cx = b.cx; b.el._cy = b.cy;
+        setXY(b.el, b.cx, b.cy);
         b.el.classList.toggle('sailing', bs.atSea);
+        b.el.classList.toggle('faceL', bs.phase === 'outbound' || bs.phase === 'ground');   // bow toward the open sea
+        if (!rm && bs.atSea && Math.abs(tq - b.lastParam) > 0.0004 && ts - (b.wakeAt || 0) > 170) {
+          b.wakeAt = ts;
+          var wk = anim.wakes[b.wakeI = ((b.wakeI || 0) + 1) % anim.wakes.length];
+          if (wk && wk.el) { wk.x = b.cx; wk.y = b.cy + 3; wk.t0 = ts; }
+        }
+        b.lastParam = tq;
+        for (var w2 = 0; w2 < anim.wakes.length; w2++) {
+          var wke = anim.wakes[w2]; if (!wke.el || !wke.t0) continue;
+          var wa = (ts - wke.t0) / 900;
+          if (wa >= 1) { wke.el.style.opacity = 0; wke.t0 = 0; continue; }
+          setXY(wke.el, wke.x, wke.y);
+          wke.el.style.opacity = (1 - wa) * 0.5;
+        }
       }
+      updateMotes(ts);
     }
     updateCascade(ts);
+    updateTweens(ts);
     anim.raf = requestAnimationFrame(frame);
   }
 
-  // the signature 見せ場: a red comet rolls 港→船→食堂 while a fault is live
+  // the signature 見せ場: a red comet (with trail + per-hop strike) rolls 港→船→食堂 while a fault is live
   function updateCascade(ts) {
     var pulse = $('cascade-pulse'); if (!pulse) return;
     var c = anim.cascade;
-    if (!c || !c.has || c.hops.length < 2 || paused || (sim && sim.paused)) { pulse.classList.remove('show'); return; }
+    function hideGhosts() { for (var i = 0; i < anim.ghost.length; i++) anim.ghost[i].classList.remove('show'); }
+    if (RM.matches) {                          // reduced motion: a static red chain marks the affected stations
+      pulse.classList.remove('show'); hideGhosts();
+      var wantChain = c && c.has && c.hops.length >= 1;
+      if (wantChain && !anim.chainOn) {
+        anim.chainOn = true; anim.chain = [];
+        c.hops.forEach(function (hp) {
+          var st = P.station(hp.station), d2 = document.createElement('span'); d2.className = 'cstatic';
+          d2.style.transform = 'translate3d(' + (st.x * anim.w) + 'px,' + (st.y * anim.h - 30) + 'px,0)';
+          $('sitemap').appendChild(d2); anim.chain.push(d2);
+        });
+      } else if (!wantChain && anim.chainOn) { anim.chain.forEach(function (n) { n.remove(); }); anim.chain = []; anim.chainOn = false; }
+      return;
+    }
+    if (anim.chainOn) { anim.chain.forEach(function (n) { n.remove(); }); anim.chain = []; anim.chainOn = false; }
+    if (!c || !c.has || c.hops.length < 2 || paused || livePausedForFix || (sim && sim.paused)) { pulse.classList.remove('show'); hideGhosts(); return; }
     var HOP = 1000, hops = c.hops, span = (hops.length - 1) * HOP, total = span + 900, tt = ts % total;
-    if (tt >= span) { pulse.classList.remove('show'); return; }
-    var seg = Math.floor(tt / HOP), frac = (tt % HOP) / HOP;
+    if (tt >= span) { pulse.classList.remove('show'); hideGhosts(); anim.strikeSeg = -1; anim.trail.length = 0; return; }
+    var seg = Math.floor(tt / HOP), f0 = (tt % HOP) / HOP, frac = f0 * f0 * (3 - 2 * f0);
     var A = P.station(hops[seg].station), B = P.station(hops[Math.min(hops.length - 1, seg + 1)].station);
     var x = (A.x + (B.x - A.x) * frac) * anim.w, y = (A.y + (B.y - A.y) * frac) * anim.h;
-    pulse.style.left = x + 'px'; pulse.style.top = y + 'px'; pulse.classList.add('show');
+    setXY(pulse, x, y); pulse.classList.add('show');
+    // trail ghosts follow the comet's recent path
+    anim.trail.push({ x: x, y: y, t: ts });
+    while (anim.trail.length && ts - anim.trail[0].t > 300) anim.trail.shift();
+    for (var gi = 0; gi < anim.ghost.length; gi++) {
+      var idx = anim.trail.length - 1 - (gi + 1) * 5, ge = anim.ghost[gi];
+      if (idx < 0) { ge.classList.remove('show'); continue; }
+      setXY(ge, anim.trail[idx].x, anim.trail[idx].y);
+      ge.style.opacity = 0.5 - gi * 0.14;
+      ge.classList.add('show');
+    }
+    // arriving at a hop strikes that station — cause → effect, not a cruising dot
+    if (seg !== anim.strikeSeg) {
+      if (anim.strikeSeg >= 0 && seg > 0) {
+        var hitSt = hops[seg].station, node = $('st-' + hitSt);
+        if (node) { node.classList.remove('strike'); void node.offsetWidth; node.classList.add('strike'); setTimeout(function () { node.classList.remove('strike'); }, 340); }
+      }
+      anim.strikeSeg = seg;
+    }
+  }
+
+  // dashboard readouts glide to their new value; ±N floats; gold pulse is reserved for exactly 100
+  function tweenNum(el, target, sfx) {
+    if (!el) return;
+    sfx = sfx || '';
+    if (RM.matches || !anim) { if (el._v !== target) { el._v = target; el._shown = target; el.textContent = target + sfx; } return; }
+    if (el._v == null) { el._v = target; el._shown = target; el.textContent = target + sfx; return; }
+    if (el._v === target) return;
+    var prev = el._v;
+    el._from = el._shown != null ? el._shown : prev;
+    el._v = target; el._t0 = 0; el._sfx = sfx;
+    anim.tweens[el.id] = el;
+    if (Math.abs(target - prev) >= 3) floatDelta(el.parentNode, (target > prev ? '+' : '') + (target - prev), target >= prev ? 'up' : 'down');
+    if (target === 100) { el.classList.remove('gold'); void el.offsetWidth; el.classList.add('gold'); }
+  }
+  function updateTweens(ts) {
+    for (var id in anim.tweens) {
+      var el = anim.tweens[id];
+      if (!el._t0) el._t0 = ts;
+      var k = Math.min(1, (ts - el._t0) / 380);
+      el._shown = Math.round(el._from + (el._v - el._from) * k);
+      el.textContent = el._shown + (el._sfx || '');
+      if (k >= 1) delete anim.tweens[id];
+    }
+  }
+
+  // time of day falls across the map, driven only by the deterministic minute clock
+  var SKY = [
+    [240, [13, 19, 38], [24, 32, 52], 0.52],     // 04:00 pre-dawn dark
+    [300, [24, 28, 52], [88, 52, 64], 0.44],     // 05:00 first light
+    [330, [44, 38, 66], [196, 100, 74], 0.38],   // 05:30 dawn rose
+    [420, [52, 68, 94], [232, 166, 96], 0.25],   // 07:00 sunrise gold — the boat departs into it
+    [600, [64, 96, 126], [126, 154, 172], 0.15], // 10:00 morning
+    [780, [74, 108, 138], [148, 170, 184], 0.11],// 13:00 midday (lightest)
+    [960, [70, 92, 118], [204, 154, 92], 0.19],  // 16:00 the cook block begins — light turns
+    [1080, [56, 54, 88], [226, 114, 62], 0.32],  // 18:00 dinner sunset
+    [1140, [28, 32, 58], [124, 64, 74], 0.44],   // 19:00 dusk
+    [1200, [12, 18, 36], [22, 30, 50], 0.52]     // 20:00 night
+  ];
+  function updateSky(s) {
+    var el = $('skytint'), map = $('sitemap'); if (!el) return;
+    if (s.mode !== 'minute') {
+      if (anim.skyKey !== 'off') { anim.skyKey = 'off'; el.style.background = 'none'; map.classList.remove('night'); }
+      return;
+    }
+    var m = clamp(s.clockMin, 240, 1200);
+    if (anim.skyKey === m) return;
+    anim.skyKey = m;
+    var i = 0;
+    while (i < SKY.length - 2 && SKY[i + 1][0] <= m) i++;
+    var a = SKY[i], b = SKY[i + 1], k = clamp((m - a[0]) / Math.max(1, b[0] - a[0]), 0, 1);
+    function mx(ca, cb, j) { return Math.round(ca[j] + (cb[j] - ca[j]) * k); }
+    var top = mx(a[1], b[1], 0) + ',' + mx(a[1], b[1], 1) + ',' + mx(a[1], b[1], 2);
+    var hor = mx(a[2], b[2], 0) + ',' + mx(a[2], b[2], 1) + ',' + mx(a[2], b[2], 2);
+    var al = a[3] + (b[3] - a[3]) * k;
+    el.style.background = 'linear-gradient(180deg, rgba(' + top + ',' + al.toFixed(3) + ') 0%, rgba(' + top + ',' + (al * 0.8).toFixed(3) + ') 52%, rgba(' + hor + ',' + al.toFixed(3) + ') 100%)';
+    map.classList.toggle('night', m < 330 || m >= 1110);
   }
 
   function renderSim(s) {
@@ -612,14 +928,29 @@
     s.participants.forEach(function (p) {
       var f = anim.fig[p.id];
       if (!f) {
-        var el = document.createElement('div'); el.className = 'astro'; el.innerHTML = '<div class="hat"></div><div class="bdy"></div><div class="nm"></div><div class="bub"></div>';
-        $('figs').appendChild(el); el.querySelector('.nm').textContent = nm(p.name);
-        var st0 = P.station(p.station); f = anim.fig[p.id] = { el: el, bub: el.querySelector('.bub'), cx: st0.x * anim.w, cy: st0.y * anim.h, tx: st0.x * anim.w, ty: st0.y * anim.h };
-        el.style.left = f.cx + 'px'; el.style.top = f.cy + 'px';
+        var el = document.createElement('div'); el.className = 'astro';
+        el.setAttribute('data-pid', p.id);
+        el.style.setProperty('--rc', P.role(p.roleId).color);
+        el.innerHTML = '<div class="fig"><span class="sh"></span><div class="pw"><span class="lg l"></span><span class="lg r"></span><span class="tr"></span><span class="hd"></span><span class="hat"></span></div></div><div class="nm"></div><div class="bub"></div>';
+        $('figs').appendChild(el);
+        var st0 = P.station(p.station);
+        f = anim.fig[p.id] = { el: el, bub: el.querySelector('.bub'), nmEl: el.querySelector('.nm'),
+          cx: st0.x * anim.w, cy: st0.y * anim.h + 36, tx: st0.x * anim.w, ty: st0.y * anim.h + 36, st: '', lang: '' };
+        el._cx = f.cx; el._cy = f.cy;
+        setXY(el, f.cx, f.cy);
       }
+      if (f.lang !== L) { f.nmEl.innerHTML = '<i>' + P.role(p.roleId).icon + '</i>' + nm(p.name); f.lang = L; }
       var t = pos[p.id]; if (t) { f.tx = t.x; f.ty = t.y; }
-      f.el.className = 'astro s-' + p.state;
+      // the rAF loop owns walking/faceL; the live spotlight owns spot — preserve them across state writes
+      var keep = (f.el.className.indexOf('walking') >= 0 ? ' walking' : '') +
+                 (f.el.className.indexOf('faceL') >= 0 ? ' faceL' : '') +
+                 (f.el.className.indexOf('spot') >= 0 ? ' spot' : '');
+      f.el.className = 'astro s-' + p.state + keep;
       f.bub.textContent = BUB[p.state] || '';
+      if (f.st !== p.state) {                    // state change: pop the bubble chip once
+        f.st = p.state; f.el._st = p.state;
+        if (!RM.matches && f.bub.textContent) { f.bub.classList.remove('pop'); void f.bub.offsetWidth; f.bub.classList.add('pop'); }
+      }
       if (STALL_STATES[p.state]) { var st = P.station(p.station); anim.hotPts.push({ x: st.x, y: st.y }); }
     });
     // stations: crew count + dominant problem badge + "territory" tint (green/amber/red)
@@ -642,6 +973,8 @@
     $('nowtag').textContent = s.mode === 'minute'
       ? T().fdDayLine(hhmm(s.clockMin))
       : T().dayLine(Math.min(P.DAYS, Math.ceil(s.day)), P.DAYS) + (s.phaseLabel ? ' · ' + nm(s.phaseLabel) : '');
+    updateSky(s);
+    scheduleMotes(s);
     updatePressure(s);
     renderDashboard(s);
   }
@@ -675,7 +1008,7 @@
     // fishday: Efficiency % beside the grade (§9) + idle/rework minutes
     $('dash-fd').classList.toggle('hidden', s.mode !== 'minute');
     if (s.mode === 'minute') {
-      $('dash-eff').textContent = sc.efficiency + '%';
+      tweenNum($('dash-eff'), sc.efficiency, '%');
       $('dash-eff-bar').style.width = sc.efficiency + '%';
       $('dash-eff-bar').className = sc.efficiency >= 98 ? 'ok' : (sc.efficiency >= 90 ? 'mid' : 'bad');
       // idle accrued SO FAR (climbs live as the clock passes each waiting task's start)
@@ -688,7 +1021,7 @@
       var ib = $('dash-idle-bar');
       if (ib) { var iw = Math.min(100, idleSoFar / 2.2); ib.style.width = iw + '%'; ib.className = idleSoFar <= 0 ? 'ok' : (iw > 40 ? 'bad' : 'mid'); }
     }
-    $('dash-ready').textContent = sc.score + '%';
+    tweenNum($('dash-ready'), sc.score, '%');
     $('dash-ready-bar').style.width = sc.score + '%';
     $('dash-ready-bar').className = sc.score >= 75 ? 'ok' : (sc.score >= 60 ? 'mid' : 'bad');
     var bpct = Math.round(s.budget.spent / s.budget.total * 100);
@@ -698,7 +1031,7 @@
     var w = $('dash-warnings');
     if (!s.problems.length) w.innerHTML = '<div class="warn-ok">' + t.noWarnings + '</div>';
     else w.innerHTML = s.problems.map(function (p) {
-      return '<div class="warn sev-' + p.severity + '" data-station="' + p.station + '"><span class="warn-ic">' + (p.severity === 'high' ? '⛔' : '⚠️') + '</span>' + t['p_' + p.id + '_title'] + '</div>';
+      return '<div class="warn sev-' + p.severity + '" data-station="' + p.station + '" tabindex="0" role="button"><span class="warn-ic">' + (p.severity === 'high' ? '⛔' : '⚠️') + '</span>' + t['p_' + p.id + '_title'] + '</div>';
     }).join('');
     // team performance (6 values)
     var team = sc.team;
@@ -754,13 +1087,16 @@
         '<div class="ins-line">' + t.inspNowDoing + ': ' + cur + ' · ' + t.inspNext + ': ' + nxt + '</div>' +
         '<div class="ins-cards">' + held + (waits || '<span class="ins-none">' + t.inspIdleFree + '</span>') + '</div></div></div>';
     }).join('');
+    var wasOpen = $('inspect-modal').classList.contains('show');
     $('inspect-modal').classList.add('show');
+    if (!wasOpen) $('insp-resume').focus();
   }
   function closeInspector() { $('inspect-modal').classList.remove('show'); if (sim && sim.paused) P.resume(sim); }
 
   // ---- problem detail panel ----
   function openProblemPanel(stationId) {
     if (!sim) return;
+    lastDetailStation = stationId;
     var st = byId(sim.stations, stationId);
     var p = st ? st.dominantProblem : null, t = T();
     $('detail-ic').textContent = st ? st.icon : '🔍';
@@ -773,7 +1109,9 @@
         '<div class="dt-sec"><div class="dt-h">' + t.pnNeeded + '</div><span class="dt-dep bad">' + t['p_' + p.id + '_need'] + '</span></div>' +
         '<div class="dt-sec"><div class="dt-h">' + t.pnFix + '</div><p>' + t['p_' + p.id + '_fix'] + '</p></div>';
     }
+    var wasOpen = $('detail-modal').classList.contains('show');
     $('detail-modal').classList.add('show');
+    if (!wasOpen) $('detail-close').focus();
   }
   function closeDetail() { $('detail-modal').classList.remove('show'); }
 
@@ -783,7 +1121,13 @@
   function finish() {
     clearInterval(timer); timer = null;
     lastResult = { trip: P.score(sim), day: (sim.segment !== 'all' ? P.daySummary(sim) : null), segment: sim.segment };
-    setTimeout(function () { stopAnim(); document.body.classList.remove('running'); $('run').classList.add('hidden'); $('report').classList.remove('hidden'); renderReport(lastResult); }, 700);
+    var simAt = sim;
+    clearFinishTimer();
+    finishTimer = setTimeout(function () {
+      finishTimer = null;
+      if (sim !== simAt) return;      // a mode/screen change won the race — don't pop the report over it
+      stopAnim(); document.body.classList.remove('running'); $('run').classList.add('hidden'); $('report').classList.remove('hidden'); renderReport(lastResult);
+    }, 700);
   }
 
   var CAT_ORDER = ['objective', 'schedule', 'roles', 'info', 'budget', 'safety', 'quality', 'health'];
@@ -845,7 +1189,11 @@
       if (fixId === 'fixHandoffs') fdClearFixConflicts();
       mcClearFixConflicts(fixId);
     }
-    launch();
+    if (appMode === 'live') {           // stay in the live experience — never drop into a checkpoint-style run
+      liveState = liveState || { fixes: 0, addressed: {}, phase: 'brief', currentGap: null, result: null };
+      daySel = 'fishday';
+      launchLive();
+    } else launch();
   }
 
   // =========================================================================
@@ -861,15 +1209,23 @@
   // =========================================================================
   function toSetup() {
     if (timer) { clearInterval(timer); timer = null; }
-    stopAnim(); sim = null; paused = false; document.body.classList.remove('running');
-    $('detail-modal').classList.remove('show');
-    $('report').classList.add('hidden'); $('run').classList.add('hidden'); $('setup').classList.remove('hidden');
+    clearFinishTimer();
+    stopAnim(); sim = null; paused = false; livePausedForFix = false; document.body.classList.remove('running');
+    closeModals();
+    $('report').classList.add('hidden'); $('run').classList.add('hidden'); $('live-dock').classList.add('hidden'); $('setup').classList.remove('hidden');
     paintSetup();
   }
 
   function bind() {
     document.querySelectorAll('.lang button').forEach(function (b) { b.addEventListener('click', function () { L = b.getAttribute('data-lang'); applyLang(); }); });
-    $('modesw').addEventListener('click', function (e) { var b = e.target.closest('button[data-mode]'); if (b && b.dataset.mode !== appMode) enterMode(b.dataset.mode); });
+    $('modesw').addEventListener('click', function (e) {
+      var b = e.target.closest('button[data-mode]'); if (!b) return;
+      var m = b.dataset.mode;
+      if (m !== appMode) { enterMode(m); return; }
+      // same-mode click: re-enter only when we've drifted off the mode's home screen (report, stale setup)
+      if (m === 'live' && $('run').classList.contains('hidden')) enterMode('live');
+      else if (m === 'morning' && $('setup').classList.contains('hidden')) enterMode('morning');
+    });
     $('rules-open').addEventListener('click', function () { $('rules-modal').classList.add('show'); });
     $('rules-close').addEventListener('click', function () { $('rules-modal').classList.remove('show'); });
     $('rules-modal').addEventListener('click', function (e) { if (e.target === $('rules-modal')) $('rules-modal').classList.remove('show'); });
@@ -916,6 +1272,12 @@
     $('fd-canvas').addEventListener('pointerdown', fdPointerDown);
     document.addEventListener('pointermove', fdPointerMove);
     document.addEventListener('pointerup', fdPointerUp);
+    document.addEventListener('pointercancel', fdPointerCancel);
+    // the lane name labels ride along when the timeline pans, so rows never go anonymous
+    $('fd-scroll').addEventListener('scroll', function () {
+      var sl = this.scrollLeft;
+      this.querySelectorAll('.fd-lbl').forEach(function (lb) { lb.style.transform = 'translateX(' + sl + 'px)'; });
+    });
     $('fd-canvas').addEventListener('click', function (e) { var p = e.target.closest && e.target.closest('path[data-h]'); if (p) openArrowPanel(p.getAttribute('data-h')); });
     $('fd-arrowlist').addEventListener('click', function (e) { var c = e.target.closest('.fd-ar-chip'); if (c) openArrowPanel(c.dataset.h); });
     $('ar-body') && $('arrow-modal').addEventListener('change', function (e) { if (e.target.closest('.ar-sel') || e.target.closest('.ar-time')) arrowPatch(); });
@@ -933,17 +1295,72 @@
     $('inspect-modal').addEventListener('click', function (e) { if (e.target === $('inspect-modal')) closeInspector(); });
 
     $('btn-pause').addEventListener('click', function () { paused = !paused; updateRunButtons(); });
-    $('btn-quit').addEventListener('click', function () { if (sim && !sim.finished) { sim.finished = sim.finished || 'incomplete'; finish(); } });
+    $('btn-quit').addEventListener('click', function () {
+      if (!sim || sim.finished) return;
+      sim.finished = 'incomplete';
+      if (appMode === 'live' && liveState) { livePausedForFix = false; clearGapFocus(); liveFinish(); }   // stay in the live flow
+      else finish();
+    });
     $('stations').addEventListener('click', function (e) { var st = e.target.closest('.station'); if (st) openProblemPanel(st.id.replace('st-', '')); });
     $('dash-warnings').addEventListener('click', function (e) { var w = e.target.closest('.warn'); if (w && w.dataset.station) openProblemPanel(w.dataset.station); });
     $('detail-close').addEventListener('click', closeDetail);
     $('detail-modal').addEventListener('click', function (e) { if (e.target === $('detail-modal')) closeDetail(); });
 
     $('fixpack').addEventListener('click', function (e) { var b = e.target.closest('.fix-apply'); if (b) applyFixAndRerun(b.dataset.fix); });
-    $('btn-tweak').addEventListener('click', toSetup);
-    $('btn-again').addEventListener('click', launch);
+    // after a LIVE run's report, every action stays in the live experience
+    $('btn-tweak').addEventListener('click', function () { if (appMode === 'live') enterMode('morning'); else toSetup(); });
+    $('btn-again').addEventListener('click', function () { if (appMode === 'live') startLive(); else launch(); });
 
     document.querySelectorAll('.spd').forEach(function (b) { b.addEventListener('click', function () { speedMult = parseFloat(b.dataset.spd); document.querySelectorAll('.spd').forEach(function (x) { x.classList.toggle('on', x === b); }); restartTimer(); }); });
+
+    // ---- keyboard access: Escape closes the top modal; Enter/Space activates map + editor targets ----
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') {
+        if ($('arrow-modal').classList.contains('show')) { arrowEdit = null; $('arrow-modal').classList.remove('show'); }
+        else if ($('inspect-modal').classList.contains('show')) closeInspector();
+        else if ($('detail-modal').classList.contains('show')) closeDetail();
+        else if ($('rules-modal').classList.contains('show')) $('rules-modal').classList.remove('show');
+        return;
+      }
+      var el = e.target;
+      if (!el || !el.classList) return;
+      if (e.key === 'Enter' || e.key === ' ') {
+        if (el.classList.contains('station')) { e.preventDefault(); openProblemPanel(el.id.replace('st-', '')); }
+        else if (el.classList.contains('warn') && el.dataset.station) { e.preventDefault(); openProblemPanel(el.dataset.station); }
+        else if (el.classList.contains('fd-socket')) { e.preventDefault(); fdSocketTap(el); }
+        else if (el.classList.contains('fd-port')) { e.preventDefault(); }
+        return;
+      }
+      // fishday blocks: ←/→ nudge ±5 min · Shift+←/→ resize ±5 min
+      if (el.classList.contains('fd-block') && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        e.preventDefault();
+        var plan = currentPlan(), tk = byId(plan.tasks, el.dataset.task); if (!tk) return;
+        var d = e.key === 'ArrowLeft' ? -5 : 5;
+        if (e.shiftKey) fdOv.timing[tk.id] = { startMin: tk.startMin, durMin: clamp(tk.durMin + d, 5, FD_T1 - tk.startMin) };
+        else fdOv.timing[tk.id] = { startMin: clamp(tk.startMin + d, FD_T0, FD_T1 - tk.durMin), durMin: tk.durMin };
+        paintSetup();
+        var nb = document.querySelector('.fd-block[data-task="' + tk.id + '"]'); if (nb) nb.focus();
+      }
+    });
+
+    // ---- window resize: rescale every mover + rebuild the pixel-anchored paths ----
+    var rszT = null;
+    window.addEventListener('resize', function () {
+      if (rszT) clearTimeout(rszT);
+      rszT = setTimeout(function () {
+        rszT = null;
+        if (!anim || $('run').classList.contains('hidden')) return;
+        var d = mapDims(), sx = anim.w ? d.w / anim.w : 1, sy = anim.h ? d.h / anim.h : 1;
+        anim.w = d.w; anim.h = d.h;
+        var k2;
+        for (k2 in anim.fig) { var f2 = anim.fig[k2]; f2.cx *= sx; f2.cy *= sy; f2.tx *= sx; f2.ty *= sy; }
+        for (k2 in anim.guest) { var g2 = anim.guest[k2]; g2.cx *= sx; g2.cy *= sy; }
+        if (anim.boat) { anim.boat.cx *= sx; anim.boat.cy *= sy; }
+        anim.trail.length = 0;
+        rebuildPaths();
+        if (sim) renderSim(sim);
+      }, 130);
+    });
   }
 
   // =========================================================================
@@ -959,15 +1376,31 @@
   function chIcon(ch) { return { board: '📋', chat: '💬', radio: '📻', phone: '📞', faceToFace: '🤝' }[ch] || '•'; }
   function personName(task) { var pid = task.assignedIds[0], p = pid && byId(currentPlan().participants, pid); return p ? nm(p.name) : nm(P.role(task.ownerRoleId).name); }
 
+  // the Morning-authored plan survives a Live detour: snapshot on the way in, restore on the way back
+  function snapshotMorning() {
+    morningSnap = JSON.parse(JSON.stringify({ fixed: fixed, mcOv: mcOv, fdOv: fdOv, daySel: daySel }));
+  }
+  function restoreMorning() {
+    if (!morningSnap) return;
+    fixed = JSON.parse(JSON.stringify(morningSnap.fixed));
+    mcOv = JSON.parse(JSON.stringify(morningSnap.mcOv));
+    fdOv = JSON.parse(JSON.stringify(morningSnap.fdOv));
+    daySel = morningSnap.daySel;
+  }
   function enterMode(m) {
+    var was = appMode;
     appMode = m;
     $('mode-live').classList.toggle('on', m === 'live');
     $('mode-morning').classList.toggle('on', m === 'morning');
     if (timer) { clearInterval(timer); timer = null; }
+    clearFinishTimer();
     stopAnim(); closeModals(); $('report').classList.add('hidden');
-    if (m === 'live') { $('setup').classList.add('hidden'); startLive(); }
-    else {
+    if (m === 'live') {
+      if (was === 'morning' || !morningSnap) snapshotMorning();
+      $('setup').classList.add('hidden'); startLive();
+    } else {
       document.body.classList.remove('running'); sim = null; paused = false; livePausedForFix = false;
+      restoreMorning();
       $('run').classList.add('hidden'); $('live-dock').classList.add('hidden'); $('setup').classList.remove('hidden');
       paintSetup();
     }
@@ -981,13 +1414,16 @@
   }
 
   function launchLive() {
+    stopAnim(); clearFinishTimer();                       // never stack a second rAF loop across re-runs
     sim = P.createSim({ seed: (Math.floor(Math.random() * 1e9) >>> 0) || 1, overrides: buildCfg().overrides }, 'fishday');
     paused = false; livePausedForFix = false; document.body.classList.add('running');
     closeModals(); speedMult = 2; document.querySelectorAll('.spd').forEach(function (x) { x.classList.toggle('on', x.getAttribute('data-spd') === '2'); });
     $('setup').classList.add('hidden'); $('report').classList.add('hidden'); $('run').classList.remove('hidden');
     $('figs').innerHTML = ''; $('banner').classList.remove('show'); $('live-dock').classList.remove('hidden');
+    var ff = $('fanfare'); if (ff) ff.classList.remove('show');
     animReset(); updateRunButtons(); buildSitemap();
     anim.cascade = P.cascadeTrace(sim.plan); anim.cascade.has = anim.cascade.hasFault;
+    buildMotes(sim);
     renderSim(sim); startAnim();
     liveState.phase = 'brief'; renderLivePanel();
     runFn = liveStep; if (timer) clearInterval(timer); timer = setInterval(liveStep, tickMs());
@@ -1012,12 +1448,29 @@
     return out[0] || null;
   }
 
+  // the 迷い / 手待ち / 手戻り taxonomy, painted on the frozen crewmate (§1 — never flattened)
+  function gapKindState(gap, to) {
+    if (gap.kind === 'late') return 'waitInfo';                                   // 手待ち ⏳
+    return (to.assumeOn || []).indexOf(gap.cardId) >= 0 ? 'rework' : 'confused';  // 手戻り 🔁 · 迷い ❓
+  }
+  function clearGapFocus() {
+    for (var pid in anim.fig) { var f = anim.fig[pid]; if (f && f.el) f.el.classList.remove('spot'); }
+  }
+  function paintGapFocus(gap) {
+    var plan = currentPlan(), to = byId(plan.tasks, gap.taskId); if (!to) return;
+    clearStationTints(); var stn = $('st-' + to.station); if (stn) stn.classList.add('terr-red');
+    clearGapFocus();
+    var pid = to.assignedIds[0], f = pid && anim.fig[pid];
+    if (f) {
+      var st2 = gapKindState(gap, to);
+      f.el.className = 'astro s-' + st2 + ' spot' + (f.el.className.indexOf('faceL') >= 0 ? ' faceL' : '');
+      if (f.bub) f.bub.textContent = BUB[st2] || '⏳';
+      f.st = st2; f.el._st = st2;
+    }
+  }
   function openGap(gap) {
     liveState.currentGap = gap; liveState.phase = 'prompt';
-    var plan = currentPlan(), to = byId(plan.tasks, gap.taskId);
-    clearStationTints(); var stn = $('st-' + to.station); if (stn) stn.classList.add('terr-red');
-    var pid = to.assignedIds[0], f = pid && anim.fig[pid];
-    if (f) { f.el.className = 'astro s-waitInfo'; if (f.bub) f.bub.textContent = '⏳'; }
+    paintGapFocus(gap);
     renderLivePanel();
   }
 
@@ -1028,7 +1481,10 @@
       ldPanel('ld-brief');
     } else if (liveState.phase === 'prompt') {
       var g = liveState.currentGap, plan = currentPlan(), to = byId(plan.tasks, g.taskId);
-      $('ld-prompt').innerHTML = '<div class="ld-txt"><h3>' + t.ldFrozenT(personName(to)) + '</h3><p>' + t.ldFrozenP(nm(to.name)) + '</p></div><button class="btn primary glow" id="ld-fix">' + t.ldFixBtn + '</button>';
+      var kind = gapKindState(g, to);
+      var head = kind === 'waitInfo' ? t.ldLateT : (kind === 'rework' ? t.ldAssumeT : t.ldFrozenT);
+      var body = kind === 'waitInfo' ? t.ldLateP : (kind === 'rework' ? t.ldAssumeP : t.ldFrozenP);
+      $('ld-prompt').innerHTML = '<div class="ld-txt"><h3>' + head(personName(to)) + '</h3><p>' + body(nm(to.name)) + '</p></div><button class="btn primary glow" id="ld-fix">' + t.ldFixBtn + '</button>';
       $('ld-fix').addEventListener('click', function () { liveState.phase = 'spot'; renderLivePanel(); });
       ldPanel('ld-prompt');
     } else if (liveState.phase === 'spot') { renderSpot(); }
@@ -1042,20 +1498,24 @@
       var arr = sendMin + (P.CHANNELS[ch] || 0), onTime = arr <= to.startMin;
       return '<button class="ld-opt ' + (onTime ? 'fast' : 'slow') + '" type="button" data-ch="' + ch + '">' +
         '<span class="oc">' + chIcon(ch) + ' ' + t['ch' + ch.charAt(0).toUpperCase() + ch.slice(1)] + '</span>' +
-        '<span class="lat">+' + (P.CHANNELS[ch] || 0) + (L === 'ja' ? '分' : ' min') + '</span>' +
-        '<span class="verdict">' + (onTime ? (L === 'ja' ? '✓ 間に合う' : '✓ in time') : (L === 'ja' ? '⚑ 遅い' : '⚑ too late')) + '</span></button>';
+        '<span class="lat">+' + (P.CHANNELS[ch] || 0) + t.chMin + '</span>' +
+        '<span class="verdict">' + (onTime ? t.vInTime : t.vTooLate) + '</span></button>';
     }).join('');
     $('ld-spot').innerHTML =
       '<div class="ld-spot-head"><h3>' + t.spotTitle(cname) + '</h3><p class="ld-sub">' +
       t.spotSub(from ? personName(from) : nm(P.role('chef').name), personName(to), hhmm(to.startMin)) + '</p></div>' +
       '<div class="ld-opts" id="ld-opts">' + chips + '</div>' +
-      '<div class="ld-preview" id="ld-preview"><span class="pv-lbl">' + (L === 'ja' ? 'プレビュー' : 'Preview') + '</span><span id="ld-pv-txt">' + t.spotHover + '</span></div>';
+      '<div class="ld-preview" id="ld-preview"><span class="pv-lbl">' + t.pvLbl + '</span><span id="ld-pv-txt">' + t.spotHover + '</span></div>';
     var opts = $('ld-opts');
     opts.querySelectorAll('.ld-opt').forEach(function (b) {
       var ch = b.dataset.ch;
       b.addEventListener('mouseenter', function () { previewChannel(g, ch, false); });
       b.addEventListener('focus', function () { previewChannel(g, ch, false); });
       b.addEventListener('click', function () { opts.querySelectorAll('.ld-opt').forEach(function (x) { x.classList.remove('sel'); }); b.classList.add('sel'); previewChannel(g, ch, true); });
+    });
+    // hover ends with nothing selected → the hypothetical tints yield back to the real diagnosis
+    opts.addEventListener('mouseleave', function () {
+      if (!opts.querySelector('.ld-opt.sel') && liveState.currentGap) paintGapFocus(liveState.currentGap);
     });
     ldPanel('ld-spot');
   }
@@ -1067,7 +1527,7 @@
     if (g.kind === 'late') {
       var ex = plan.handoffs.filter(function (h) { return h.cardId === g.cardId && h.toRoleId === to.ownerRoleId; })[0];
       if (ex) cfg.overrides.handoffs[ex.id] = Object.assign({}, ex, { channel: ch, trigger: trig });
-    } else {
+    } else if (from) {
       var assume = (to.assumeOn || []).indexOf(g.cardId) >= 0;
       cfg.overrides.handoffs['hlive_' + g.cardId + '_' + to.ownerRoleId] = { cardId: g.cardId, fromRoleId: from.ownerRoleId, fromTaskId: from.id, toRoleId: to.ownerRoleId, toTaskId: to.id, trigger: trig, channel: ch, ifLate: assume ? 'assume' : 'idle', reworkKind: assume ? 'wrongFish' : null, content: { en: '', jp: '' } };
     }
@@ -1105,6 +1565,7 @@
 
   function commitChannel(g, ch) {
     var plan = currentPlan(), to = byId(plan.tasks, g.taskId), from = producerOf(plan, g.cardId);
+    if (g.kind !== 'late' && !from) return;      // no producer to send from — nothing to commit
     var trig = { type: 'onTaskDone', taskId: from ? from.id : null };
     if (g.kind === 'late') {
       var ex = plan.handoffs.filter(function (h) { return h.cardId === g.cardId && h.toRoleId === to.ownerRoleId; })[0];
@@ -1120,7 +1581,8 @@
     sim.paused = false;
     var guard = 0; while ((sim.clockMin || 0) < now && !sim.finished && guard++ < 400) { if (sim.paused) { sim.paused = false; sim.checkpoint = null; } P.tick(sim); }
     anim.cascade = P.cascadeTrace(sim.plan); anim.cascade.has = anim.cascade.hasFault;
-    clearStationTints(); renderSim(sim);
+    buildMotes(sim);                              // re-plan the flying hand-offs against the patched schedule
+    clearStationTints(); clearGapFocus(); renderSim(sim);
     livePausedForFix = false; liveState.phase = 'brief'; liveState.currentGap = null; renderLivePanel();
   }
 
@@ -1129,7 +1591,8 @@
     var sc = P.score(sim), fd = P.fishdaySchedule(currentPlan());
     var win = sc.efficiency === 100 && sc.wrongFishCount === 0 && (fd.dinnerMin == null || fd.dinnerMin <= 1080);
     liveState.phase = 'result'; liveState.result = { win: win, sc: sc, fd: fd };
-    renderResult(); if (win) fireFanfare();
+    renderResult();
+    if (win && !anim.fanfared) { anim.fanfared = true; fireFanfare(); }   // one beat only — 18:00 already fired it on a clean serve
   }
 
   function renderResult() {
@@ -1153,6 +1616,7 @@
 
   function liveToReport() {
     stopAnim(); if (timer) { clearInterval(timer); timer = null; }
+    clearFinishTimer(); livePausedForFix = false;
     lastResult = { trip: P.score(sim), day: P.daySummary(sim), segment: 'fishday' };
     document.body.classList.remove('running');
     $('run').classList.add('hidden'); $('live-dock').classList.add('hidden'); $('report').classList.remove('hidden');

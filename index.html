@@ -95,8 +95,10 @@
   <section id="run" class="hidden">
     <div class="runwrap">
       <div class="sitemap" id="sitemap">
+        <div class="skytint" id="skytint"></div>
         <div class="paths" id="paths"></div>
         <div id="stations"></div>
+        <div class="motes" id="motes"></div>
         <div class="figs" id="figs"></div>
         <div class="cascade-pulse" id="cascade-pulse"></div>
         <div class="banner" id="banner"></div>
@@ -178,7 +180,7 @@
 
 <!-- ============ PROBLEM DETAIL PANEL ============ -->
 <div class="modal" id="detail-modal">
-  <div class="sheet inspect-sheet">
+  <div class="sheet inspect-sheet" role="dialog" aria-modal="true" aria-labelledby="detail-title">
     <div class="inspect-head"><div class="ins-ic" id="detail-ic">🔍</div>
       <div><h2 id="detail-title"></h2><div class="ins-sub" id="detail-sub"></div></div></div>
     <div id="detail-body"></div>
@@ -188,7 +190,7 @@
 
 <!-- ============ ARROW EDIT PANEL (fishday handoffs) ============ -->
 <div class="modal" id="arrow-modal">
-  <div class="sheet inspect-sheet">
+  <div class="sheet inspect-sheet" role="dialog" aria-modal="true" aria-labelledby="ar-title">
     <div class="inspect-head"><div class="ins-ic">📨</div>
       <div><h2 id="ar-title"></h2><div class="ins-sub" id="ar-sub"></div></div></div>
     <div id="ar-body"></div>
@@ -201,7 +203,7 @@
 
 <!-- ============ CHECKPOINT INSPECTOR (fishday 関所) ============ -->
 <div class="modal" id="inspect-modal">
-  <div class="sheet">
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="insp-title">
     <h2 id="insp-title"></h2>
     <div class="tag" id="insp-sub" style="margin-bottom:12px;"></div>
     <div id="insp-body" class="insp-body"></div>
@@ -211,8 +213,8 @@
 
 <!-- ============ RULES ============ -->
 <div class="modal" id="rules-modal">
-  <div class="sheet">
-    <h2 data-i18n="rulesTitle"></h2>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="rules-title">
+    <h2 id="rules-title" data-i18n="rulesTitle"></h2>
     <div id="rules-body"></div>
     <div class="foot"><button class="btn" id="rules-close" data-i18n="closeBtn"></button></div>
   </div>

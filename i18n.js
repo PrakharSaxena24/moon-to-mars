@@ -17,7 +17,7 @@
 
       // --- setup ---
       canvasTitle: 'Project canvas',
-      cvDays: 'Period', cvDaysUnit: 'days',
+      cvDays: 'Period', cvDaysUnit: 'days', cvGoal: 'Goal',
       cvLocation: 'Location', cvHeadcount: 'Participants', cvBudget: 'Budget cap', cvConstraints: 'Constraints', cvSuccess: 'Success conditions',
       cvHeadcountNote: function (s, g, c) { return s + ' organizers · ' + (c || 0) + ' chefs · ' + g + ' guests'; }, guestsShort: 'guests',
       orgTitle: 'Org & roles',
@@ -35,6 +35,7 @@
       mcApprover: 'Approver',
       mcPayMethod: 'Payment',
       mcReceipt: 'Receipt',
+      receipt_required: 'required', receipt_photo: 'photo OK', receipt_lenient: 'lenient',
       mcSpendOk: 'ready: spend can happen during the run',
       mcSpendBlocked: 'blocked: approval, method or reserve is not usable',
       mcCanPay: function (n) { return 'pay cap ¥' + n; },
@@ -64,7 +65,6 @@
       noWarnings: 'No warnings — the plan is running clean.',
       bannerText: '⛔ The rehearsal froze — a critical gap stopped the team',
       legWorking: 'working', legStuck: 'stalled (a gap)', legResolved: 'done',
-      logStart: 'Rehearsal started: Ogasawara, day 1.',
 
       // --- report ---
       gradeLbl: 'Rehearsal grade',
@@ -114,6 +114,7 @@
       arriveAssume: 'If late, the crew proceeds on a guess → wrong-fish rework.',
       arDelete: 'Erase arrow',
       chFaceToFace: 'Face-to-face', chRadio: 'Radio', chPhone: 'Phone', chChat: 'Chat', chBoard: 'Notice board',
+      chMin: ' min', vInTime: '✓ in time', vTooLate: '⚑ too late', pvLbl: 'Preview',
 
       // --- run: efficiency readouts ---
       effLbl: 'Efficiency',
@@ -131,8 +132,12 @@
       modeMorning: '📋 Plan first',
       ldBriefT: 'The rehearsal is running.',
       ldBriefP: '24 people, one dinner at 18:00. Watch the harbor — the plan shipped with a gap, and someone is about to hit it.',
-      ldFrozenT: function (who) { return '⏳ ' + who + ' is stuck.'; },
+      ldFrozenT: function (who) { return '❓ ' + who + ' is stuck.'; },
       ldFrozenP: function (task) { return 'A fact never reached them, so “' + task + '” can’t start. Paused so you can look — fix the one thing.'; },
+      ldLateT: function (who) { return '⏳ ' + who + ' got the message late.'; },
+      ldLateP: function (task) { return 'The hand-off exists but the channel is too slow, so “' + task + '” waits. Paused so you can re-route it.'; },
+      ldAssumeT: function (who) { return '🐟 ' + who + ' is about to guess.'; },
+      ldAssumeP: function (task) { return 'The fact never arrived, and “' + task + '” can’t wait — they’ll proceed on a wrong default and the galley reworks it. Paused so you can send it first.'; },
       ldFixBtn: 'Fix this →',
       spotTitle: function (card) { return 'How should “' + card + '” reach them?'; },
       spotSub: function (from, to, tm) { return 'From ' + from + ' → ' + to + ', needed by ' + tm + '. Hover a channel to see what happens on the map.'; },
@@ -214,8 +219,8 @@
       e_handoffTiming_label: 'Fishing-day info handoffs', e_handoffTiming_off: 'Menu arrows undrawn · tackle list late', e_handoffTiming_on: 'All arrows drawn & on time',
 
       // --- problem panel + fixpack labels ---
-      pnCause: 'Why it stalls', pnNeeded: 'Needed', pnFix: 'The fix', pnStation: 'Stalls at',
-      fixGapLbl: 'gap', fixGapLblN: 'gaps',
+      pnCause: 'Why it stalls', pnNeeded: 'Needed', pnFix: 'The fix',
+      fixGapLbl: 'gap', fixGapLblN: 'gaps', gapChip: 'gap',
       detailDecoy: 'Running clean — no gap here.',
 
       // --- rules ---
@@ -233,11 +238,7 @@
 
       // --- function-valued (counts) ---
       dayLine: function (d, t) { return 'Day ' + d + ' / ' + t; },
-      budgetTxt: function (pct) { return pct + '% of cap'; },
-      gapCount: function (n) { return n + ' design gap' + (n === 1 ? '' : 's') + ' stalled the rehearsal.'; },
-      hintGaps: function (n) { return '⚠️ ' + n + ' gap' + (n === 1 ? '' : 's') + ' still open — characters will stall there. Close them, or run to see what happens.'; },
-      hintReady: '✅ All gaps closed — the plan should run clean for an A. Press Run to confirm.',
-      scoreLine: function (s) { return s + ' / 100'; }
+      hintGaps: function (n) { return '⚠️ ' + n + ' gap' + (n === 1 ? '' : 's') + ' still open — characters will stall there. Close them, or run to see what happens.'; }
     },
 
     ja: {
@@ -250,7 +251,7 @@
 
       // --- setup ---
       canvasTitle: 'プロジェクトキャンバス',
-      cvDays: '期間', cvDaysUnit: '日間',
+      cvDays: '期間', cvDaysUnit: '日間', cvGoal: '目標',
       cvLocation: '場所', cvHeadcount: '参加人数', cvBudget: '予算上限', cvConstraints: '制約', cvSuccess: '成功条件',
       cvHeadcountNote: function (s, g, c) { return '運営' + s + '名・料理' + (c || 0) + '名・ゲスト' + g + '名'; }, guestsShort: 'ゲスト',
       orgTitle: '体制・役割',
@@ -268,6 +269,7 @@
       mcApprover: '承認者',
       mcPayMethod: '支払',
       mcReceipt: '領収書',
+      receipt_required: '必須', receipt_photo: '写真可', receipt_lenient: '緩め',
       mcSpendOk: '準備OK：実行中に支出できる',
       mcSpendBlocked: '停止：承認・支払手段・予備費が使えない',
       mcCanPay: function (n) { return '支払上限 ¥' + n; },
@@ -297,7 +299,6 @@
       noWarnings: '警告なし——計画は順調に進行中。',
       bannerText: '⛔ リハーサル停止——重大なギャップでチームが止まりました',
       legWorking: '作業中', legStuck: '停止（ギャップ）', legResolved: '完了',
-      logStart: 'リハーサル開始：小笠原・1日目。',
 
       // --- report ---
       gradeLbl: 'リハーサル評価',
@@ -347,6 +348,7 @@
       arriveAssume: '遅れると推測で進行→魚違いの手戻りになります。',
       arDelete: '矢印を消す',
       chFaceToFace: '対面', chRadio: '無線', chPhone: '電話', chChat: 'チャット', chBoard: '掲示板',
+      chMin: '分', vInTime: '✓ 間に合う', vTooLate: '⚑ 遅い', pvLbl: 'プレビュー',
 
       // --- run: efficiency readouts ---
       effLbl: '稼働効率',
@@ -364,8 +366,12 @@
       modeMorning: '📋 先に計画',
       ldBriefT: 'リハーサル進行中。',
       ldBriefP: '24名、夕食は18:00。港を見て——計画には穴があり、誰かがぶつかる寸前。',
-      ldFrozenT: function (who) { return '⏳ ' + who + ' が止まった。'; },
+      ldFrozenT: function (who) { return '❓ ' + who + ' が止まった。'; },
       ldFrozenP: function (task) { return '必要な情報が届かず「' + task + '」が始められない。止めて確認——一つだけ直そう。'; },
+      ldLateT: function (who) { return '⏳ ' + who + ' への連絡が遅れた。'; },
+      ldLateP: function (task) { return '受け渡しはあるが手段が遅く、「' + task + '」が手待ちに。止めたので、届け方を変えよう。'; },
+      ldAssumeT: function (who) { return '🐟 ' + who + ' が推測で動こうとしている。'; },
+      ldAssumeP: function (task) { return '情報が届かないまま「' + task + '」は待てない——誤った前提で進み、厨房が手戻りする。先に届けよう。'; },
       ldFixBtn: '直す →',
       spotTitle: function (card) { return '「' + card + '」をどう届ける？'; },
       spotSub: function (from, to, tm) { return from + ' → ' + to + '、期限 ' + tm + '。手段にカーソルを合わせると地図で結果を確認できます。'; },
@@ -447,8 +453,8 @@
       e_handoffTiming_label: '釣行日の情報受け渡し', e_handoffTiming_off: '献立未伝達・釣具リスト遅延', e_handoffTiming_on: '全矢印を定刻どおりに',
 
       // --- problem panel + fixpack ---
-      pnCause: '止まる理由', pnNeeded: '必要な役割', pnFix: '修正', pnStation: '停止場所',
-      fixGapLbl: '件', fixGapLblN: '件',
+      pnCause: '止まる理由', pnNeeded: '必要な役割', pnFix: '修正',
+      fixGapLbl: '件', fixGapLblN: '件', gapChip: '要修正',
       detailDecoy: '順調——ここにギャップはありません。',
 
       // --- rules ---
@@ -466,11 +472,7 @@
 
       // --- function-valued ---
       dayLine: function (d, t) { return d + '日目 / ' + t; },
-      budgetTxt: function (pct) { return '上限の' + pct + '%'; },
-      gapCount: function (n) { return '設計ギャップ ' + n + ' 件がリハーサルを止めました。'; },
-      hintGaps: function (n) { return '⚠️ 未修正のギャップが ' + n + ' 件——そこで人が止まります。閉じるか、実行して確認を。'; },
-      hintReady: '✅ 全ギャップ解消——きれいに回ってA評価のはず。実行で確認しましょう。',
-      scoreLine: function (s) { return s + ' / 100'; }
+      hintGaps: function (n) { return '⚠️ 未修正のギャップが ' + n + ' 件——そこで人が止まります。閉じるか、実行して確認を。'; }
     }
   };
 
