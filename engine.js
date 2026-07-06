@@ -41,6 +41,16 @@
   var DAY_HOUR_END = 1140;       // 19:00 — coarse-day grid window closes (14h window)
   var HOUR_DT = 60;              // one hour, in minutes — the coarse grid's display granularity
 
+  // ---- §20 authorable all-days tunables (DATA ONLY in this phase — nothing reads these yet) ----
+  // SNAP_MIN: per-segment placement-snap granularity for the future draggable editor.
+  // DAY_WINDOWS: the authoring window [openMin,closeMin] per segment (mirrors DAY_START_MIN/
+  // DAY_END_MIN for fishday and DAY_HOUR_START/DAY_HOUR_END for the coarse days, unified).
+  // AUTHORABLE: the segment ids the future deck→arrange→connect editor will cover.
+  var SNAP_MIN = { arrival: 60, ops: 60, return: 60, fishday: 15 };
+  var DAY_WINDOWS = { fishday: [DAY_START_MIN, DAY_END_MIN], arrival: [DAY_HOUR_START, DAY_HOUR_END],
+    ops: [DAY_HOUR_START, DAY_HOUR_END], return: [DAY_HOUR_START, DAY_HOUR_END] };
+  var AUTHORABLE = ['arrival', 'ops', 'return', 'fishday'];
+
   function mulberry32(seed) { var a = seed >>> 0; return function () { a |= 0; a = (a + 0x6D2B79F5) | 0; var t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
   function clone(o) { return JSON.parse(JSON.stringify(o)); }
   function L(en, jp) { return { en: en, jp: jp }; }
@@ -185,6 +195,21 @@
         deps: o.deps || [], difficulty: o.diff || 2, neededResources: o.res || [], neededInfo: o.info || [],
         neededAuthority: o.auth || null, produces: o.produces || [], assumeOn: o.assumeOn || [],
         wrongFishPenaltyMin: o.wfPenalty || 0, guestFacing: !!o.guest };
+    }
+    // §20.3 — HD() mirrors FD() for the three authorable coarse days (arrival/ops/return):
+    // same output shape as a fishday task (minus the day-clock startDay/dur/phase/day fields
+    // FD carries only so the legacy 10-day frame can run fishday), so a future daySchedule(plan,seg)
+    // can treat HD and FD tasks identically. Adds `required` (default true; false = a decoy —
+    // a plausible-but-wrong card the deck offers that must NOT end up in the canonical/scored set).
+    // opts: {deps, info, produces, assumeOn, guestFacing, baseStartMin, required, res, diff}.
+    function HD(id, en, jp, st, roleId, ids, startMin, durMin, o) {
+      o = o || {};
+      return { id: id, name: L(en, jp), station: st, ownerRoleId: roleId, assignedIds: ids.slice(),
+        startMin: startMin, durMin: durMin,
+        baseStartMin: (typeof o.baseStartMin === 'number') ? o.baseStartMin : startMin, // promised time; see FD's comment above
+        deps: o.deps || [], difficulty: o.diff || 2, neededResources: o.res || [], neededInfo: o.info || [],
+        produces: o.produces || [], assumeOn: o.assumeOn || [],
+        required: o.required === false ? false : true, guestFacing: !!o.guestFacing };
     }
     return {
       project: {
@@ -375,7 +400,124 @@
         { id: 'cr_health', condition: L('Participant illness/injury', '参加者の体調不良'), reporterRoleId: 'safetyLead', reportToRoleId: null, decisionDeadline: 'immediate', channel: 'phone' }, // GAP D: no report route
         { id: 'cr_change', condition: L('Schedule change', '予定変更'),              reporterRoleId: 'pm',         reportToRoleId: 'owner', decisionDeadline: 'sameDay',  channel: 'board' },
         { id: 'cr_return', condition: L('Return headcount', '帰着確認'),            reporterRoleId: 'comms',      reportToRoleId: 'pm',    decisionDeadline: 'immediate',channel: 'board' }
-      ]
+      ],
+
+      // ===========================================================================
+      // §20.3 — plan.days: the three authorable coarse-day rosters (arrival/ops/return),
+      // Phase 1 (DATA ONLY — nothing in score()/detect()/createSim/mergePlan reads this
+      // yet; Phase 2 wires it up). fishday is intentionally ABSENT — its data stays in
+      // plan.tasks/plan.handoffs (frozen, byte-identical to before this change).
+      //
+      // Each day is { tasks:[HD(...)...], handoffs:[H(...)...], decoys:[taskId...] }.
+      // `tasks` holds BOTH the required roster (required:true, the default) and the
+      // decoys (required:false); `decoys` is just the id list into that same array.
+      // Every day ships fully staffed & wired here on 60-min quanta within [300,1140] —
+      // a canonical "would score 100" reference the future scoreDay/canonDay(seg) checks
+      // against — mirroring canonHandoffs()'s role for fishday. Each day's handoffs reuse
+      // the existing infoCards catalog (ic_ferry/ic_rooms/ic_tackle/ic_food/ic_catch/
+      // ic_cash/ic_return — no new cards were needed) and include 2–3 handoffs that are
+      // deliberately back-to-back (producer task ends the exact minute the consumer task
+      // starts), each drawn on a near-zero-latency channel (faceToFace/radio) so the
+      // canonical arrangement is zero-idle — exactly the arrangement a slower channel
+      // (chat +10 / board +30) would push late once Phase 2's daySchedule prices it.
+      // ===========================================================================
+      days: {
+        arrival: {
+          tasks: [
+            // --- required roster (~10): ferry -> crossing -> check-in -> intake -> safety -> stow -> dinner -> headcount ---
+            HD('hd_a_ferrycheck',   'Confirm ferry departure & manifest', '船便出港時刻・乗船名簿確認',       'port',    'pm',         ['p02'], 300, 60,  { produces: ['ic_ferry'] }),
+            HD('hd_a_board',        'Ferry boarding & assemble',          '乗船確認・集合',                   'port',    'logi',       ['p06'], 360, 60,  { deps: ['hd_a_ferrycheck'], info: ['ic_ferry'] }),
+            HD('hd_a_cross',        'Sea crossing & seasickness watch',   '渡航・船酔い対応',                 'vessel',  'siteLead',   ['p03'], 420, 180, { deps: ['hd_a_board'], diff: 3 }),
+            HD('hd_a_checkin',      'Check-in & room assignment',         '受付・部屋割り',                   'lodging', 'logi',       ['p06'], 600, 60,  { deps: ['hd_a_cross'], produces: ['ic_rooms'] }),
+            HD('hd_a_foodsource',   'Food source & allergy check',        '食材調達・アレルギー確認',         'finance', 'budgetLead', ['p04'], 660, 60,  { produces: ['ic_food'] }),
+            HD('hd_a_intake',       'Supply & gear intake (drinks, tackle, food, ice)', '物資・釣具搬入（飲料・釣具・食材・氷）', 'lodging', 'logi', ['p06'], 660, 60, { deps: ['hd_a_checkin'], produces: ['ic_tackle'], res: ['storage'] }),
+            HD('hd_a_safety',       'Safety briefing',                    '安全説明会',                       'clinic',  'safetyLead', ['p05'], 660, 60,  { diff: 3 }),
+            HD('hd_a_gearstow',     'Gear stow',                          '道具収納',                         'port',    'specialist', ['p08'], 720, 60,  { deps: ['hd_a_intake'], info: ['ic_tackle'] }),
+            HD('hd_a_dinnerprep',   'First-night meal prep',              '初日夕食仕込み',                   'mess',    'chef',       ['p09', 'p10'], 720, 120, { deps: ['hd_a_intake'], info: ['ic_food'], res: ['food'], diff: 3 }),
+            HD('hd_a_headcount',    'Arrival headcount',                  '到着点呼',                         'port',    'comms',      ['p07'], 840, 60,  { deps: ['hd_a_checkin'], info: ['ic_rooms'] }),
+            HD('hd_a_dinnerserve',  'First-night meal service',           '初日夕食提供',                     'mess',    'chef',       ['p09', 'p10', 'p11'], 1080, 60, { deps: ['hd_a_dinnerprep'], res: ['food'], guestFacing: true }),
+            // --- decoys (3): plausible-but-wrong cards the deck offers; never in the required set ---
+            HD('hd_a_dec_nightfish',   'Night beach fishing',      '夜釣り',                   'vessel', 'specialist', [], 1080, 60, { required: false, diff: 3 }),
+            HD('hd_a_dec_sightseeing', 'Sightseeing detour',       '観光への立ち寄り',         'port',   'logi',       [], 480,  60, { required: false }),
+            HD('hd_a_dec_soloTackle',  'Early solo tackle test',   '個人的な早朝釣具テスト',   'port',   'specialist', [], 300,  60, { required: false })
+          ],
+          handoffs: [
+            H('h_a_ferry', 'ic_ferry',  'pm',         'hd_a_ferrycheck', 'logi',       'hd_a_board',      { type: 'onTaskDone', taskId: 'hd_a_ferrycheck' }, 'faceToFace', 'idle', null,
+              'Ferry departs 06:00 sharp · full manifest confirmed', '船便6:00定刻出港・乗船名簿確認済'),
+            H('h_a_tackle', 'ic_tackle', 'logi',       'hd_a_intake',     'specialist', 'hd_a_gearstow',   { type: 'onTaskDone', taskId: 'hd_a_intake' }, 'radio', 'idle', null,
+              'Tackle & ice landed and staged at the port shed', '釣具・氷を港の倉庫に搬入・配置済'),
+            H('h_a_food', 'ic_food',    'budgetLead', 'hd_a_foodsource', 'chef',       'hd_a_dinnerprep', { type: 'onTaskDone', taskId: 'hd_a_foodsource' }, 'faceToFace', 'idle', null,
+              'Supplier confirmed · 1 shellfish allergy on file', '仕入先確認済・貝アレルギー1名'),
+            H('h_a_rooms', 'ic_rooms',  'logi',       'hd_a_checkin',    'comms',      'hd_a_headcount',  { type: 'onTaskDone', taskId: 'hd_a_checkin' }, 'chat', 'idle', null,
+              'All 24 checked in and keyed to rooms', '24名全員チェックイン・鍵配布済')
+          ],
+          decoys: ['hd_a_dec_nightfish', 'hd_a_dec_sightseeing', 'hd_a_dec_soloTackle']
+        },
+
+        ops: {
+          tasks: [
+            // --- required roster (~12): a representative non-fishing ops day ---
+            HD('hd_o_weather',     'Weather & safety check',           '天候・安全確認',           'clinic',  'safetyLead', ['p05'], 300, 60,  { produces: ['ic_weather'], diff: 3 }),
+            HD('hd_o_tackleprep',  'Tackle prep',                      '釣具準備',                 'port',    'logi',       ['p06'], 300, 60,  { produces: ['ic_tackle'], res: ['tackle'] }),
+            HD('hd_o_shorefish',   'Shore-fishing session',            '陸釣り',                   'port',    'specialist', ['p08'], 360, 240, { deps: ['hd_o_weather', 'hd_o_tackleprep'], info: ['ic_weather', 'ic_tackle'], produces: ['ic_catch'], res: ['tackle'], diff: 3 }),
+            HD('hd_o_catchhandle', 'Catch handling & ice',             '漁獲処理・保管',           'mess',    'logi',       ['p06'], 600, 60,  { deps: ['hd_o_shorefish'], info: ['ic_catch'], res: ['ice'] }),
+            HD('hd_o_foodprep',    'Food prep',                        '食材仕込み',               'mess',    'chef',       ['p09', 'p10'], 300, 120, { res: ['food'], diff: 3 }),
+            HD('hd_o_foodsource',  'Food source & allergy check',      '食材調達・アレルギー確認', 'finance', 'budgetLead', ['p04'], 300, 60,  { produces: ['ic_food'] }),
+            HD('hd_o_lunch',       'Guest lunch service',              'ゲスト昼食提供',           'mess',    'chef',       ['p09', 'p10', 'p11'], 660, 60, { deps: ['hd_o_foodprep'], res: ['food'], guestFacing: true }),
+            HD('hd_o_dinnerprep',  'Dinner prep',                      '夕食仕込み',               'mess',    'chef',       ['p09', 'p10'], 780, 120, { deps: ['hd_o_lunch'], info: ['ic_food'], res: ['food'], diff: 3 }),
+            HD('hd_o_dinnerserve', 'Dinner service',                   '夕食提供',                 'mess',    'chef',       ['p09', 'p10', 'p11'], 1080, 60, { deps: ['hd_o_dinnerprep'], res: ['food'], guestFacing: true }),
+            HD('hd_o_accounting',  'Daily accounting & reconcile',     '日次精算・領収書',         'finance', 'budgetLead', ['p04'], 720, 60,  { res: ['cash'] }),
+            HD('hd_o_report',      'Daily report & catch log',         '日次報告・釣果記録',       'command', 'comms',      ['p07'], 960, 60,  { deps: ['hd_o_catchhandle'], info: ['ic_catch'] }),
+            HD('hd_o_clean',       'Cleaning & lodging upkeep',        '清掃・宿泊管理',           'lodging', 'logi',       ['p06'], 900, 60,  {}),
+            HD('hd_o_safetywatch', 'Ongoing safety & weather watch',   '安全・天候監視（終日）',   'clinic',  'safetyLead', ['p05'], 600, 480, { diff: 4 }),
+            // --- decoys (3) ---
+            HD('hd_o_dec_sidefish',  'Solo fishing side-trip',        '個人的な釣行',           'vessel',  'specialist', [], 600, 60, { required: false }),
+            HD('hd_o_dec_marketrun', 'Unscheduled market run',        '予定外の買い出し',       'finance', 'budgetLead', [], 480, 60, { required: false }),
+            HD('hd_o_dec_longlunch', 'Extended lunch social hour',    '延長ランチ交流会',       'mess',    'chef',       [], 720, 60, { required: false })
+          ],
+          handoffs: [
+            H('h_o_weather', 'ic_weather', 'safetyLead', 'hd_o_weather',    'specialist', 'hd_o_shorefish',   { type: 'onTaskDone', taskId: 'hd_o_weather' }, 'faceToFace', 'idle', null,
+              'Wind 5 m/s · GO for shore casting', '風5m/s・陸釣り実施可'),
+            H('h_o_tackle', 'ic_tackle',  'logi',       'hd_o_tackleprep', 'specialist', 'hd_o_shorefish',   { type: 'onTaskDone', taskId: 'hd_o_tackleprep' }, 'radio', 'idle', null,
+              '2 rods + bait staged at the point', '竿2・餌をポイントに配置済'),
+            H('h_o_catch', 'ic_catch',    'specialist', 'hd_o_shorefish',  'logi',       'hd_o_catchhandle', { type: 'onTaskDone', taskId: 'hd_o_shorefish' }, 'radio', 'idle', null,
+              '6 fish ~4 kg landed → ice now', '魚6尾・約4kg→即氷詰め'),
+            H('h_o_food', 'ic_food',      'budgetLead', 'hd_o_foodsource', 'chef',       'hd_o_dinnerprep',  { type: 'onTaskDone', taskId: 'hd_o_foodsource' }, 'phone', 'idle', null,
+              'Dinner stock confirmed · no new allergies', '夕食用食材確認済・新規アレルギーなし'),
+            H('h_o_catchreport', 'ic_catch', 'specialist', 'hd_o_shorefish', 'comms',    'hd_o_report',      { type: 'onTaskDone', taskId: 'hd_o_shorefish' }, 'board', 'idle', null,
+              'Catch logged for the daily report', '日次報告用に釣果を記録')
+          ],
+          decoys: ['hd_o_dec_sidefish', 'hd_o_dec_marketrun', 'hd_o_dec_longlunch']
+        },
+
+        'return': {
+          tasks: [
+            // --- required roster (~9): teardown -> settle -> headcount -> ferry marshal ---
+            HD('hd_r_teardown',     'Teardown & pack',                        '撤収・荷造り',               'lodging', 'logi',       ['p06'], 300, 120, {}),
+            HD('hd_r_checkout',     'Room checkout',                          '部屋チェックアウト',         'lodging', 'logi',       ['p06'], 420, 60,  { deps: ['hd_r_teardown'] }),
+            HD('hd_r_ship',         'Ship remaining supplies',                '残置物の発送',               'port',    'logi',       ['p06'], 480, 60,  { deps: ['hd_r_checkout'], info: ['ic_cash'], res: ['shipping'] }),
+            HD('hd_r_settle',       'Final settlement & receipts',            '最終精算・領収書',           'finance', 'budgetLead', ['p04'], 300, 180, { res: ['cash'], produces: ['ic_cash'], diff: 3 }),
+            HD('hd_r_sitecash',     'Site-lead cash sign-off',                '現地責任者による現金確認',   'finance', 'siteLead',   ['p03'], 480, 60,  { deps: ['hd_r_settle'], info: ['ic_cash'] }),
+            HD('hd_r_headcount',    'Return headcount',                       '帰着点呼',                   'port',    'comms',      ['p07'], 540, 60,  { deps: ['hd_r_ship'], produces: ['ic_return'] }),
+            HD('hd_r_ferrymarshal', 'Ferry marshal & departure roll call',    '乗船整理・出発点呼',         'port',    'pm',         ['p02'], 600, 60,  { deps: ['hd_r_headcount'], info: ['ic_return'] }),
+            HD('hd_r_boarding',     'Ferry boarding for departure',           '出発乗船',                   'port',    'pm',         ['p02'], 660, 60,  { deps: ['hd_r_ferrymarshal'] }),
+            HD('hd_r_finalreport',  'Final report & sign-off',                '最終報告・締め',             'command', 'comms',      ['p07'], 720, 60,  { deps: ['hd_r_boarding'] }),
+            // --- decoys (3) ---
+            HD('hd_r_dec_sidetrip',     'Last-day sightseeing detour',   '最終日の観光立ち寄り', 'port',    'siteLead',   [], 300, 60, { required: false }),
+            HD('hd_r_dec_extraservice', 'Extra souvenir shopping run',   'お土産追加購入',       'finance', 'budgetLead', [], 600, 60, { required: false }),
+            HD('hd_r_dec_latefish',     'One more cast before the ferry','出港前のもう一投',     'vessel',  'specialist', [], 660, 60, { required: false })
+          ],
+          handoffs: [
+            H('h_r_cash_site', 'ic_cash',  'budgetLead', 'hd_r_settle',    'siteLead', 'hd_r_sitecash',    { type: 'onTaskDone', taskId: 'hd_r_settle' }, 'faceToFace', 'idle', null,
+              'All receipts reconciled · reserve intact', '領収書精算完了・予備費残高確認'),
+            H('h_r_cash_ship', 'ic_cash',  'budgetLead', 'hd_r_settle',    'logi',     'hd_r_ship',        { type: 'onTaskDone', taskId: 'hd_r_settle' }, 'radio', 'idle', null,
+              'Shipping cash draw approved', '発送費の現金使用承認済'),
+            H('h_r_return',    'ic_return', 'comms',     'hd_r_headcount', 'pm',       'hd_r_ferrymarshal', { type: 'onTaskDone', taskId: 'hd_r_headcount' }, 'faceToFace', 'idle', null,
+              '24 aboard, headcount confirmed', '24名乗船・点呼確認済')
+          ],
+          decoys: ['hd_r_dec_sidetrip', 'hd_r_dec_extraservice', 'hd_r_dec_latefish']
+        }
+      }
     };
   }
 
@@ -406,6 +548,23 @@
       if (o.handoffs[k] === null) { if (hh) plan.handoffs.splice(plan.handoffs.indexOf(hh), 1); } // erase an arrow
       else if (hh) { for (var hk in o.handoffs[k]) hh[hk] = clone(o.handoffs[k][hk]); }           // patch by id
       else { var nh = clone(o.handoffs[k]); nh.id = k; plan.handoffs.push(nh); }                  // draw a new arrow
+    }
+    // §20 authorable days: placement moves/clears a task on its lane; handoffs patch/erase/draw
+    // per-day arrows (same schema). Never touches plan.tasks/plan.handoffs (the classic + fishday
+    // frozen anchors), so score()/detect() are untouched.
+    if (o.days && plan.days) for (var seg in o.days) {
+      var dd = plan.days[seg]; if (!dd) continue; var od = o.days[seg];
+      if (od.placement) for (var pid in od.placement) {
+        var dt = byId(dd.tasks, pid); if (!dt) continue; var pv = od.placement[pid];
+        if (pv === null) { dt.assignedIds = []; }                                                 // back to the deck (unplaced)
+        else { if (typeof pv.startMin === 'number') dt.startMin = pv.startMin; if (typeof pv.durMin === 'number') dt.durMin = pv.durMin; if (pv.assignedIds) dt.assignedIds = pv.assignedIds.slice(); }
+      }
+      if (od.handoffs) for (var dh in od.handoffs) {
+        var eh = byId(dd.handoffs, dh);
+        if (od.handoffs[dh] === null) { if (eh) dd.handoffs.splice(dd.handoffs.indexOf(eh), 1); }
+        else if (eh) { for (var ek in od.handoffs[dh]) eh[ek] = clone(od.handoffs[dh][ek]); }
+        else { var ndh = clone(od.handoffs[dh]); ndh.id = dh; dd.handoffs.push(ndh); }
+      }
     }
     return plan;
   }
@@ -529,6 +688,16 @@
   // 港 → 船 → 食堂 all the way to dinner.
   // ===========================================================================
   function fishdayTasks(plan) { return plan.tasks.filter(function (t) { return t.day === 'fishday'; }); }
+  // seg accessors — fishday lives in plan.tasks/plan.handoffs (frozen anchors); the authorable
+  // coarse days live in plan.days[seg] (§20). A task is "placed" once a person is on its lane.
+  function tasksForSeg(plan, seg) { if (seg === 'fishday') return fishdayTasks(plan); return (plan.days && plan.days[seg]) ? plan.days[seg].tasks : []; }
+  function handoffsForSeg(plan, seg) { if (seg === 'fishday') return plan.handoffs; return (plan.days && plan.days[seg]) ? plan.days[seg].handoffs : []; }
+  function isPlaced(t) { return !!(t.assignedIds && t.assignedIds.length > 0); }
+  function deckFor(plan, seg) {
+    var all = tasksForSeg(plan, seg), req = [], dec = [], un = [];
+    for (var i = 0; i < all.length; i++) { var t = all[i]; if (t.required === false) dec.push(t.id); else req.push(t.id); if (!isPlaced(t)) un.push(t.id); }
+    return { required: req, decoys: dec, unplaced: un };
+  }
   function arrowsTo(plan, roleId, cardId) {
     var out = [];
     for (var i = 0; i < plan.handoffs.length; i++) { var h = plan.handoffs[i]; if (h.cardId === cardId && h.toRoleId === roleId) out.push(h); }
@@ -557,10 +726,30 @@
   // checkpoint hand-feeds (sim-local; score() never sees them — the plan gap survives
   // a clean re-run, §8). Classic detector blocks are deliberately IGNORED here so a
   // safety gap never double-bills as handoff idle (§9 no-double-count rule).
-  function fishdaySchedule(plan, injections) {
-    var fds = fishdayTasks(plan), i, j, k;
+  // Generalized cascade (§20.2): fishday delegates here so its 220/91%/dinner anchors stay
+  // byte-identical, while the authorable coarse days run the same machine over plan.days[seg].
+  // Only PLACED tasks schedule; arrows/producers resolve within the seg. Adds four authoring
+  // read-offs (unplacedRequired / decoysPlaced / misassigned / overbookMin) the fishday path
+  // simply reports as empty/0.
+  function fishdaySchedule(plan, injections) { return daySchedule(plan, 'fishday', injections); }
+  function daySchedule(plan, seg, injections) {
+    seg = seg || 'fishday';
+    var allSeg = tasksForSeg(plan, seg), fds = [], i, j, k;
+    for (i = 0; i < allSeg.length; i++) if (isPlaced(allSeg[i])) fds.push(allSeg[i]);
     var fdById = {}; for (i = 0; i < fds.length; i++) fdById[fds[i].id] = fds[i];
+    var segHandoffs = handoffsForSeg(plan, seg);
     var owner = {}; for (i = 0; i < plan.infoCards.length; i++) owner[plan.infoCards[i].id] = plan.infoCards[i].ownerRoleId;
+    var partRole = {}; for (i = 0; i < plan.participants.length; i++) partRole[plan.participants[i].id] = plan.participants[i].roleId;
+    // seg-scoped arrow lookup + send/arrival (producer resolved within the seg, then plan.tasks)
+    function arrowsToSeg(roleId, cardId) { var o = []; for (var x = 0; x < segHandoffs.length; x++) { var h = segHandoffs[x]; if (h.cardId === cardId && h.toRoleId === roleId) o.push(h); } return o; }
+    function sendMinSeg(h) {
+      var t;
+      if (h.trigger.type === 'atMinute') return (typeof h.trigger.value === 'number' && isFinite(h.trigger.value)) ? h.trigger.value : null;
+      if (h.trigger.type === 'onTaskDone') { t = fdById[h.trigger.taskId] || byId(plan.tasks, h.trigger.taskId); return (t && typeof t.startMin === 'number') ? (t.startMin + t.durMin) : null; }
+      if (h.trigger.type === 'beforeTaskStart') { t = fdById[h.trigger.taskId || h.toTaskId] || byId(plan.tasks, h.trigger.taskId || h.toTaskId); return (t && typeof t.startMin === 'number') ? (t.startMin - (h.trigger.leadMin || 0)) : null; }
+      return null;
+    }
+    function arrivalSeg(h) { var s = sendMinSeg(h); return s == null ? null : s + (CHANNELS[h.channel] || 0); }
     // static design lens (billed to info, §9), per (consuming task, card) pair — the §6.2
     // checker's unit. Delivery = the EARLIEST drawn arrow, so a redundant slow arrow never
     // bills a pair another (faster) arrow already feeds, and drawing a faster duplicate is
@@ -571,8 +760,8 @@
       for (j = 0; j < t0.neededInfo.length; j++) {
         var cid0 = t0.neededInfo[j];
         if (owner[cid0] === t0.ownerRoleId) continue;                 // owner holds own cards from DAY_START
-        var hs0 = arrowsTo(plan, t0.ownerRoleId, cid0), best0 = null, bestH0 = null;
-        for (k = 0; k < hs0.length; k++) { var a0 = staticArrival(plan, hs0[k]); if (a0 != null && (best0 == null || a0 < best0)) { best0 = a0; bestH0 = hs0[k]; } }
+        var hs0 = arrowsToSeg(t0.ownerRoleId, cid0), best0 = null, bestH0 = null;
+        for (k = 0; k < hs0.length; k++) { var a0 = arrivalSeg(hs0[k]); if (a0 != null && (best0 == null || a0 < best0)) { best0 = a0; bestH0 = hs0[k]; } }
         if (best0 == null) missing.push({ taskId: t0.id, cardId: cid0 });                 // no arrow (or none resolvable)
         else if (best0 > t0.startMin) late.push({ id: bestH0.id, cardId: cid0, taskId: t0.id, lateMin: best0 - t0.startMin });
       }
@@ -593,13 +782,13 @@
           for (j = 0; j < t.neededInfo.length; j++) {
             var cid = t.neededInfo[j];
             if (owner[cid] === t.ownerRoleId) continue;
-            var hs = arrowsTo(plan, t.ownerRoleId, cid), best = null, bestH = null, pend = false;
+            var hs = arrowsToSeg(t.ownerRoleId, cid), best = null, bestH = null, pend = false;
             for (k = 0; k < hs.length; k++) {
               var hh = hs[k], a;
               if (hh.trigger.type === 'onTaskDone' && fdById[hh.trigger.taskId]) {
                 if (!eff[hh.trigger.taskId]) { pend = true; continue; }        // producer not scheduled yet (or cyclic)
                 a = eff[hh.trigger.taskId].end + (CHANNELS[hh.channel] || 0);  // DYNAMIC: producer's effective finish
-              } else { a = staticArrival(plan, hh); }
+              } else { a = arrivalSeg(hh); }
               if (a != null && isFinite(a) && (best == null || a < best)) { best = a; bestH = hh; }
             }
             if (injections) for (k = 0; k < injections.length; k++) { var inj = injections[k]; if (inj.cardId === cid && inj.toRoleId === t.ownerRoleId && (best == null || inj.min < best)) { best = inj.min; bestH = null; } }
@@ -636,11 +825,23 @@
       if (td.guestFacing) guestWaitMin += Math.max(0, e.start - (td.baseStartMin != null ? td.baseStartMin : td.startMin));
       byTask[td.id] = e;
     }
+    // authoring read-offs (empty/0 on the fully-placed, correctly-staffed fishday plan)
+    var unplacedRequired = [], decoysPlaced = [], misassigned = [];
+    for (i = 0; i < allSeg.length; i++) {
+      var at = allSeg[i], placed = isPlaced(at);
+      if (at.required !== false && !placed) unplacedRequired.push(at.id);
+      if (at.required === false && placed) decoysPlaced.push(at.id);
+      if (placed) for (j = 0; j < at.assignedIds.length; j++) { var prid = partRole[at.assignedIds[j]]; if (prid && prid !== at.ownerRoleId) { misassigned.push(at.id); break; } }
+    }
+    var perP = {}, overbookMin = 0;
+    for (i = 0; i < fds.length; i++) { var pt = fds[i]; for (j = 0; j < pt.assignedIds.length; j++) { var pk = pt.assignedIds[j]; (perP[pk] = perP[pk] || []).push({ s: pt.startMin, e: pt.startMin + pt.durMin }); } }
+    for (var pid in perP) { var seq = perP[pid].sort(function (a, b) { return a.s - b.s; }); for (i = 1; i < seq.length; i++) { var ov = seq[i - 1].e - seq[i].s; if (ov > 0) overbookMin += ov; } }
     var serve = r.eff['t_f_serve'];
     return { byTask: byTask, idleTotal: idleTotal, reworkTotal: reworkTotal, availMin: availMin,
       missing: missing, late: late, wrongFish: r.wrongFish, arrivals: r.arrivals, unresolved: unresolved,
       efficiency: availMin > 0 ? Math.round(100 * availMin / (availMin + idleTotal + reworkTotal)) : 100,
-      guestWaitMin: guestWaitMin, dinnerMin: serve ? serve.start : null };
+      guestWaitMin: guestWaitMin, dinnerMin: serve ? serve.start : null,
+      unplacedRequired: unplacedRequired, decoysPlaced: decoysPlaced, misassigned: misassigned, overbookMin: overbookMin };
   }
   function idleMinutes(plan) { var fd = fishdaySchedule(plan); return { total: fd.idleTotal, byTask: fd.byTask }; }
   function wrongFishTasks(plan) { return fishdaySchedule(plan).wrongFish; }
@@ -886,32 +1087,92 @@
       ready: gaps.length === 0 && eventOut.every(function (ev) { return ev.ok; }) && resourceOut.every(function (r) { return r.ok; }) };
   }
 
-  // live readiness hints for the authoring screen (§7.2) — pure, recomputed per edit
-  function readiness(plan) {
-    var out = [], fd = fishdaySchedule(plan), fds = fishdayTasks(plan), i, j;
-    for (var rk in plan.roles) if (!plan.roles[rk].holder) out.push({ type: 'DUTY_UNASSIGNED', roleId: rk });
-    for (i = 0; i < fds.length; i++) if (fds[i].assignedIds.length === 0) out.push({ type: 'TASK_UNSTAFFED', taskId: fds[i].id });
+  // live readiness hints for the authoring screen (§7.2/§20) — pure, recomputed per edit.
+  // fishday delegates so its hint set is byte-identical; coarse days add the deck-authoring hints.
+  function readiness(plan) { return dayReadiness(plan, 'fishday'); }
+  function dayReadiness(plan, seg) {
+    seg = seg || 'fishday';
+    var out = [], fd = daySchedule(plan, seg), all = tasksForSeg(plan, seg), i, j;
+    var placedTasks = []; for (i = 0; i < all.length; i++) if (isPlaced(all[i])) placedTasks.push(all[i]);
+    var segById = {}; for (i = 0; i < all.length; i++) segById[all[i].id] = all[i];
+    var segHo = handoffsForSeg(plan, seg), hoById = {}; for (i = 0; i < segHo.length; i++) hoById[segHo[i].id] = segHo[i];
+    if (seg === 'fishday') {
+      for (var rk in plan.roles) if (!plan.roles[rk].holder) out.push({ type: 'DUTY_UNASSIGNED', roleId: rk });
+      for (i = 0; i < all.length; i++) if (all[i].assignedIds.length === 0) out.push({ type: 'TASK_UNSTAFFED', taskId: all[i].id });
+    } else {
+      for (i = 0; i < fd.unplacedRequired.length; i++) out.push({ type: 'UNPLACED_REQUIRED', taskId: fd.unplacedRequired[i] });
+      for (i = 0; i < fd.decoysPlaced.length; i++) out.push({ type: 'DECOY_PLACED', taskId: fd.decoysPlaced[i] });
+      for (i = 0; i < fd.misassigned.length; i++) out.push({ type: 'MISASSIGNED', taskId: fd.misassigned[i] });
+    }
     for (i = 0; i < fd.missing.length; i++) {
-      var m = fd.missing[i], mt = byId(plan.tasks, m.taskId);
-      out.push({ type: mt.assumeOn.indexOf(m.cardId) >= 0 ? 'WRONG_FISH_RISK' : 'MISSING_ARROW', taskId: m.taskId, cardId: m.cardId });
+      var m = fd.missing[i], mt = segById[m.taskId];
+      out.push({ type: (mt && mt.assumeOn && mt.assumeOn.indexOf(m.cardId) >= 0) ? 'WRONG_FISH_RISK' : 'MISSING_ARROW', taskId: m.taskId, cardId: m.cardId });
     }
     for (i = 0; i < fd.late.length; i++) {
-      var l = fd.late[i], lt = byId(plan.tasks, l.taskId), lh = byId(plan.handoffs, l.id);
-      var wf = (lh && lh.ifLate === 'assume') || (lt && lt.assumeOn.indexOf(l.cardId) >= 0);
+      var l = fd.late[i], lt = segById[l.taskId], lh = hoById[l.id];
+      var wf = (lh && lh.ifLate === 'assume') || (lt && lt.assumeOn && lt.assumeOn.indexOf(l.cardId) >= 0);
       out.push({ type: wf ? 'WRONG_FISH_RISK' : 'ARROW_LATE', handoffId: l.id, taskId: l.taskId, cardId: l.cardId, lateMin: l.lateMin });
     }
-    for (i = 0; i < fds.length; i++) for (j = 0; j < fds[i].deps.length; j++) {
-      var dp = byId(plan.tasks, fds[i].deps[j]);
-      if (dp && dp.day === 'fishday' && dp.startMin + dp.durMin > fds[i].startMin) out.push({ type: 'DEP_BROKEN', taskId: fds[i].id, depId: dp.id });
+    for (i = 0; i < placedTasks.length; i++) for (j = 0; j < placedTasks[i].deps.length; j++) {
+      var dp = segById[placedTasks[i].deps[j]];
+      if (dp && isPlaced(dp) && dp.startMin + dp.durMin > placedTasks[i].startMin) out.push({ type: 'DEP_BROKEN', taskId: placedTasks[i].id, depId: dp.id });
     }
     var per = {};
-    for (i = 0; i < fds.length; i++) for (j = 0; j < fds[i].assignedIds.length; j++) { var pid = fds[i].assignedIds[j]; (per[pid] = per[pid] || []).push(fds[i]); }
+    for (i = 0; i < placedTasks.length; i++) for (j = 0; j < placedTasks[i].assignedIds.length; j++) { var pid = placedTasks[i].assignedIds[j]; (per[pid] = per[pid] || []).push(placedTasks[i]); }
     for (var pid2 in per) {
       var list = per[pid2].slice().sort(function (a, b) { return a.startMin - b.startMin; });
       for (i = 1; i < list.length; i++) if (list[i].startMin < list[i - 1].startMin + list[i - 1].durMin) out.push({ type: 'OVERLOAD', personId: pid2, taskId: list[i].id, otherId: list[i - 1].id });
     }
     return out;
   }
+  // canonDay(seg): the witness that 100 is reachable — force every arrow to face-to-face (0 latency),
+  // so by Phase-1 consistency (producer end ≤ consumer start) nothing is late. applyDayFix writes it.
+  function canonDay(seg) {
+    var tpl = makeTemplate(), dd = tpl.days && tpl.days[seg]; if (!dd) return {};
+    var hoff = {}; for (var i = 0; i < dd.handoffs.length; i++) hoff[dd.handoffs[i].id] = { channel: 'faceToFace' };
+    var o = { days: {} }; o.days[seg] = { handoffs: hoff }; return o;
+  }
+  function applyDayFix(cfg, seg) {
+    cfg = clone(cfg || { seed: 1, overrides: {} }); cfg.overrides = cfg.overrides || {};
+    var fix = canonDay(seg); if (!fix.days) return cfg;
+    cfg.overrides.days = cfg.overrides.days || {};
+    var cur = cfg.overrides.days[seg] || {}; cur.handoffs = cur.handoffs || {};
+    for (var id in fix.days[seg].handoffs) cur.handoffs[id] = fix.days[seg].handoffs[id];
+    cfg.overrides.days[seg] = cur; return cfg;
+  }
+  // scoreDay(plan, seg) — rule-based day score (§20.4). Perfect = every required task placed on the
+  // right role, deps ordered, cards delivered on time, nobody double-booked, no decoys; folds the
+  // seg-relevant classic detectors so a day only tops out when the plan is also sound.
+  function scoreDay(plan, seg) {
+    var ds = daySchedule(plan, seg), deck = deckFor(plan, seg), rd = dayReadiness(plan, seg);
+    var R = deck.required.length || 1, act = {}, probs = detect(plan);
+    for (var i = 0; i < probs.length; i++) act[probs[i].id] = true;
+    var safDecoys = 0, dp2 = tasksForSeg(plan, seg);
+    for (i = 0; i < ds.decoysPlaced.length; i++) { var dt = byId(dp2, ds.decoysPlaced[i]); if (dt && dt.safetyFlag) safDecoys++; }
+    function cl(v, mx) { return Math.max(0, Math.min(mx, v)); }
+    // completion fraction — the authoring categories scale with how much of the required work is
+    // actually placed, so a cleared/half-built day can't coast on unviolated (because empty) categories.
+    var cf = (deck.required.length - ds.unplacedRequired.length) / R;
+    var cats = {};
+    cats.objective = cl(20 * cf, 20);
+    cats.schedule = cl(15 * cf * (1 - Math.min(1, (ds.idleTotal + ds.overbookMin) / Math.max(1, ds.availMin))) - 2 * ds.decoysPlaced.length - (act.fatigue ? 2 : 0) - (seg === 'return' && act.returnLogi ? 2 : 0), 15);
+    cats.roles = cl(15 * cf - 3 * ds.misassigned.length, 15);
+    cats.info = cl(15 * cf - 5 * ds.missing.length - 3 * ds.late.length, 15);
+    cats.budget = cl(10 - (act.budgetAuth ? 6 : 0) - (act.reserve ? 4 : 0), 10);
+    cats.safety = cl(10 - (act.safety ? 10 : 0) - 3 * safDecoys, 10);
+    cats.quality = cl(10 * cf - 4 * ds.wrongFish.length - Math.min(4, Math.floor(ds.guestWaitMin / 15)), 10);
+    cats.health = cl(5 - (act.fatigue ? 5 : 0), 5);
+    var total = cats.objective + cats.schedule + cats.roles + cats.info + cats.budget + cats.safety + cats.quality + cats.health;
+    var clean = rd.length === 0 && ds.unresolved === 0;
+    if (!clean) total = Math.min(total, 89);
+    total = Math.round(total);
+    var grade = total >= 90 ? 'A' : total >= 75 ? 'B' : total >= 60 ? 'C' : 'D';
+    return { seg: seg, score: total, grade: grade, clean: clean, categories: cats,
+      efficiency: ds.availMin > 0 ? Math.round(100 * ds.availMin / (ds.availMin + ds.idleTotal + ds.reworkTotal + ds.overbookMin)) : 100,
+      idleMin: ds.idleTotal, reworkMin: ds.reworkTotal, overbookMin: ds.overbookMin, dinnerMin: ds.dinnerMin,
+      unplacedRequired: ds.unplacedRequired.length, decoysPlaced: ds.decoysPlaced.length, misassigned: ds.misassigned.length };
+  }
+  function projectedDay(cfg, seg) { return scoreDay(mergePlan(cfg), seg); }
 
   // ===========================================================================
   // createSim / tick — the animated rehearsal over the 10-day clock.
@@ -1256,6 +1517,8 @@
     CHEFS: CHEFS, GUESTS: GUESTS, MIN_DT: MIN_DT, DAY_START_MIN: DAY_START_MIN, DAY_END_MIN: DAY_END_MIN,
     CHANNELS: CHANNELS, CHECKPOINTS: CHECKPOINTS,
     fishdayTasks: fishdayTasks, resolveSendMin: resolveSendMin, staticArrival: staticArrival, infoArrival: infoArrival,
+    tasksForSeg: tasksForSeg, handoffsForSeg: handoffsForSeg, isPlaced: isPlaced, deckFor: deckFor, daySchedule: daySchedule,
+    dayReadiness: dayReadiness, scoreDay: scoreDay, projectedDay: projectedDay, canonDay: canonDay, applyDayFix: applyDayFix,
     fishdaySchedule: fishdaySchedule, idleMinutes: idleMinutes, wrongFishTasks: wrongFishTasks,
     reworkMinutes: reworkMinutes, efficiency: efficiency, budgetReadiness: budgetReadiness,
     readiness: readiness, projected: projected,
@@ -1264,7 +1527,9 @@
     ambientActors: ambientActors, boatState: boatState, stationReadiness: stationReadiness, cascadeTrace: cascadeTrace,
     // coarse-day read-only grid (SPEC v2 §ENGINE, pure, no scoring impact)
     DAY_HOUR_START: DAY_HOUR_START, DAY_HOUR_END: DAY_HOUR_END, HOUR_DT: HOUR_DT,
-    dayLayout: dayLayout, derivedHandoffs: derivedHandoffs
+    dayLayout: dayLayout, derivedHandoffs: derivedHandoffs,
+    // §20.3 — authorable all-days rebuild, Phase 1 (data only; nothing reads these yet)
+    SNAP_MIN: SNAP_MIN, DAY_WINDOWS: DAY_WINDOWS, AUTHORABLE: AUTHORABLE
   };
   global.PRS = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
