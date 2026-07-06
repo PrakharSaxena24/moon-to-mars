@@ -623,3 +623,90 @@ resets ALL fishday re-timings (dep-chain idles included); `feedArrow` prefers th
 `atMinute` sends re-clamp when their producer is re-timed; second-finger/wire-hijack and pointercancel-storm
 guards; warnings keep keyboard focus across ticks; Escape follows visual modal stacking; dialogs got a Tab trap
 + focus restore; the live freeze focuses its Fix button and the dock is `aria-live`. Re-verified: 91/91 + 45/45.
+
+---
+
+## 20. Authorable all-days rebuild — hour-level, draggable, choose→arrange (2026-07-06, PLAN APPROVED)
+The owner's direction: **every day (incl. Day 3) becomes hour-level and draggable**, with a two-step
+authoring flow — **choose the required tasks, then arrange them on per-person hour lanes and wire the
+information connections** — scored toward 100. Planned by a Fable architect pass; owner signed off on the
+pivotal calls. This supersedes §19's "coarse days are read-only" decision.
+
+### 20.1 Locked decisions (owner sign-off 2026-07-06)
+- **Direction:** build the authorable days (full plan), not scenario branches.
+- **Day 3 granularity:** hour ruler + **15-min placement snap** (NOT literal 60-min). Keeps the 90-min
+  cook block (5×18), the 0–30 min channel-latency lesson, and **all fishday verify anchors byte-intact**.
+  Other days snap 60 min. `SNAP_MIN = {arrival:60, ops:60, return:60, fishday:15}`.
+- **Scoring identity:** **rule-based** — any consistent arrangement can score 100 (required tasks placed &
+  staffed on the right role, deps ordered, every needed card delivered on time over a priced channel, no
+  double-booking, no decoys). The hidden per-day reference plan is only verify's witness that 100 is reachable.
+- **Day open state:** template stays **fully seeded**; Morning gets a **"Clear day"** action for deck-first
+  authoring (Arrival pre-cleared to half as the tutorial). Protects Live + all anchors.
+- **Live mode:** unchanged, fishday-only this release.
+
+### 20.2 Architecture spine — "blocks quantize, information doesn't"
+Snap constrains **edits**, not the latency math (which stays minute-precise) — so authoring in hours still
+lets minutes leak in (the thesis restated). **Additive engine** (D7 survives): a new `plan.days` container
+that `score()`/`detect()`/the classic 10-day frame **never read** (91 core anchors stay byte-identical);
+`fishdaySchedule` generalizes to one pure `daySchedule(plan,seg)` (fishday delegates, verify pins equality);
+a new rule-based `scoreDay(plan,seg)` beside `score()`. The day-grid **UI is a real rewrite** into one
+deck→arrange→connect editor. §19's `dayLayout`/`derivedHandoffs` + read-only coarse path are retired.
+
+### 20.3 Data model (engine.js)
+- Constants (on `api`): `SNAP_MIN`, `DAY_WINDOWS = {fishday:[240,1200], arrival:[300,1140], ops:[300,1140],
+  return:[300,1140]}`, `AUTHORABLE = ['arrival','ops','return','fishday']`.
+- `plan.days = { arrival:{tasks:[HD…], handoffs:[…], decoys:[id…]}, ops:{…}, return:{…} }` — fishday stays
+  in `plan.tasks`/`plan.handoffs` (frozen). `HD(id,en,jp,station,roleId,ids,startMin,durMin,opts)` mirrors
+  `FD()` minus startDay/dur, plus `required:true|false`. ~10/12/9 required + 3 decoys per day, 60-min quanta,
+  each with 2–3 deliberately **back-to-back critical handoffs** (board=30 idle, chat=10, radio/phone≈0).
+- `overrides.days = { <seg>:{ placement:{taskId:{startMin,durMin,assignedIds[]}|null}, handoffs:{id:h|null} } }`
+  merged by one new `mergePlan` clause. Fishday keeps its legacy `timing`/`staffing`/`handoffs` channels
+  (app.js façade routes by seg; `placement:null` on a fishday task ⇒ `staffing[id]=[]`).
+- New pure helpers (DOM-free, on `api`): `tasksForSeg`, `handoffsForSeg`, `deckFor(plan,seg)→{required,decoys,
+  unplaced}`, `daySchedule(plan,seg,inj?)` (generalized cascade + new read-offs `overbookMin`, `misassigned[]`,
+  `unplacedRequired[]`, `decoysPlaced[]`; `fishdaySchedule` = one-line delegate, pinned equal), `dayReadiness`
+  (adds `UNPLACED_REQUIRED`/`DECOY_PLACED`/`MISASSIGNED`), `scoreDay`, `projectedDay`, `canonDay(seg)` +
+  `applyDayFix(cfg,seg)` (per-day analogue of canonHandoffs/fixHandoffs). `createSim` minute branch
+  generalizes: `minute = AUTHORABLE.indexOf(seg)>=0`, window from `DAY_WINDOWS`, checkpoints fishday-only.
+- Untouched: plan.tasks, plan.handoffs, all 30 FD tasks + canonical/gappy arrows, CHANNELS, CHECKPOINTS,
+  the 8 detectors, applyFix/applyAllFixes, score(), CAT_MAX, Layer-0 helpers, budgetReadiness, intervene.
+
+### 20.4 Scoring formula (deterministic; R = required tasks, ds = daySchedule(plan,seg))
+`objective = 20×(|R|−|unplacedRequired|)/|R|` · `schedule = 15×(1−min(1,(idle+overbook)/avail)) −2×decoysPlaced
+−(fatigue?2) −(seg==='return'&&returnLogi?2)` · `roles = 15 −3×|misassigned| −classic-roles` · `info = 15
+−5×|missing| −3×|late|` · `budget = 10 −(budgetAuth?6)−(reserve?4)` · `safety = 10 −(safety?10)−3×safety-decoys`
+· `quality = 10 −4×|wrongFish| −min(4,⌊guestWait/15⌋)` · `health = 5 −(fatigue?5)`. Floored 0, capped CAT_MAX;
+`clean = dayReadiness==∅ && unresolved==0`; **!clean caps total at 89**; `efficiency = round(100×avail/(avail+
+idle+rework+overbook))`. `scoreDay(plan,'fishday')` reproduces today's fishday numbers (pinned).
+
+### 20.5 verify.js strategy → ~126 checks
+~91 survive untouched (classic gradient, Mission Control, the full fishday temporal block incl. 220/91%/40-late/
+dinner 18:30→18:00/CHANNELS/IDLE_CAP/max-not-sum/intervene, Layer 0, determinism). Retire the 16 §19 grid
+checks (delete `dayLayout`/`derivedHandoffs` last). Add ~35: three per-day 100-anchors via `canonDay`; cleared-day
+D/objective-0; monotone authoring gradient; channel pricing survives at hour quanta (one tight arrow per day:
+board→30 idle, info−3); decoy/misassign/double-book penalties; façade equality `daySchedule('fishday')===
+fishdaySchedule()===220`; merge-surface + `applyDayFix` heal; purity (no perturb of score()/plan.tasks/plan.days).
+
+### 20.6 Phase plan (agent tier · acceptance = `node verify.js` exit 0 each phase)
+0. ✅ Spec memo (this §20) — Opus.
+1. **Day data** (Sonnet, bounded): `plan.days` rosters + decoys + canonical handoffs + `canonDay` + SNAP/WINDOWS
+   + EN/JP names; self-check each reference set internally consistent. Accept: 107 still green + consistency assert.
+2. **Temporal core** (Opus, coupled/heavy): `daySchedule` (fishday delegates), new read-offs, `mergePlan` days
+   clause, tasksForSeg/handoffsForSeg/deckFor, scoreDay/projectedDay/dayReadiness, canonDay/applyDayFix,
+   createSim windows. Accept: all 107 old + new anchors (100-per-day, façade equality 220, channel-at-hour).
+3. **Verify build-out** (Sonnet): full new block; retire the 16 grid checks; delete dayLayout/derivedHandoffs.
+   Accept: ~126/126.
+4. **Editor unification** (Opus, coupled/heavy): Task Deck rail + placement drag + per-seg snap + authorable
+   arrows on all days; delete read-only coarse path; `dayOv`/buildCfg routing; snapshot/restore + fix-conflict
+   extension; keyboard/touch parity. Accept: Playwright — author an arrival day cleared→100; Day-3 editor E2E
+   green (nudge 5→15); Live win path green.
+5. **Run/report + i18n + style** (Sonnet): coarse-day minute playback polish, day report via scoreDay, ~45 new
+   EN/JP keys, deck CSS + reduced-motion. Accept: headless EN+JP run of a coarse day, zero errors, i18n parity.
+6. **Integration + adversarial close-out** (Opus + 1 Fable synthesis): multi-lens review, decoy tuning, mark §19
+   superseded, full verify + E2E. Accept: ~126 verify + E2E green, no Live regression.
+
+### 20.7 Top risks (Fable)
+Cascade drift in Phase 2 (mitigated by delegation-not-duplication + pinned equality) · the hour-day channel
+lesson is weaker by construction (reference plans MUST include tight back-to-back handoffs) · content authoring
+(3 consistency-verified reference plans) is the real schedule cost · fd-* editor carries ~30 §18 hardening fixes
+— the existing Playwright suite must stay green as the guardrail, not be rewritten to match.
