@@ -541,7 +541,15 @@ button{font-family:inherit;}
 .fd-arrows path.ok{stroke:rgba(91,107,69,.8);}
 .fd-arrows path.late{stroke:rgba(193,122,31,.85);stroke-dasharray:5 4;}
 .fd-arrows path.wire{stroke:var(--leader);stroke-dasharray:4 4;pointer-events:none;}
+/* coarse read-only day grid (Arrival/Ops/Return): static Gantt, no drag affordance */
+.fd-block.ro{cursor:default;background:linear-gradient(180deg,var(--bg1),var(--bg2));border-left-color:var(--leader);}
+.fd-block.ro:active{cursor:default;transform:none;}
+.fd-block.ro .fd-bname{pointer-events:none;}
+.fd-arrows path.ro{stroke:rgba(91,107,69,.7);stroke-dasharray:none;pointer-events:stroke;cursor:help;}
 .fd-arrowlist{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px;}
+.fd-ar-chip.ro{cursor:help;}
+.fd-ar-chip.ro.inc{border-style:dashed;color:var(--ink3);}
+.pr-item.ro-note{background:rgba(61,90,108,.1);border-color:rgba(61,90,108,.35);color:var(--leader);}
 .fd-ar-chip{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;padding:4px 10px;border-radius:var(--r-sm);border:1px solid var(--line);background:var(--bg1);cursor:pointer;font-family:inherit;}
 .fd-ar-chip.ok{border-color:rgba(91,107,69,.5);}
 .fd-ar-chip.late{border-color:rgba(193,122,31,.55);background:rgba(193,122,31,.07);}

@@ -36,6 +36,11 @@
   var IDLE_CAP = 60;             // idle charged to a task whose needed arrow was never drawn
   var CHANNELS = { faceToFace: 0, radio: 1, phone: 2, chat: 10, board: 30 }; // send latency, minutes
 
+  // ---- coarse-day (arrival/ops/return) READ-ONLY hour-Gantt tunables (SPEC v2 §ENGINE) ----
+  var DAY_HOUR_START = 300;      // 05:00 — coarse-day grid window opens
+  var DAY_HOUR_END = 1140;       // 19:00 — coarse-day grid window closes (14h window)
+  var HOUR_DT = 60;              // one hour, in minutes — the coarse grid's display granularity
+
   function mulberry32(seed) { var a = seed >>> 0; return function () { a |= 0; a = (a + 0x6D2B79F5) | 0; var t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
   function clone(o) { return JSON.parse(JSON.stringify(o)); }
   function L(en, jp) { return { en: en, jp: jp }; }
@@ -88,6 +93,9 @@
     { id: 'crew',       name: L('Crew / Guest', 'ゲスト'),                icon: '🧑', color: '#8c7f65' }
   ];
   function role(id) { for (var i = 0; i < ROLES.length; i++) if (ROLES[i].id === id) return ROLES[i]; return ROLES[ROLES.length - 1]; }
+
+  // lane order for the coarse-day read-only Gantt (SPEC v2 §ENGINE dayLayout)
+  var ROLE_ORDER = ['owner', 'pm', 'siteLead', 'budgetLead', 'safetyLead', 'logi', 'comms', 'specialist', 'chef'];
 
   var COMPANIES = {
     co_aibos: L('AIBOS (organizer)', 'AIBOS（運営）'),
@@ -727,6 +735,120 @@
     return { hops: out, hasFault: fd.wrongFish.length > 0 || fd.missing.length > 0 || fd.late.length > 0 };
   }
 
+  // ===========================================================================
+  // COARSE-DAY READ-ONLY GRID (SPEC v2 §ENGINE) — pure, DOM-free, no RNG/Date.
+  // dayLayout/derivedHandoffs are a read-only hour-Gantt lens over the SAME
+  // classic (day!=='fishday') task data arrival/ops/return already score from;
+  // they never mutate plan.tasks and never touch score()/detect()/fishdaySchedule.
+  // ===========================================================================
+  function clampInt(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }
+
+  // seg membership over the classic (day-clock) tasks — fishday tasks (day==='fishday')
+  // are never in any of these three segs; the app keeps using the minute path for them.
+  function inSeg(t, seg) {
+    if (t.day === 'fishday') return false;
+    if (seg === 'arrival') return t.startDay === 0;
+    if (seg === 'return') return t.startDay >= 9;
+    if (seg === 'ops') return t.startDay >= 1 && t.startDay < 9;
+    return false;
+  }
+
+  // stable topological sort of a lane's own tasks, respecting only deps that are
+  // ALSO in that lane (deps owned by another role are cross-lane and assumed done
+  // for layout purposes — the same convention fishdaySchedule uses for cross-group
+  // deps). Tie-break is the incoming (startDay,id) order, so ties stay deterministic.
+  function laneTopoOrder(laneTasks) {
+    var idSet = {}, i; for (i = 0; i < laneTasks.length; i++) idSet[laneTasks[i].id] = true;
+    var placed = {}, out = [], remaining = laneTasks.slice(), guard = 0, maxGuard = remaining.length * remaining.length + 4;
+    while (remaining.length && guard++ < maxGuard) {
+      var progressed = false;
+      for (i = 0; i < remaining.length; i++) {
+        var t = remaining[i], ok = true;
+        for (var d = 0; d < t.deps.length; d++) { var did = t.deps[d]; if (idSet[did] && !placed[did]) { ok = false; break; } }
+        if (ok) { out.push(t); placed[t.id] = true; remaining.splice(i, 1); progressed = true; break; }
+      }
+      if (!progressed) { for (i = 0; i < remaining.length; i++) { out.push(remaining[i]); placed[remaining[i].id] = true; } remaining = []; }
+    }
+    return out;
+  }
+
+  // dayLayout(plan, seg) -> { lanes, blocks, unstaffed } — read-only hour-Gantt for a
+  // coarse day. NEVER sorts/mutates plan.tasks in place (score()/detect() iterate it
+  // in original order); all ordering happens on .slice()'d copies.
+  function dayLayout(plan, seg) {
+    if (seg === 'fishday') return null;
+    var segTasks = plan.tasks.slice().filter(function (t) { return inSeg(t, seg); });
+    var staffed = segTasks.filter(function (t) { return t.assignedIds.length > 0; });
+    var unstaffed = segTasks.filter(function (t) { return t.assignedIds.length === 0; }).map(function (t) { return t.id; });
+
+    var lanes = [], i;
+    for (i = 0; i < ROLE_ORDER.length; i++) {
+      var rid = ROLE_ORDER[i], has = false;
+      for (var j = 0; j < staffed.length; j++) if (staffed[j].ownerRoleId === rid) { has = true; break; }
+      if (has) lanes.push(rid);
+    }
+    var laneIdx = {}; for (i = 0; i < lanes.length; i++) laneIdx[lanes[i]] = i;
+
+    var blocks = [];
+    for (i = 0; i < lanes.length; i++) {
+      var roleId = lanes[i];
+      var laneTasks = staffed.filter(function (t) { return t.ownerRoleId === roleId; })
+        .sort(function (a, b) { return a.startDay !== b.startDay ? a.startDay - b.startDay : (a.id < b.id ? -1 : (a.id > b.id ? 1 : 0)); });
+      laneTasks = laneTopoOrder(laneTasks);
+      var nextSubRow = 0, curSubRow = null, cursor = DAY_HOUR_START;
+      for (var k = 0; k < laneTasks.length; k++) {
+        var t = laneTasks[k], full = t.dur >= 6;
+        var dispH = full ? 14 : clampInt(Math.round(t.dur), 1, 4);
+        var durMin = dispH * HOUR_DT, startMin, subRow;
+        if (full) {
+          subRow = nextSubRow++; startMin = DAY_HOUR_START;
+        } else {
+          if (curSubRow === null) { curSubRow = nextSubRow++; cursor = DAY_HOUR_START; }
+          startMin = Math.max(cursor, DAY_HOUR_START);
+          if (startMin + durMin > DAY_HOUR_END) { curSubRow = nextSubRow++; startMin = DAY_HOUR_START; }
+          subRow = curSubRow; cursor = startMin + durMin;
+        }
+        blocks.push({ taskId: t.id, roleId: roleId, laneIndex: laneIdx[roleId], subRow: subRow, startMin: startMin, durMin: durMin });
+      }
+    }
+    return { lanes: lanes, blocks: blocks, unstaffed: unstaffed };
+  }
+
+  // derivedHandoffs(plan, seg) -> [{id,cardId,fromRoleId,toRoleId,toTaskId,fromTaskId,incoming}]
+  // Read-only view of the info flow the engine already models for the coarse days —
+  // it never draws a NEW handoff, only reads task.neededInfo + infoCards + dayLayout
+  // block times to show which lane a consumer would logically hear from.
+  function derivedHandoffs(plan, seg) {
+    var layout = dayLayout(plan, seg);
+    if (!layout) return [];
+    var segStaffed = plan.tasks.slice().filter(function (t) { return inSeg(t, seg) && t.assignedIds.length > 0; });
+    var out = [], seenPairs = {}, i, j;
+    for (i = 0; i < segStaffed.length; i++) {
+      var task = segStaffed[i], info = task.neededInfo || [];
+      var myBlock = null;
+      for (j = 0; j < layout.blocks.length; j++) if (layout.blocks[j].taskId === task.id) { myBlock = layout.blocks[j]; break; }
+      for (j = 0; j < info.length; j++) {
+        var cardId = info[j], card = byId(plan.infoCards, cardId);
+        if (!card) continue;
+        var fromRoleId = card.ownerRoleId, toRoleId = task.ownerRoleId;
+        if (fromRoleId === toRoleId) continue;
+        var key = cardId + '|' + task.id; if (seenPairs[key]) continue; seenPairs[key] = true;
+
+        var fromTaskId = null, latestEnd = null, anyFrom = null;
+        for (var b = 0; b < layout.blocks.length; b++) {
+          var blk = layout.blocks[b]; if (blk.roleId !== fromRoleId) continue;
+          if (anyFrom === null) anyFrom = blk.taskId;
+          var end = blk.startMin + blk.durMin;
+          if (myBlock && end <= myBlock.startMin && (latestEnd === null || end > latestEnd)) { latestEnd = end; fromTaskId = blk.taskId; }
+        }
+        if (fromTaskId === null) fromTaskId = anyFrom; // no eligible "ends before" block -> any block from that role
+        out.push({ id: 'd_' + seg + '_' + cardId + '_' + task.id, cardId: cardId, fromRoleId: fromRoleId, toRoleId: toRoleId,
+          toTaskId: task.id, fromTaskId: fromTaskId, incoming: fromTaskId === null });
+      }
+    }
+    return out;
+  }
+
   // Mission Control budget lens: what the setup board teaches. This is a pure
   // pre-run view over envelopes, usable payment paths, reserves, and spend events.
   function budgetReadiness(plan) {
@@ -1139,7 +1261,10 @@
     readiness: readiness, projected: projected,
     resume: resume, intervene: intervene, memberInfo: memberInfo, canonHandoffs: canonHandoffs,
     // Layer 0 cosmetic view helpers (pure, no scoring impact)
-    ambientActors: ambientActors, boatState: boatState, stationReadiness: stationReadiness, cascadeTrace: cascadeTrace
+    ambientActors: ambientActors, boatState: boatState, stationReadiness: stationReadiness, cascadeTrace: cascadeTrace,
+    // coarse-day read-only grid (SPEC v2 §ENGINE, pure, no scoring impact)
+    DAY_HOUR_START: DAY_HOUR_START, DAY_HOUR_END: DAY_HOUR_END, HOUR_DT: HOUR_DT,
+    dayLayout: dayLayout, derivedHandoffs: derivedHandoffs
   };
   global.PRS = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

@@ -570,6 +570,40 @@ static cascade chain, ping-only motes).
 quit/rerun/mode routing, morning snapshot round-trip, editor socket-tap/clamp/keyboard-nudge, 3 checkpoints →
 A-grade clean report, JP mid-freeze switch, reduced-motion page, resize) — all green, zero JS errors.
 
+---
+
+## 19. All-day timeline grid (2026-07-06) — the editor now renders on every day tab
+The timeline+info-arrow grid used to be Day-3-only and hard-hidden off it (§7's `daySel!=='fishday'`
+gate — the "I can't find it" bug). It now renders on **every day tab**. Day 3 stays the full
+minute-level drag-and-drop authoring editor; **Arrival / Ops / Return are a read-only hour-level
+Gantt** derived from data the engine already holds — no invented reference plans, coarse-day scoring
+unchanged. Locked with a Fable design gut-check (caught: arrows evaporate on coarse days, view-only
+drag reads as fake, two determinism traps) → **PROCEED-WITH-CHANGES**, all applied.
+
+- **Engine (`engine.js`), additive + pure (verify.js asserts score()/tasks unchanged):**
+  `DAY_HOUR_START=300`, `DAY_HOUR_END=1140`, `HOUR_DT=60`; `dayLayout(plan,seg)` →
+  `{lanes[roleId], blocks[{taskId,roleId,laneIndex,subRow,startMin,durMin}], unstaffed[taskId]}`
+  (per-ROLE lanes, dep-topo order on a `.slice()`, hour placement, sub-row stacking for the all-day
+  ops bars; `null` for fishday); `derivedHandoffs(plan,seg)` → info arrows from `neededInfo` ×
+  `infoCard.ownerRoleId`, with a resolved `fromTaskId` or `incoming:true` (line-less chip) when the
+  sender owns no task that day. Seg predicate: `day!=='fishday'` + startDay (0 / 1–8 / ≥9).
+- **App (`app.js`):** `buildFishday`→`buildDayGrid` dispatcher; separate coarse renderer
+  (`buildCoarseGrid`/`drawCoarseArrows`/`cx`) reusing the fd-* DOM/CSS; **coarse days are read-only**
+  (no ports/drag/resize/keyboard; pointer + keyboard handlers gated on `daySel==='fishday'`, so the
+  fishday overrides can never be written from a coarse day); info arrows are inspect-only (hover
+  tooltip); the `pm`-sourced cards render as incoming chips; `unstaffed` tasks (e.g. Return's GAP-G
+  `t_ship`) surface as a "⚠ nobody assigned" note; whole-trip tab stays grid-less. Hard-hide removed
+  → grid visible on entering Morning (discoverability fixed).
+- **Deferred (needs sign-off):** making the coarse days *authorable & scored* (their own 100-anchor)
+  = three hand-authored, consistency-verified hour-level reference plans — the "full puzzle per day".
+- **Verified:** `node verify.js` **107/107** (+16 grid block: shape, in-window, per-row non-overlap,
+  t_ship unstaffed, ops arrows well-formed, return empty, pure) · Playwright **50/50** (+5: read-only
+  grid on all coarse tabs, real ops arrows, return unstaffed note, coarse drag inert, whole-trip
+  hidden) — zero JS errors; Day 3 authoring + Live mode unaffected.
+- **Orchestration:** Opus managed/integrated + wrote the coupled `app.js`/verify; Sonnet built the
+  pure engine helpers (Exec A); Fable ×1 design gut-check. (i18n/verify authored inline when the
+  agent classifier was briefly unavailable.)
+
 **Review round (same pass):** a 5-lens adversarial review of the diff confirmed **21 further defects — all
 fixed**: same-mode Morning re-entry no longer restores a stale snapshot over the authored plan (the one high);
 motes judge lateness per (role, card) pair with the engine's min-over-arrows (a superseded slow arrow no longer

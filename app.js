@@ -102,7 +102,7 @@
   // =========================================================================
   // SETUP
   // =========================================================================
-  function paintSetup() { buildDaySelect(); buildCanvas(); buildOrg(); buildTimeline(); buildMissionControl(); buildEditors(); buildFishday(); updatePlanUI(); }
+  function paintSetup() { buildDaySelect(); buildCanvas(); buildOrg(); buildTimeline(); buildMissionControl(); buildEditors(); buildDayGrid(); updatePlanUI(); }
 
   function buildDaySelect() {
     var box = $('day-select'); if (!box) return;
@@ -251,7 +251,7 @@
     buildDaySelect();
     $('launch').textContent = t.runDayBtn(dayLabel(daySel));
     buildMissionControl();
-    buildFishday();
+    buildDayGrid();
   }
 
   // =========================================================================
@@ -274,10 +274,80 @@
     return { x: fdX(tk.startMin), w: Math.max(10, tk.durMin * PXM), y: RULER_H + lane * LANE_H + 7 };
   }
 
-  function buildFishday() {
+  // ---- coarse read-only day grid (Arrival/Ops/Return): a static Gantt derived from engine data.
+  // Day 3 stays the full minute-level authoring editor; these days score via the checklist, so the
+  // grid here is a VIEW (lanes + blocks + info arrows), never an authoring surface. Separate code
+  // path from the fishday renderer (lanes are per-ROLE here, per-participant there). ----
+  var COARSE_T0 = P.DAY_HOUR_START, COARSE_T1 = P.DAY_HOUR_END, SUB_H = 30, LANE_PAD = 8;
+  function cx(min) { return LBL_W + (min - COARSE_T0) * PXM; }
+  function buildCoarseGrid(seg) {
+    var plan = currentPlan(), lay = P.dayLayout(plan, seg), t = T();
+    if ($('fd-title')) $('fd-title').textContent = t.gridDayTitle(dayLabel(seg));
+    if ($('fd-hint')) $('fd-hint').textContent = t.gridReadonlyHint;
+    if ($('fd-arrows-lbl')) $('fd-arrows-lbl').textContent = t.gridCommsLbl;
+    if (!lay || !lay.lanes.length) {
+      var bx0 = $('fd-canvas'); bx0.innerHTML = ''; bx0.style.height = '40px'; bx0.style.width = '100%';
+      $('fd-arrowlist').innerHTML = ''; $('fd-ready').innerHTML = '<span class="pr-item ro-note">' + t.gridScoreNote + '</span>';
+      return;
+    }
+    var laneTop = [], laneRows = [], y = RULER_H;
+    lay.lanes.forEach(function (rid, i) {
+      var maxSub = 0;
+      lay.blocks.forEach(function (b) { if (b.laneIndex === i && b.subRow > maxSub) maxSub = b.subRow; });
+      laneRows[i] = maxSub + 1; laneTop[i] = y; y += (maxSub + 1) * SUB_H + LANE_PAD;
+    });
+    var W = cx(COARSE_T1) + 16, H = y + 6, html = '';
+    for (var m = COARSE_T0; m <= COARSE_T1; m += 60) html += '<div class="fd-tick" style="left:' + cx(m) + 'px">' + hhmm(m) + '</div>';
+    lay.lanes.forEach(function (rid, i) {
+      var rr = P.role(rid), lh = laneRows[i] * SUB_H + LANE_PAD;
+      html += '<div class="fd-lane" style="top:' + laneTop[i] + 'px;height:' + lh + 'px;width:' + W + 'px"></div>' +
+        '<div class="fd-lbl" style="top:' + laneTop[i] + 'px"><span class="fd-lbl-ic" style="background:' + rr.color + '">' + rr.icon + '</span>' + nm(rr.name) + '</div>';
+    });
+    var geo = {};
+    lay.blocks.forEach(function (b) {
+      var tk = byId(plan.tasks, b.taskId); if (!tk) return;
+      var x = cx(b.startMin), w = Math.max(30, b.durMin * PXM), by = laneTop[b.laneIndex] + b.subRow * SUB_H + 3;
+      geo[b.taskId] = { x: x, w: w, cy: by + 13 };
+      html += '<div class="fd-block ro' + (w < 70 ? ' sm' : '') + '" data-task="' + b.taskId + '" style="left:' + x + 'px;top:' + by + 'px;width:' + w + 'px" title="' + nm(tk.name) + '  (' + nm(P.role(tk.ownerRoleId).name) + ')">' +
+        '<span class="fd-bname">' + P.station(tk.station).icon + ' ' + nm(tk.name) + '</span></div>';
+    });
+    var box = $('fd-canvas'); box.style.width = W + 'px'; box.style.height = H + 'px';
+    box.innerHTML = html + '<svg class="fd-arrows" id="fd-arrows" width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '"></svg>';
+    var sc2 = $('fd-scroll'); if (sc2 && sc2.scrollLeft) box.querySelectorAll('.fd-lbl').forEach(function (lb) { lb.style.transform = 'translateX(' + sc2.scrollLeft + 'px)'; });
+    var arrows = P.derivedHandoffs(plan, seg);
+    drawCoarseArrows(arrows, geo);
+    $('fd-arrowlist').innerHTML = arrows.length ? arrows.map(function (a) {
+      var card = byId(plan.infoCards, a.cardId);
+      var label = nm(card ? card.name : a.cardId).split('：')[0].split(':')[0];
+      var tip = label + ' · ' + nm(P.role(a.fromRoleId).name) + ' → ' + nm(P.role(a.toRoleId).name);
+      return '<span class="fd-ar-chip ro' + (a.incoming ? ' inc' : '') + '" title="' + tip + '">' + (a.incoming ? '↘ ' : '→ ') + label + '</span>';
+    }).join('') : '<span class="pr-item ok">' + t.gridNoArrows + '</span>';
+    var un = (lay.unstaffed || []).map(function (id) { var x = byId(plan.tasks, id); return x ? nm(x.name) : id; });
+    $('fd-ready').innerHTML = '<span class="pr-item ro-note">' + t.gridScoreNote + '</span>' +
+      un.map(function (n) { return '<span class="pr-item bad">⚠ ' + t.gridUnstaffed(n) + '</span>'; }).join('');
+  }
+  function drawCoarseArrows(arrows, geo) {
+    var svg = $('fd-arrows'); if (!svg) return; var s = '';
+    arrows.forEach(function (a) {
+      if (a.incoming || !a.fromTaskId) return;
+      var gf = geo[a.fromTaskId], gt = geo[a.toTaskId]; if (!gf || !gt) return;
+      var x1 = gf.x + gf.w + 6, y1 = gf.cy, x2 = gt.x - 6, y2 = gt.cy, mx = (x1 + x2) / 2;
+      s += '<path class="ok ro" data-d="' + a.id + '" d="M' + x1 + ' ' + y1 + ' C ' + mx + ' ' + y1 + ', ' + mx + ' ' + y2 + ', ' + x2 + ' ' + y2 + '"></path>' +
+        '<circle cx="' + x2 + '" cy="' + y2 + '" r="2.6" fill="rgba(91,107,69,.85)"></circle>';
+    });
+    svg.innerHTML = s;
+  }
+
+  function buildDayGrid() {
     var card = $('fd-card'); if (!card) return;
-    if (daySel !== 'fishday') { card.classList.add('hidden'); return; }
+    if (daySel === 'all') { card.classList.add('hidden'); return; }
     card.classList.remove('hidden');
+    var pj = $('fd-projected'); if (pj) pj.style.display = (daySel === 'fishday') ? '' : 'none';
+    if (daySel !== 'fishday') { buildCoarseGrid(daySel); return; }
+    var t0 = T();
+    if ($('fd-title')) $('fd-title').textContent = t0.fdTitle;
+    if ($('fd-hint')) $('fd-hint').textContent = t0.fdHint;
+    if ($('fd-arrows-lbl')) $('fd-arrows-lbl').textContent = t0.fdArrowsLbl;
     var plan = currentPlan(), fds = P.fishdayTasks(plan), fd = P.fishdaySchedule(plan);
     var lanes = plan.participants;
     var W = fdX(FD_T1) + 16, H = RULER_H + lanes.length * LANE_H + 6, html = '';
@@ -390,6 +460,7 @@
     if (ex) openArrowPanel(ex.id);
   }
   function fdPointerDown(ev) {
+    if (daySel !== 'fishday') return;            // coarse days are a read-only view — no drag/wire authoring
     if (ev.button != null && ev.button !== 0 && ev.pointerType === 'mouse') return;
     if (fdWire && ev.pointerId !== fdWire.pid) { ev.preventDefault(); return; }   // a second finger can't hijack a live wire
     var port = ev.target.closest('.fd-port');
@@ -469,7 +540,7 @@
         if (onTime) openArrowPanel(ex.id);                          // already fed on time — edit, don't duplicate
         else fdAutoDraw(sock.dataset.task, sock.dataset.card);      // missing or late — draw (a faster duplicate is a legit fix)
       }
-      buildFishday(); updatePlanUI(); return;
+      buildDayGrid(); updatePlanUI(); return;
     }
     if (!fdDrag) return;
     if (fdDrag.pid != null && ev.pointerId !== fdDrag.pid) return;
@@ -1406,8 +1477,8 @@
         else if (el.classList.contains('fd-block')) { e.preventDefault(); }   // Space must not scroll the editor away
         return;
       }
-      // fishday blocks: ←/→ nudge ±5 min · Shift+←/→ resize ±5 min
-      if (el.classList.contains('fd-block') && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+      // fishday blocks: ←/→ nudge ±5 min · Shift+←/→ resize ±5 min (coarse blocks are read-only)
+      if (daySel === 'fishday' && el.classList.contains('fd-block') && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
         e.preventDefault();
         var plan = currentPlan(), tk = byId(plan.tasks, el.dataset.task); if (!tk) return;
         var d = e.key === 'ArrowLeft' ? -5 : 5;

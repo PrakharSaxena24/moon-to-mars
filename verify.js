@@ -249,5 +249,35 @@ var scBefore = JSON.stringify(scoreOf(base));
 P.ambientActors(1, 0.5); P.cascadeTrace(P.mergePlan(base)); P.stationReadiness(P.createSim(base, 'fishday')); P.boatState(P.createSim(base, 'fishday'));
 ok(JSON.stringify(scoreOf(base)) === scBefore, 'cosmetic helpers do not perturb score() (pure)');
 
+console.log('\n=== ALL-DAY GRID — dayLayout / derivedHandoffs (pure, additive) ===');
+(function () {
+  var plan = P.mergePlan(base);
+  var tasksBefore = JSON.stringify(plan.tasks);
+  var scBefore = JSON.stringify(scoreOf(base));
+  ok(P.dayLayout(plan, 'fishday') === null, 'dayLayout(fishday) === null (Day 3 uses the minute path)');
+  ['arrival', 'ops', 'return'].forEach(function (seg) {
+    var L = P.dayLayout(plan, seg);
+    var shape = L && Array.isArray(L.lanes) && Array.isArray(L.blocks) && Array.isArray(L.unstaffed);
+    ok(shape, 'dayLayout(' + seg + ') returns {lanes,blocks,unstaffed}');
+    if (!shape) return;
+    var within = L.blocks.every(function (b) { return b.startMin >= P.DAY_HOUR_START && (b.startMin + b.durMin) <= P.DAY_HOUR_END && b.laneIndex >= 0 && b.laneIndex < L.lanes.length; });
+    ok(within, seg + ': all blocks within [' + P.DAY_HOUR_START + ',' + P.DAY_HOUR_END + '] and a valid lane');
+    var groups = {}; L.blocks.forEach(function (b) { var k = b.laneIndex + '_' + b.subRow; (groups[k] = groups[k] || []).push(b); });
+    var noOverlap = Object.keys(groups).every(function (k) {
+      var g = groups[k].slice().sort(function (a, b) { return a.startMin - b.startMin; });
+      for (var i = 1; i < g.length; i++) if (g[i].startMin < g[i - 1].startMin + g[i - 1].durMin) return false;
+      return true;
+    });
+    ok(noOverlap, seg + ': blocks in the same lane-row never overlap in time');
+  });
+  ok(P.dayLayout(plan, 'return').unstaffed.indexOf('t_ship') >= 0, 'return flags t_ship unstaffed (GAP-G surfaced)');
+  var ho = P.derivedHandoffs(plan, 'ops');
+  ok(ho.length >= 1 && ho.every(function (a) { return typeof a.cardId === 'string' && typeof a.fromRoleId === 'string' && typeof a.toRoleId === 'string' && typeof a.toTaskId === 'string' && typeof a.incoming === 'boolean'; }), 'derivedHandoffs(ops) well-formed (' + ho.length + ')');
+  ok(ho.some(function (a) { return a.incoming === false && a.fromTaskId; }), 'derivedHandoffs(ops) has a real sender→task line');
+  ok(P.derivedHandoffs(plan, 'return').length === 0, 'derivedHandoffs(return) empty (no cross-person flow)');
+  ok(JSON.stringify(scoreOf(base)) === scBefore, 'dayLayout/derivedHandoffs do not perturb score() (pure)');
+  ok(JSON.stringify(plan.tasks) === tasksBefore, 'dayLayout/derivedHandoffs do not mutate plan.tasks (pure)');
+})();
+
 console.log('\n' + (fail === 0 ? 'ALL ' + pass + ' CHECKS PASSED ✓' : pass + ' passed, ' + fail + ' FAILED ✗'));
 process.exit(fail === 0 ? 0 : 1);
