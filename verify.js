@@ -279,5 +279,102 @@ console.log('\n=== ALL-DAY GRID — dayLayout / derivedHandoffs (pure, additive)
   ok(JSON.stringify(plan.tasks) === tasksBefore, 'dayLayout/derivedHandoffs do not mutate plan.tasks (pure)');
 })();
 
+console.log('\n=== AUTHORABLE DAYS — daySchedule / scoreDay (§20) ===');
+(function () {
+  // the first back-to-back handoff (producer end === consumer start) per seg, in handoff-array order
+  var FIRST_BTB = { arrival: 'h_a_ferry', ops: 'h_o_weather', 'return': 'h_r_cash_site' };
+
+  // purity witnesses, captured before any §20 read helper below is called
+  var pureBefore = { sc: JSON.stringify(scoreOf(base)), tasks: JSON.stringify(P.mergePlan(base).tasks), days: JSON.stringify(P.mergePlan(base).days) };
+
+  ['arrival', 'ops', 'return'].forEach(function (seg) {
+    // 1. per-day 100 anchor: canonDay (via applyDayFix) over the all-fixes cfg reaches a clean 100
+    var cfg1 = P.applyDayFix(P.applyAllFixes(base), seg);
+    var plan1 = P.mergePlan(cfg1);
+    var sd1 = P.scoreDay(plan1, seg);
+    ok(sd1.score === 100 && sd1.grade === 'A' && sd1.clean === true && sd1.efficiency === 100,
+      seg + ': canonDay reference plan -> scoreDay 100/A/clean/100% eff (' + sd1.score + '/' + sd1.grade + '/' + sd1.clean + '/' + sd1.efficiency + '%)');
+    var reqIds = P.tasksForSeg(plan1, seg).filter(function (t) { return t.required !== false; }).map(function (t) { return t.id; });
+
+    // 2. cleared day: every required task unplaced
+    var cfg2 = P.applyAllFixes(base);
+    cfg2.overrides.days = cfg2.overrides.days || {};
+    cfg2.overrides.days[seg] = { placement: {} };
+    reqIds.forEach(function (id) { cfg2.overrides.days[seg].placement[id] = null; });
+    var plan2 = P.mergePlan(cfg2), ds2 = P.daySchedule(plan2, seg), rd2 = P.dayReadiness(plan2, seg), sd2 = P.scoreDay(plan2, seg);
+    ok(sd2.grade === 'D' && sd2.categories.objective === 0 && ds2.unplacedRequired.length === reqIds.length,
+      seg + ': clearing all ' + reqIds.length + ' required tasks -> grade D, objective 0, unplacedRequired.length===' + reqIds.length + ' (' + sd2.grade + '/' + sd2.categories.objective + '/' + ds2.unplacedRequired.length + ')');
+    ok(rd2.some(function (r) { return r.type === 'UNPLACED_REQUIRED'; }), seg + ': cleared-day readiness hints UNPLACED_REQUIRED');
+
+    // 3. monotone authoring gradient: cleared <= half <= perfect(100), starting from the perfect cfg
+    // and clearing the LATER ceil(n/2)..n-1 required ids (so the FIRST ceil(n/2) stay placed)
+    var half = Math.ceil(reqIds.length / 2), laterHalf = reqIds.slice(half);
+    var cfg3 = P.applyDayFix(P.applyAllFixes(base), seg);
+    cfg3.overrides.days[seg].placement = cfg3.overrides.days[seg].placement || {};
+    laterHalf.forEach(function (id) { cfg3.overrides.days[seg].placement[id] = null; });
+    var sd3 = P.scoreDay(P.mergePlan(cfg3), seg);
+    ok(sd2.score <= sd3.score && sd3.score <= sd1.score && sd1.score === 100,
+      seg + ': monotone authoring gradient cleared(' + sd2.score + ') <= half(' + sd3.score + ') <= perfect(' + sd1.score + ')');
+
+    // 4. channel pricing survives hour quanta: slow the first back-to-back handoff to 'board' (+30)
+    var btbId = FIRST_BTB[seg];
+    var cfg4 = P.applyDayFix(P.applyAllFixes(base), seg);
+    cfg4.overrides.days[seg].handoffs[btbId] = { channel: 'board' };
+    var plan4 = P.mergePlan(cfg4), ds4 = P.daySchedule(plan4, seg), sd4 = P.scoreDay(plan4, seg);
+    var lateEntry = ds4.late.filter(function (l) { return l.id === btbId; })[0];
+    ok(!!lateEntry && lateEntry.lateMin === 30, seg + ': first back-to-back handoff ' + btbId + ' slowed to board -> late 30 min (' + (lateEntry && lateEntry.lateMin) + ')');
+    ok(sd4.categories.info === sd1.categories.info - 3, seg + ': board channel on ' + btbId + ' drops info category by 3 (' + sd1.categories.info + '→' + sd4.categories.info + ')');
+    ok(ds4.idleTotal > 0, seg + ': board channel on ' + btbId + ' raises idle minutes (0→' + ds4.idleTotal + ')');
+
+    // 5. decoy placed: place one decoy from the deck onto the board
+    var cfg5 = P.applyDayFix(P.applyAllFixes(base), seg);
+    var decoyId = P.deckFor(P.mergePlan(cfg5), seg).decoys[0];
+    cfg5.overrides.days[seg].placement = cfg5.overrides.days[seg].placement || {};
+    cfg5.overrides.days[seg].placement[decoyId] = { startMin: 600, durMin: 60, assignedIds: ['p06'] };
+    var plan5 = P.mergePlan(cfg5), ds5 = P.daySchedule(plan5, seg), rd5 = P.dayReadiness(plan5, seg), sd5 = P.scoreDay(plan5, seg);
+    ok(ds5.decoysPlaced.length >= 1 && rd5.some(function (r) { return r.type === 'DECOY_PLACED'; }),
+      seg + ': placing decoy ' + decoyId + ' -> decoysPlaced>=1 (' + ds5.decoysPlaced.length + ') + DECOY_PLACED hint');
+    ok(sd5.clean === false && sd5.score <= 89, seg + ': a placed decoy -> !clean, score<=89 (' + sd5.score + ')');
+
+    // 6. misassignment: reassign a required task to p01 (roleId 'owner', never a per-day ownerRoleId)
+    var cfg6 = P.applyDayFix(P.applyAllFixes(base), seg);
+    var reqTask6 = P.tasksForSeg(P.mergePlan(cfg6), seg).filter(function (t) { return t.required !== false; })[0];
+    cfg6.overrides.days[seg].placement = cfg6.overrides.days[seg].placement || {};
+    cfg6.overrides.days[seg].placement[reqTask6.id] = { assignedIds: ['p01'] };
+    var plan6 = P.mergePlan(cfg6), ds6 = P.daySchedule(plan6, seg), rd6 = P.dayReadiness(plan6, seg), sd6 = P.scoreDay(plan6, seg);
+    ok(ds6.misassigned.length >= 1 && rd6.some(function (r) { return r.type === 'MISASSIGNED'; }),
+      seg + ': reassigning ' + reqTask6.id + ' (' + reqTask6.ownerRoleId + ') to p01 -> misassigned>=1 (' + ds6.misassigned.length + ') + MISASSIGNED hint');
+    ok(sd6.categories.roles < 15, seg + ': misassignment drops roles category below 15 (' + sd6.categories.roles + ')');
+
+    // 7. double-booking: move the 2nd required task onto the 1st's person and start time
+    var cfg7 = P.applyDayFix(P.applyAllFixes(base), seg);
+    var dbTasks = P.tasksForSeg(P.mergePlan(cfg7), seg).filter(function (t) { return t.required !== false; });
+    cfg7.overrides.days[seg].placement = cfg7.overrides.days[seg].placement || {};
+    cfg7.overrides.days[seg].placement[dbTasks[1].id] = { assignedIds: dbTasks[0].assignedIds.slice(), startMin: dbTasks[0].startMin };
+    var ds7 = P.daySchedule(P.mergePlan(cfg7), seg);
+    ok(ds7.overbookMin > 0, seg + ': double-booking ' + dbTasks[1].id + ' onto ' + dbTasks[0].id + '\'s person/time -> overbookMin>0 (' + ds7.overbookMin + ')');
+  });
+
+  // 8. façade equality (fishday): daySchedule('fishday') delegates to (and matches) fishdaySchedule()
+  var fdPlan = P.mergePlan(base);
+  var dsFacade = P.daySchedule(fdPlan, 'fishday'), fdFacade = P.fishdaySchedule(fdPlan);
+  ok(dsFacade.idleTotal === fdFacade.idleTotal && fdFacade.idleTotal === 220,
+    'daySchedule(fishday).idleTotal === fishdaySchedule().idleTotal === 220 (' + dsFacade.idleTotal + '/' + fdFacade.idleTotal + ')');
+  ok(dsFacade.efficiency === 91, 'daySchedule(fishday).efficiency === 91 (' + dsFacade.efficiency + '%)');
+
+  // 9. purity: the §20 read helpers (daySchedule/scoreDay/dayReadiness/deckFor) never perturb
+  // score()/plan.tasks/plan.days, for any of the four authorable segs
+  P.AUTHORABLE.forEach(function (seg) {
+    P.daySchedule(P.mergePlan(base), seg);
+    P.scoreDay(P.mergePlan(base), seg);
+    P.dayReadiness(P.mergePlan(base), seg);
+    P.deckFor(P.mergePlan(base), seg);
+  });
+  var pureAfter = { sc: JSON.stringify(scoreOf(base)), tasks: JSON.stringify(P.mergePlan(base).tasks), days: JSON.stringify(P.mergePlan(base).days) };
+  ok(pureBefore.sc === pureAfter.sc, '§20 read helpers do not perturb score() (pure)');
+  ok(pureBefore.tasks === pureAfter.tasks, '§20 read helpers do not mutate plan.tasks (pure)');
+  ok(pureBefore.days === pureAfter.days, '§20 read helpers do not mutate plan.days (pure)');
+})();
+
 console.log('\n' + (fail === 0 ? 'ALL ' + pass + ' CHECKS PASSED ✓' : pass + ' passed, ' + fail + ' FAILED ✗'));
 process.exit(fail === 0 ? 0 : 1);
