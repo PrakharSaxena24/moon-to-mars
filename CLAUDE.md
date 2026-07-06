@@ -603,6 +603,13 @@ drag reads as fake, two determinism traps) → **PROCEED-WITH-CHANGES**, all app
 - **Orchestration:** Opus managed/integrated + wrote the coupled `app.js`/verify; Sonnet built the
   pure engine helpers (Exec A); Fable ×1 design gut-check. (i18n/verify authored inline when the
   agent classifier was briefly unavailable.)
+- **Review round (commit `ae637cf`):** 4 Sonnet lenses → refute → Fable synthesis over `f7b6784`
+  confirmed 7 (2 refuted). Fixed: coarse info-arrows sliced diagonally across lanes (coincident
+  all-day blocks have no L→R order → now a clean vertical connector at a shared x, raised above the
+  portless blocks; horizontal arrow kept only for true precedence); arrow hover was a dangling
+  `cursor:help` (added escaped `<title>`); lane labels didn't grow with stacked sub-rows (now take
+  the lane height). Accepted-not-fixed: per-tick coarse rebuild in `updatePlanUI` (tiny; skipping
+  would make an assign-duty edit go stale). Renderer-only fix — verify.js still 107/107, E2E 50/50.
 
 **Review round (same pass):** a 5-lens adversarial review of the diff confirmed **21 further defects — all
 fixed**: same-mode Morning re-entry no longer restores a stale snapshot over the authored plan (the one high);
