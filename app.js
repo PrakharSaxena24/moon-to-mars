@@ -301,7 +301,7 @@
     lay.lanes.forEach(function (rid, i) {
       var rr = P.role(rid), lh = laneRows[i] * SUB_H + LANE_PAD;
       html += '<div class="fd-lane" style="top:' + laneTop[i] + 'px;height:' + lh + 'px;width:' + W + 'px"></div>' +
-        '<div class="fd-lbl" style="top:' + laneTop[i] + 'px"><span class="fd-lbl-ic" style="background:' + rr.color + '">' + rr.icon + '</span>' + nm(rr.name) + '</div>';
+        '<div class="fd-lbl" style="top:' + laneTop[i] + 'px;height:' + lh + 'px"><span class="fd-lbl-ic" style="background:' + rr.color + '">' + rr.icon + '</span>' + nm(rr.name) + '</div>';
     });
     var geo = {};
     lay.blocks.forEach(function (b) {
@@ -315,7 +315,7 @@
     box.innerHTML = html + '<svg class="fd-arrows" id="fd-arrows" width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '"></svg>';
     var sc2 = $('fd-scroll'); if (sc2 && sc2.scrollLeft) box.querySelectorAll('.fd-lbl').forEach(function (lb) { lb.style.transform = 'translateX(' + sc2.scrollLeft + 'px)'; });
     var arrows = P.derivedHandoffs(plan, seg);
-    drawCoarseArrows(arrows, geo);
+    drawCoarseArrows(plan, arrows, geo);
     $('fd-arrowlist').innerHTML = arrows.length ? arrows.map(function (a) {
       var card = byId(plan.infoCards, a.cardId);
       var label = nm(card ? card.name : a.cardId).split('：')[0].split(':')[0];
@@ -326,14 +326,23 @@
     $('fd-ready').innerHTML = '<span class="pr-item ro-note">' + t.gridScoreNote + '</span>' +
       un.map(function (n) { return '<span class="pr-item bad">⚠ ' + t.gridUnstaffed(n) + '</span>'; }).join('');
   }
-  function drawCoarseArrows(arrows, geo) {
+  function xesc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  function drawCoarseArrows(plan, arrows, geo) {
     var svg = $('fd-arrows'); if (!svg) return; var s = '';
+    svg.setAttribute('class', 'fd-arrows ro');   // raised above blocks (CSS) so the connectors are visible
     arrows.forEach(function (a) {
       if (a.incoming || !a.fromTaskId) return;
       var gf = geo[a.fromTaskId], gt = geo[a.toTaskId]; if (!gf || !gt) return;
-      var x1 = gf.x + gf.w + 6, y1 = gf.cy, x2 = gt.x - 6, y2 = gt.cy, mx = (x1 + x2) / 2;
-      s += '<path class="ok ro" data-d="' + a.id + '" d="M' + x1 + ' ' + y1 + ' C ' + mx + ' ' + y1 + ', ' + mx + ' ' + y2 + ', ' + x2 + ' ' + y2 + '"></path>' +
-        '<circle cx="' + x2 + '" cy="' + y2 + '" r="2.6" fill="rgba(91,107,69,.85)"></circle>';
+      var card = byId(plan.infoCards, a.cardId);
+      var tip = xesc(nm(card ? card.name : a.cardId).split('：')[0].split(':')[0] + ' · ' + nm(P.role(a.fromRoleId).name) + ' → ' + nm(P.role(a.toRoleId).name));
+      var fr = gf.x + gf.w, y1 = gf.cy, y2 = gt.cy, d, x2;
+      // coincident all-day blocks have no left→right precedence: draw a clean vertical link at a
+      // shared x instead of the far-right→far-left slice that cut through unrelated lanes.
+      var overlap = Math.max(gf.x, gt.x) < Math.min(fr, gt.x + gt.w);
+      if (overlap) { var sx = Math.max(gf.x, gt.x) + 20; x2 = sx; d = 'M' + sx + ' ' + y1 + ' L ' + sx + ' ' + y2; }
+      else { var x1 = fr + 6; x2 = gt.x - 6; var mx = (x1 + x2) / 2; d = 'M' + x1 + ' ' + y1 + ' C ' + mx + ' ' + y1 + ', ' + mx + ' ' + y2 + ', ' + x2 + ' ' + y2; }
+      s += '<path class="ok ro" data-d="' + a.id + '" d="' + d + '"><title>' + tip + '</title></path>' +
+        '<circle cx="' + x2 + '" cy="' + y2 + '" r="3" fill="rgba(91,107,69,.95)"><title>' + tip + '</title></circle>';
     });
     svg.innerHTML = s;
   }

@@ -545,7 +545,10 @@ button{font-family:inherit;}
 .fd-block.ro{cursor:default;background:linear-gradient(180deg,var(--bg1),var(--bg2));border-left-color:var(--leader);}
 .fd-block.ro:active{cursor:default;transform:none;}
 .fd-block.ro .fd-bname{pointer-events:none;}
-.fd-arrows path.ro{stroke:rgba(91,107,69,.7);stroke-dasharray:none;pointer-events:stroke;cursor:help;}
+/* coarse info-flow connectors ride ABOVE the all-day blocks (which have no output ports to attach to) */
+.fd-arrows.ro{z-index:5;}
+.fd-arrows path.ro{stroke:rgba(91,107,69,.85);stroke-width:2;stroke-dasharray:none;pointer-events:stroke;cursor:help;}
+.fd-arrows.ro circle{pointer-events:auto;}
 .fd-arrowlist{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px;}
 .fd-ar-chip.ro{cursor:help;}
 .fd-ar-chip.ro.inc{border-style:dashed;color:var(--ink3);}
