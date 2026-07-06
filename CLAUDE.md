@@ -572,7 +572,11 @@ A-grade clean report, JP mid-freeze switch, reduced-motion page, resize) — all
 
 ---
 
-## 19. All-day timeline grid (2026-07-06) — the editor now renders on every day tab
+## 19. All-day timeline grid (2026-07-06) — the editor now renders on every day tab  ⟶ SUPERSEDED by §20
+> **Superseded 2026-07-06 by §20:** the read-only coarse Gantt described here was replaced by the
+> authorable deck→arrange→connect editor; `dayLayout`/`derivedHandoffs` and the read-only path are retired.
+> Kept for history.
+
 The timeline+info-arrow grid used to be Day-3-only and hard-hidden off it (§7's `daySel!=='fishday'`
 gate — the "I can't find it" bug). It now renders on **every day tab**. Day 3 stays the full
 minute-level drag-and-drop authoring editor; **Arrival / Ops / Return are a read-only hour-level
@@ -710,3 +714,21 @@ Cascade drift in Phase 2 (mitigated by delegation-not-duplication + pinned equal
 lesson is weaker by construction (reference plans MUST include tight back-to-back handoffs) · content authoring
 (3 consistency-verified reference plans) is the real schedule cost · fd-* editor carries ~30 §18 hardening fixes
 — the existing Playwright suite must stay green as the guardrail, not be rewritten to match.
+
+### 20.8 As-built (SHIPPED 2026-07-06, Phases 1–5 committed)
+All four days are now one **deck→arrange→connect** editor. Choose required tasks from the **Task Deck**
+rail (3 hidden decoys per coarse day), drag them onto per-person hour lanes, wire the information arrows;
+live projection + ready-check as you build; **"Clear day"** authors from an empty board. **Day 3** keeps its
+15-min snap, minute channel-latency lesson, and every anchor byte-identical; Arrival/Ops/Return snap 60.
+Rule-based `scoreDay` grades any consistent arrangement toward 100 (perfect 100/A → half ~66/C → cleared 25/D,
+monotone). A **coarse-day Run → `scoreDay` report** (grade + 8-category scorecard + dayReadiness fix-pack +
+"Auto-arrange the arrows" `applyDayFix` + Edit/Run-again).
+- **Verified:** `node verify.js` **148/148** (+41 authorable-day anchors: per-day 100 via canonDay, cleared→D,
+  monotone gradient, channel-at-hour pricing, decoy/misassign/double-book, façade equality 220/91, purity) ·
+  Playwright E2E **62/62** (+12) · i18n EN/JA **281/281** · fishday + Live confirmed unaffected.
+- **Model use (owner's allocation):** Opus managed + wrote the coupled Phase-2 cascade/scorer & integration;
+  Sonnet did Phases 1/3/4/5 execution; Fable ×3 (plan → [reserved] → final review synthesis). Each phase gated
+  on verify + E2E staying green.
+- **Deferred (this release):** animated playback of an authored *coarse* day (Run shows a scored report; the
+  animated "watch people stall" stays fishday/Live, per §20.1). Cleanup: retire the dead §19
+  `dayLayout`/`derivedHandoffs` + their verify checks. Optional: pre-clear Arrival as a tutorial.
