@@ -517,6 +517,8 @@ button{font-family:inherit;}
 .fd-card-head h2{flex:1;min-width:0;margin:0;border-bottom:none;padding-bottom:0;}
 #fd-clear-day.armed{background:var(--wait);color:var(--bg1);border-color:var(--wait-dark);}
 .fd-wrap{display:grid;grid-template-columns:196px 1fr;gap:12px;align-items:start;}
+/* fishday is never deck-authorable (§20 Fix A) — no rail, canvas runs full-width */
+.fd-wrap.no-deck{grid-template-columns:1fr;}
 .fd-deck{border:1px solid var(--line2);border-radius:var(--r-md);background:var(--bg2);padding:9px;max-height:460px;overflow-y:auto;}
 .fd-deck-title{margin-bottom:2px;}
 .fd-deck-count{font-size:11px;color:var(--ink3);margin-bottom:8px;line-height:1.4;}

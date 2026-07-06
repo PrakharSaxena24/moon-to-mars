@@ -376,5 +376,48 @@ console.log('\n=== AUTHORABLE DAYS — daySchedule / scoreDay (§20) ===');
   ok(pureBefore.days === pureAfter.days, '§20 read helpers do not mutate plan.days (pure)');
 })();
 
+console.log('\n=== §20 REVIEW FIXES — fishday stays timing+arrows-only; coarse atMinute handoffs stay honest ===');
+(function () {
+  // ---- Fix A: no engine-level public flow ever empties a fishday task's crew. The §20 editor's
+  // deck/unplace/Clear-day/drag-to-deck/Delete capabilities are gated OFF fishday entirely at the
+  // app layer (app.js); this pins the invariant those gates depend on staying true at the engine
+  // level, across every public entry point that touches a plan or runs a sim. ----
+  function allFishdayPlaced(plan) { return P.fishdayTasks(plan).every(function (t) { return P.isPlaced(t); }); }
+  ok(allFishdayPlaced(P.mergePlan(base)), 'gappy baseline: every fishday task is placed (assignedIds.length > 0)');
+  ok(allFishdayPlaced(P.mergePlan(P.applyAllFixes(base))), 'all-fixes plan: every fishday task stays placed');
+  var ranSim = fishRun(P.applyAllFixes(base));
+  ok(allFishdayPlaced(ranSim.plan), 'a full checkpoint-paused fishday run never empties a task\'s crew (createSim/tick)');
+  var isim2 = P.createSim(base, 'fishday'); P.intervene(isim2, 'ic_tackle', 'specialist');
+  ok(allFishdayPlaced(isim2.plan), 'intervene() (checkpoint hand-feed) never touches assignedIds either');
+
+  // contrast: the generic overrides.staffing channel (shared with the classic day tasks) COULD
+  // technically empty a fishday task's crew if something ever constructed that override — and
+  // daySchedule would silently drop the task from scoring and IMPROVE the ledger, hiding its idle
+  // liability. This is precisely the exploit Fix A closes off at the UI layer (app.js never
+  // constructs this override while daySel==='fishday'); pinned here so the risk stays documented
+  // and any future engine change that made unplacing MORE attractive would be caught.
+  var gfd2 = P.fishdaySchedule(P.mergePlan(base));
+  var emptiedPlan = P.mergePlan({ seed: 1, overrides: { staffing: { t_f_gearload: [] } } });
+  var emptiedFd = P.fishdaySchedule(emptiedPlan);
+  ok(!emptiedFd.byTask.hasOwnProperty('t_f_gearload') && emptiedFd.idleTotal < gfd2.idleTotal && emptiedFd.efficiency > gfd2.efficiency,
+    'unplacing a gappy fishday task HIDES its liability and improves the score (idle ' + gfd2.idleTotal + '→' + emptiedFd.idleTotal + ', eff ' + gfd2.efficiency + '%→' + emptiedFd.efficiency + '%) — exactly why app.js gates this off fishday (Fix A)');
+
+  // ---- Fix E: an atMinute coarse (arrival/ops/return) handoff whose producer is moved later
+  // re-scores as LATE, not clean — the engine-side half of the reclamp contract app.js now runs for
+  // coarse days too (mirroring the existing fishday self-heal). onTaskDone triggers already re-clamp
+  // DYNAMICALLY inside the cascade (eff[...].end); atMinute triggers do not — so once the producer
+  // moves and its atMinute send is re-clamped forward to the new finish (exactly what app.js's
+  // reclampArrows now writes for coarse days too), the engine must bill the resulting lateness
+  // against the (unmoved) consumer — never score it as a free on-time pass. ----
+  var cfgAtm = P.applyDayFix(P.applyAllFixes(base), 'ops');
+  cfgAtm.overrides.days.ops.placement = cfgAtm.overrides.days.ops.placement || {};
+  cfgAtm.overrides.days.ops.placement.hd_o_weather = { startMin: 330 };  // was 300 -> finish 360; now finish 390
+  cfgAtm.overrides.days.ops.handoffs.h_o_weather = { trigger: { type: 'atMinute', value: 390 }, channel: 'faceToFace' };  // re-clamped to the new finish
+  var planAtm = P.mergePlan(cfgAtm), dsAtm = P.daySchedule(planAtm, 'ops'), sdAtm = P.scoreDay(planAtm, 'ops');
+  var lateAtm = dsAtm.late.filter(function (l) { return l.id === 'h_o_weather'; })[0];
+  ok(!!lateAtm && lateAtm.lateMin === 30, 'ops: producer hd_o_weather moved +30min, atMinute handoff re-clamped to its new finish -> re-scores 30min late (' + (lateAtm && lateAtm.lateMin) + ')');
+  ok(sdAtm.clean === false && sdAtm.score <= 89, 'ops: the re-clamped late handoff breaks clean, capping score <= 89 (' + sdAtm.score + ')');
+})();
+
 console.log('\n' + (fail === 0 ? 'ALL ' + pass + ' CHECKS PASSED ✓' : pass + ' passed, ' + fail + ' FAILED ✗'));
 process.exit(fail === 0 ? 0 : 1);

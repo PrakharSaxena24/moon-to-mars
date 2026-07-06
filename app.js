@@ -40,7 +40,10 @@
   // schema that buildCfg folds into overrides.days[seg] (§20.3).
   function freshDayOv(seg) { return seg === 'fishday' ? { timing: {}, staffing: {}, handoffs: {} } : { placement: {}, handoffs: {} }; }
   var dayOv = { arrival: freshDayOv('arrival'), ops: freshDayOv('ops'), 'return': freshDayOv('return'), fishday: freshDayOv('fishday') };
-  function fdReset() { dayOv.fishday = freshDayOv('fishday'); }
+  // Reset ALL four days (not just fishday) — "Reset to gappy" / "Auto-fix all" must clear coarse-day
+  // deck authoring too, or a hand-authored arrival/ops/return arrangement would survive underneath a
+  // reset button that visibly claims to start over.
+  function fdReset() { dayOv = { arrival: freshDayOv('arrival'), ops: freshDayOv('ops'), 'return': freshDayOv('return'), fishday: freshDayOv('fishday') }; }
   // fixHandoffs must win over stale hand-edits/erasures of the canonical arrows,
   // or the fix-pack button would appear to do nothing (the hand-edit re-breaks it).
   // ANY block re-timing can re-break the zero-idle anchor through the dep chain
@@ -297,11 +300,15 @@
   // but resolved against P.tasksForSeg/P.handoffsForSeg so it's correct for the coarse days too —
   // for seg==='fishday' these read the exact same plan.tasks/plan.handoffs data, byte-identical). ----
   function producerInSeg(segT, cid) { for (var i = 0; i < segT.length; i++) if ((segT[i].produces || []).indexOf(cid) >= 0) return segT[i]; return null; }
+  // An UNPLACED producer must resolve to null here, exactly like engine.js's daySchedule (whose
+  // fdById only contains PLACED tasks) — otherwise an unplaced task's stale startMin/durMin would
+  // still paint its outgoing arrow/socket on-time-green in the editor while the engine (dayReadiness/
+  // score) already scores that same handoff as MISSING. P.isPlaced is the shared placement test.
   function sendMinInSeg(segT, h) {
     var t;
     if (h.trigger.type === 'atMinute') return (typeof h.trigger.value === 'number' && isFinite(h.trigger.value)) ? h.trigger.value : null;
-    if (h.trigger.type === 'onTaskDone') { t = byId(segT, h.trigger.taskId); return (t && typeof t.startMin === 'number') ? (t.startMin + t.durMin) : null; }
-    if (h.trigger.type === 'beforeTaskStart') { t = byId(segT, h.trigger.taskId || h.toTaskId); return (t && typeof t.startMin === 'number') ? (t.startMin - (h.trigger.leadMin || 0)) : null; }
+    if (h.trigger.type === 'onTaskDone') { t = byId(segT, h.trigger.taskId); return (t && P.isPlaced(t) && typeof t.startMin === 'number') ? (t.startMin + t.durMin) : null; }
+    if (h.trigger.type === 'beforeTaskStart') { t = byId(segT, h.trigger.taskId || h.toTaskId); return (t && P.isPlaced(t) && typeof t.startMin === 'number') ? (t.startMin - (h.trigger.leadMin || 0)) : null; }
     return null;
   }
   function arrivalInSeg(segT, h) { var s = sendMinInSeg(segT, h); return s == null ? null : s + (P.CHANNELS[h.channel] || 0); }
@@ -323,7 +330,7 @@
     });
     return bestTask || best;
   }
-  function producedAtSeg(segT, h) { var from = byId(segT, h.fromTaskId); return from ? from.startMin + from.durMin : segWin(daySel)[0]; }
+  function producedAtSeg(segT, h) { var from = byId(segT, h.fromTaskId); return (from && P.isPlaced(from)) ? from.startMin + from.durMin : segWin(daySel)[0]; }
 
   // ---- unified placement write-through: fishday keeps the legacy timing/staffing channels,
   // arrival/ops/return use the placement schema (§20.3, buildCfg folds both into their own
@@ -332,9 +339,12 @@
     if (daySel === 'fishday') dayOv.fishday.timing[taskId] = { startMin: startMin, durMin: durMin };
     else dayOv[daySel].placement[taskId] = { startMin: startMin, durMin: durMin, assignedIds: (assignedIds || []).slice() };
   }
+  // Day 3 (fishday) is NEVER deck-authorable — its puzzle is block-timing + info-arrows only, so a
+  // fishday task's crew can never become []. Deck/unplace/Clear-day/drag-to-deck/Delete are coarse-
+  // day-only capabilities (arrival/ops/return); a fishday call here is a deliberate no-op.
   function writeUnplace(taskId) {
-    if (daySel === 'fishday') dayOv.fishday.staffing[taskId] = [];
-    else dayOv[daySel].placement[taskId] = null;
+    if (daySel === 'fishday') return;
+    dayOv[daySel].placement[taskId] = null;
   }
   function writePlace(taskId, startMin, durMin, personId) {
     if (daySel === 'fishday') { dayOv.fishday.staffing[taskId] = [personId]; dayOv.fishday.timing[taskId] = { startMin: startMin, durMin: durMin }; }
@@ -346,6 +356,10 @@
   // tell) except a small .req badge marks the ones the day actually needs. ----
   function buildDeck() {
     var box = $('fd-deck'); if (!box) return;
+    var wrap = $('fd-wrap');
+    // fishday is never deck-authorable (§20 Fix A) — no deck rail, fishday's canvas runs full-width.
+    if (daySel === 'fishday') { box.innerHTML = ''; box.classList.add('hidden'); if (wrap) wrap.classList.add('no-deck'); return; }
+    box.classList.remove('hidden'); if (wrap) wrap.classList.remove('no-deck');
     var t = T(), seg = daySel, plan = currentPlan(), deck = P.deckFor(plan, seg), segT = P.tasksForSeg(plan, seg);
     var reqUnplaced = deck.unplaced.filter(function (id) { return deck.required.indexOf(id) >= 0; }).length;
     var chips = deck.unplaced.map(function (id) {
@@ -371,7 +385,14 @@
     if (seg === 'fishday') { $('fd-title').textContent = t0.fdTitle; $('fd-hint').textContent = t0.fdHint; }
     else { $('fd-title').textContent = t0.dayGridTitle(dayLabel(seg)); $('fd-hint').textContent = t0.dayGridHint; }
     $('fd-arrows-lbl').textContent = t0.fdArrowsLbl;
-    var cb = $('fd-clear-day'); if (cb) { cb.classList.remove('armed'); cb.textContent = t0.clearDayBtn; }
+    // Reset the button's visual AND the real armed flag (dataset.armed) on every repaint, or an
+    // armed-then-edited "Clear day" fires on a single unconfirmed click (§20 Fix C) — the two must
+    // never desync. Fishday never shows Clear-day at all (§20 Fix A: timing+arrows only, no deck).
+    var cb = $('fd-clear-day');
+    if (cb) {
+      cb.classList.remove('armed'); cb.dataset.armed = ''; cb.textContent = t0.clearDayBtn;
+      cb.classList.toggle('hidden', seg === 'fishday');
+    }
     buildDeck();
     var win = segWin(seg), lanes = plan.participants;
     var W = fdX(win[1]) + 16, H = RULER_H + lanes.length * LANE_H + 6, html = '';
@@ -618,13 +639,16 @@
     return best;
   }
   // a re-timed producer can strand an atMinute send before the card exists — re-clamp its arrows
-  // (fishday-only: the atMinute self-heal is part of its byte-pinned dep-chain contract)
+  // to the producer's new finish. Seg-aware (§20 Fix E): fishday keeps its legacy plan.handoffs/
+  // dayOv.fishday.handoffs channel + producedAt (byte-pinned dep-chain contract, untouched); coarse
+  // days (arrival/ops/return) run the identical clamp against P.handoffsForSeg/dayOv[seg].handoffs
+  // so a moved coarse block can't strand a stale atMinute send either.
   function reclampArrows(taskId) {
-    var plan = currentPlan();
-    plan.handoffs.forEach(function (h) {
+    var plan = currentPlan(), seg = daySel, segT = P.tasksForSeg(plan, seg), segH = P.handoffsForSeg(plan, seg);
+    segH.forEach(function (h) {
       if (h.fromTaskId !== taskId || !h.trigger || h.trigger.type !== 'atMinute') return;
-      var pa = producedAt(plan, h);
-      if (h.trigger.value < pa) dayOv.fishday.handoffs[h.id] = Object.assign({}, h, { trigger: { type: 'atMinute', value: pa } });
+      var pa = seg === 'fishday' ? producedAt(plan, h) : producedAtSeg(segT, h);
+      if (h.trigger.value < pa) dayOv[seg].handoffs[h.id] = Object.assign({}, h, { trigger: { type: 'atMinute', value: pa } });
     });
   }
   function fdPointerUp(ev) {
@@ -658,11 +682,11 @@
     if (fdDrag.pid != null && ev.pointerId !== fdDrag.pid) return;
     var d = fdDrag; fdDrag = null;
     if (d.el) d.el.classList.remove('over-deck');
-    if (!d.resize && isOverDeck(ev)) { writeUnplace(d.taskId); paintSetup(); return; }
+    if (!d.resize && daySel !== 'fishday' && isOverDeck(ev)) { writeUnplace(d.taskId); paintSetup(); return; }
     if (d.resize && d.newDur != null && d.newDur !== d.durMin) writeMove(d.taskId, d.startMin, d.newDur, d.assignedIds);
     else if (!d.resize && d.newStart != null && d.newStart !== d.startMin) writeMove(d.taskId, d.newStart, d.durMin, d.assignedIds);
     else return;
-    if (daySel === 'fishday') reclampArrows(d.taskId);
+    reclampArrows(d.taskId);
     paintSetup();
   }
   function fdPointerCancel() {
@@ -750,6 +774,7 @@
   function clearDayClick() {
     var btn = $('fd-clear-day'); if (!btn) return;
     var seg = daySel;
+    if (seg === 'fishday') return;      // fishday is never deck-cleared — timing+arrows only (§20 Fix A)
     if (btn.dataset.armed === seg) {
       btn.dataset.armed = '';
       P.tasksForSeg(currentPlan(), seg).forEach(function (tk) { writeUnplace(tk.id); });
@@ -1704,11 +1729,12 @@
         var sn = segSnap(daySel), win = segWin(daySel), d = e.key === 'ArrowLeft' ? -sn : sn;
         if (e.shiftKey) writeMove(tk.id, tk.startMin, clamp(tk.durMin + d, sn, win[1] - tk.startMin), tk.assignedIds);
         else writeMove(tk.id, clamp(tk.startMin + d, win[0], win[1] - tk.durMin), tk.durMin, tk.assignedIds);
-        if (daySel === 'fishday') reclampArrows(tk.id);
+        reclampArrows(tk.id);
         paintSetup();
         var nb = document.querySelector('.fd-block[data-task="' + tk.id + '"]'); if (nb) nb.focus();
       } else if (el.classList.contains('fd-block') && (e.key === 'Delete' || e.key === 'Backspace')) {
         e.preventDefault();
+        if (daySel === 'fishday') return;   // fishday tasks can never be unplaced (§20 Fix A)
         var plan2 = currentPlan(), segT2 = P.tasksForSeg(plan2, daySel), tk2 = byId(segT2, el.dataset.task); if (!tk2) return;
         writeUnplace(tk2.id);
         paintSetup();
