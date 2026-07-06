@@ -510,7 +510,29 @@ button{font-family:inherit;}
 .dt-note{font-size:13px;color:var(--build-dark);padding:8px 0;}
 .modal .foot{margin-top:16px;text-align:right;}
 
-/* ============ FISHDAY: timeline + info-arrow editor (§7) — a ruled ledger page ============ */
+/* ============ DAY EDITOR: deck + timeline + info-arrow overlay (§20) — a ruled ledger page,
+   shared by every day tab (Day 3 keeps its minute-level lanes; Arrival/Ops/Return are now
+   authorable the same way) ============ */
+.fd-card-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;}
+.fd-card-head h2{flex:1;min-width:0;margin:0;border-bottom:none;padding-bottom:0;}
+#fd-clear-day.armed{background:var(--wait);color:var(--bg1);border-color:var(--wait-dark);}
+.fd-wrap{display:grid;grid-template-columns:196px 1fr;gap:12px;align-items:start;}
+.fd-deck{border:1px solid var(--line2);border-radius:var(--r-md);background:var(--bg2);padding:9px;max-height:460px;overflow-y:auto;}
+.fd-deck-title{margin-bottom:2px;}
+.fd-deck-count{font-size:11px;color:var(--ink3);margin-bottom:8px;line-height:1.4;}
+.fd-deck-chips{display:flex;flex-direction:column;gap:6px;}
+.fd-chip{display:flex;align-items:center;gap:6px;border:1px solid var(--line2);border-radius:var(--r-sm);background:var(--bg1);padding:6px 7px;font-size:11.5px;cursor:grab;touch-action:none;user-select:none;position:relative;box-shadow:var(--shadow);}
+.fd-chip:active{cursor:grabbing;}
+.fd-chip.placing{border-color:var(--accent);box-shadow:0 0 0 2px rgba(184,137,43,.35);}
+.fd-chip.ghost{position:fixed;pointer-events:none;z-index:60;opacity:.88;}
+.fd-chip-ic{width:18px;height:18px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:10px;flex-shrink:0;}
+.fd-chip-name{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.fd-chip-dur{font-size:10px;color:var(--ink3);flex-shrink:0;}
+.fd-chip-req-badge{width:6px;height:6px;border-radius:50%;background:var(--accent);flex-shrink:0;}
+.fd-slot{position:absolute;height:26px;border:2px dashed var(--accent);border-radius:var(--r-sm);background:rgba(184,137,43,.14);z-index:6;cursor:pointer;animation:pulse 1.2s ease-in-out infinite;}
+.fd-slot:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+.fd-block.over-deck{opacity:.35;}
+@media(max-width:760px){ .fd-wrap{grid-template-columns:1fr;} .fd-deck{max-height:200px;} }
 .fd-scroll{overflow-x:auto;border:1px solid var(--line2);border-radius:var(--r-md);background:var(--bg2);}
 .fd-canvas{position:relative;min-height:120px;
   background:repeating-linear-gradient(90deg,transparent 0 47px,rgba(184,137,43,.09) 47px 48px);}
@@ -541,18 +563,7 @@ button{font-family:inherit;}
 .fd-arrows path.ok{stroke:rgba(91,107,69,.8);}
 .fd-arrows path.late{stroke:rgba(193,122,31,.85);stroke-dasharray:5 4;}
 .fd-arrows path.wire{stroke:var(--leader);stroke-dasharray:4 4;pointer-events:none;}
-/* coarse read-only day grid (Arrival/Ops/Return): static Gantt, no drag affordance */
-.fd-block.ro{cursor:default;background:linear-gradient(180deg,var(--bg1),var(--bg2));border-left-color:var(--leader);}
-.fd-block.ro:active{cursor:default;transform:none;}
-.fd-block.ro .fd-bname{pointer-events:none;}
-/* coarse info-flow connectors ride ABOVE the all-day blocks (which have no output ports to attach to) */
-.fd-arrows.ro{z-index:5;}
-.fd-arrows path.ro{stroke:rgba(91,107,69,.85);stroke-width:2;stroke-dasharray:none;pointer-events:stroke;cursor:help;}
-.fd-arrows.ro circle{pointer-events:auto;}
 .fd-arrowlist{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px;}
-.fd-ar-chip.ro{cursor:help;}
-.fd-ar-chip.ro.inc{border-style:dashed;color:var(--ink3);}
-.pr-item.ro-note{background:rgba(61,90,108,.1);border-color:rgba(61,90,108,.35);color:var(--leader);}
 .fd-ar-chip{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;padding:4px 10px;border-radius:var(--r-sm);border:1px solid var(--line);background:var(--bg1);cursor:pointer;font-family:inherit;}
 .fd-ar-chip.ok{border-color:rgba(91,107,69,.5);}
 .fd-ar-chip.late{border-color:rgba(193,122,31,.55);background:rgba(193,122,31,.07);}
@@ -638,7 +649,7 @@ button{font-family:inherit;}
 .ld-actions{display:flex;gap:9px;flex-wrap:wrap;}
 .result.win .ld-txt h3{color:var(--build-dark);} .result.miss .ld-txt h3{color:var(--idle-dark);}
 .ld-opt:focus-visible,.modesw button:focus-visible{outline:2px solid var(--accent-light);outline-offset:2px;}
-.station:focus-visible,.warn:focus-visible,.fd-block:focus-visible,.fd-socket:focus-visible{outline:2px solid var(--accent-light);outline-offset:2px;}
+.station:focus-visible,.warn:focus-visible,.fd-block:focus-visible,.fd-socket:focus-visible,.fd-chip:focus-visible{outline:2px solid var(--accent-light);outline-offset:2px;}
 .spd:focus-visible,.day-btn:focus-visible,.fd-ar-chip:focus-visible,.btn:focus-visible,.lang button:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
 .warn{cursor:pointer;}
 .station{cursor:pointer;}
@@ -676,7 +687,7 @@ button{font-family:inherit;}
   /* every decorative animation off; JS-driven motion is separately gated on the same media query */
   .astro,.astro::after,.astro .pw,.astro .lg,.astro .bub,.astro .sh,.astro.spot .sh,
   .station.stalled .st-ic,.station.strike .st-ic,
-  .fd-socket.miss,.r-badge.show,.guest .g-body,.gull,.splash,.water::after,
+  .fd-socket.miss,.fd-slot,.r-badge.show,.guest .g-body,.gull,.splash,.water::after,
   .boat .bcore,.boat.sailing .bcore,.path,.dinnertag.late,#fd-projected.bump,
   .btn.glow,.ld-panel.on,.bigreadout.gold{animation:none !important;}
   /* hand-off arrival cue stays visible without motion: a static ring while the class is held */

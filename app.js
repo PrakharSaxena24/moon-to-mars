@@ -34,18 +34,22 @@
     if (fixId === 'grantAuth') delete mcOv.lines.bl_meals;
     if (fixId === 'fixReserve') { mcOv.reserve = null; if (mcOv.resources.res_cash) delete mcOv.resources.res_cash; }
   }
-  // fishday hand-authored edits (drawn/erased arrows, re-timed blocks) — §7 editor output
-  var fdOv = { timing: {}, handoffs: {} };
-  function fdReset() { fdOv = { timing: {}, handoffs: {} }; }
+  // §20 authorable-days editor state — ONE deck→arrange→connect override store for all four
+  // day tabs. Fishday's sub-object keeps the LEGACY timing/staffing/handoffs channels (so its
+  // verify/E2E anchors stay byte-identical); arrival/ops/return use the unified placement/handoffs
+  // schema that buildCfg folds into overrides.days[seg] (§20.3).
+  function freshDayOv(seg) { return seg === 'fishday' ? { timing: {}, staffing: {}, handoffs: {} } : { placement: {}, handoffs: {} }; }
+  var dayOv = { arrival: freshDayOv('arrival'), ops: freshDayOv('ops'), 'return': freshDayOv('return'), fishday: freshDayOv('fishday') };
+  function fdReset() { dayOv.fishday = freshDayOv('fishday'); }
   // fixHandoffs must win over stale hand-edits/erasures of the canonical arrows,
   // or the fix-pack button would appear to do nothing (the hand-edit re-breaks it).
   // ANY block re-timing can re-break the zero-idle anchor through the dep chain
   // (engine contract: fixHandoffs returns the fishday to its anchor no matter what
   // the editor did) — so applying the fix resets every fishday timing edit too.
   function fdClearFixConflicts() {
-    fdOv.timing = {};
+    dayOv.fishday.timing = {};
     P.canonHandoffs().forEach(function (h) {
-      if (fdOv.handoffs.hasOwnProperty(h.id)) delete fdOv.handoffs[h.id];
+      if (dayOv.fishday.handoffs.hasOwnProperty(h.id)) delete dayOv.fishday.handoffs[h.id];
     });
   }
   function buildCfg() {
@@ -58,8 +62,16 @@
       for (k in mcOv.lines) { ((o.budget.lines = o.budget.lines || {})[k] = o.budget.lines[k] || {}); Object.assign(o.budget.lines[k], mcOv.lines[k]); }
       for (k in mcOv.resources) { ((o.budget.resources = o.budget.resources || {})[k] = o.budget.resources[k] || {}); Object.assign(o.budget.resources[k], mcOv.resources[k]); }
     }
-    for (k in fdOv.timing) { (o.timing = o.timing || {})[k] = fdOv.timing[k]; }
-    for (k in fdOv.handoffs) { (o.handoffs = o.handoffs || {})[k] = fdOv.handoffs[k]; }
+    for (k in dayOv.fishday.timing) { (o.timing = o.timing || {})[k] = dayOv.fishday.timing[k]; }
+    for (k in dayOv.fishday.staffing) { (o.staffing = o.staffing || {})[k] = dayOv.fishday.staffing[k]; }
+    for (k in dayOv.fishday.handoffs) { (o.handoffs = o.handoffs || {})[k] = dayOv.fishday.handoffs[k]; }
+    ['arrival', 'ops', 'return'].forEach(function (seg) {
+      var ov = dayOv[seg], hasP = Object.keys(ov.placement).length, hasH = Object.keys(ov.handoffs).length;
+      if (!hasP && !hasH) return;
+      o.days = o.days || {}; var od = o.days[seg] = o.days[seg] || {};
+      if (hasP) { od.placement = od.placement || {}; for (k in ov.placement) od.placement[k] = ov.placement[k]; }
+      if (hasH) { od.handoffs = od.handoffs || {}; for (k in ov.handoffs) od.handoffs[k] = ov.handoffs[k]; }
+    });
     return cfg;
   }
   function currentPlan() { return P.mergePlan(buildCfg()); }
@@ -255,124 +267,127 @@
   }
 
   // =========================================================================
-  // FISHDAY EDITOR — timeline lanes + info-arrow overlay (§7)
+  // DAY EDITOR — ONE deck→arrange→connect editor for all four day tabs (§20).
+  // Fishday keeps its per-participant minute-level authoring exactly as before;
+  // Arrival/Ops/Return now share the identical renderer + drag/wire machinery,
+  // reading P.tasksForSeg/P.handoffsForSeg and writing dayOv[seg] (§20.3).
   // =========================================================================
   var PXM = 0.8, FD_T0 = P.DAY_START_MIN, FD_T1 = P.DAY_END_MIN, LANE_H = 40, LBL_W = 108, RULER_H = 26;
-  var fdDrag = null, fdWire = null, arrowEdit = null, fdUid = 1, fdLastProj = null;
+  var fdDrag = null, fdWire = null, fdGhost = null, arrowEdit = null, arrowEditSeg = null, placingChip = null, fdUid = 1, fdLastProj = {};
   // AoE-style resource-tick: float a "+N" over the projection when a fix raises the score
   function floatDelta(host, txt, cls) {
     if (!host) return;
     var f = document.createElement('span'); f.className = 'score-float ' + (cls || 'up'); f.textContent = txt;
     host.appendChild(f); setTimeout(function () { if (f.parentNode) f.parentNode.removeChild(f); }, 1000);
   }
-  function fdX(min) { return LBL_W + (min - FD_T0) * PXM; }
-  function fdMin(x) { return clamp(Math.round(((x - LBL_W) / PXM + FD_T0) / 5) * 5, FD_T0, FD_T1); }
+  // per-seg authoring window + placement snap (§20.1: fishday 15 min, others 60)
+  function segWin(seg) { return P.DAY_WINDOWS[seg] || [P.DAY_START_MIN, P.DAY_END_MIN]; }
+  function segSnap(seg) { return P.SNAP_MIN[seg] || 60; }
+  function fdX(min) { var w = segWin(daySel); return LBL_W + (min - w[0]) * PXM; }
+  function fdMin(x) { var w = segWin(daySel), sn = segSnap(daySel); return clamp(Math.round(((x - LBL_W) / PXM + w[0]) / sn) * sn, w[0], w[1]); }
   function cardOwnerOf(plan, cid) { var c = byId(plan.infoCards, cid); return c ? c.ownerRoleId : null; }
+  // fishday-only producer lookup (Live mode's gap flow depends on this exact — plan.tasks, day==='fishday' — shape)
   function producerOf(plan, cid) { for (var i = 0; i < plan.tasks.length; i++) { var t = plan.tasks[i]; if (t.day === 'fishday' && (t.produces || []).indexOf(cid) >= 0) return t; } return null; }
   function fdBlockGeo(plan, tk) {
     var lane = 0; plan.participants.forEach(function (pp, i) { if (pp.id === tk.assignedIds[0]) lane = i; });
     return { x: fdX(tk.startMin), w: Math.max(10, tk.durMin * PXM), y: RULER_H + lane * LANE_H + 7 };
   }
 
-  // ---- coarse read-only day grid (Arrival/Ops/Return): a static Gantt derived from engine data.
-  // Day 3 stays the full minute-level authoring editor; these days score via the checklist, so the
-  // grid here is a VIEW (lanes + blocks + info arrows), never an authoring surface. Separate code
-  // path from the fishday renderer (lanes are per-ROLE here, per-participant there). ----
-  var COARSE_T0 = P.DAY_HOUR_START, COARSE_T1 = P.DAY_HOUR_END, SUB_H = 30, LANE_PAD = 8;
-  function cx(min) { return LBL_W + (min - COARSE_T0) * PXM; }
-  function buildCoarseGrid(seg) {
-    var plan = currentPlan(), lay = P.dayLayout(plan, seg), t = T();
-    if ($('fd-title')) $('fd-title').textContent = t.gridDayTitle(dayLabel(seg));
-    if ($('fd-hint')) $('fd-hint').textContent = t.gridReadonlyHint;
-    if ($('fd-arrows-lbl')) $('fd-arrows-lbl').textContent = t.gridCommsLbl;
-    if (!lay || !lay.lanes.length) {
-      var bx0 = $('fd-canvas'); bx0.innerHTML = ''; bx0.style.height = '40px'; bx0.style.width = '100%';
-      $('fd-arrowlist').innerHTML = ''; $('fd-ready').innerHTML = '<span class="pr-item ro-note">' + t.gridScoreNote + '</span>';
-      return;
-    }
-    var laneTop = [], laneRows = [], y = RULER_H;
-    lay.lanes.forEach(function (rid, i) {
-      var maxSub = 0;
-      lay.blocks.forEach(function (b) { if (b.laneIndex === i && b.subRow > maxSub) maxSub = b.subRow; });
-      laneRows[i] = maxSub + 1; laneTop[i] = y; y += (maxSub + 1) * SUB_H + LANE_PAD;
-    });
-    var W = cx(COARSE_T1) + 16, H = y + 6, html = '';
-    for (var m = COARSE_T0; m <= COARSE_T1; m += 60) html += '<div class="fd-tick" style="left:' + cx(m) + 'px">' + hhmm(m) + '</div>';
-    lay.lanes.forEach(function (rid, i) {
-      var rr = P.role(rid), lh = laneRows[i] * SUB_H + LANE_PAD;
-      html += '<div class="fd-lane" style="top:' + laneTop[i] + 'px;height:' + lh + 'px;width:' + W + 'px"></div>' +
-        '<div class="fd-lbl" style="top:' + laneTop[i] + 'px;height:' + lh + 'px"><span class="fd-lbl-ic" style="background:' + rr.color + '">' + rr.icon + '</span>' + nm(rr.name) + '</div>';
-    });
-    var geo = {};
-    lay.blocks.forEach(function (b) {
-      var tk = byId(plan.tasks, b.taskId); if (!tk) return;
-      var x = cx(b.startMin), w = Math.max(30, b.durMin * PXM), by = laneTop[b.laneIndex] + b.subRow * SUB_H + 3;
-      geo[b.taskId] = { x: x, w: w, cy: by + 13 };
-      html += '<div class="fd-block ro' + (w < 70 ? ' sm' : '') + '" data-task="' + b.taskId + '" style="left:' + x + 'px;top:' + by + 'px;width:' + w + 'px" title="' + nm(tk.name) + '  (' + nm(P.role(tk.ownerRoleId).name) + ')">' +
-        '<span class="fd-bname">' + P.station(tk.station).icon + ' ' + nm(tk.name) + '</span></div>';
-    });
-    var box = $('fd-canvas'); box.style.width = W + 'px'; box.style.height = H + 'px';
-    box.innerHTML = html + '<svg class="fd-arrows" id="fd-arrows" width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '"></svg>';
-    var sc2 = $('fd-scroll'); if (sc2 && sc2.scrollLeft) box.querySelectorAll('.fd-lbl').forEach(function (lb) { lb.style.transform = 'translateX(' + sc2.scrollLeft + 'px)'; });
-    var arrows = P.derivedHandoffs(plan, seg);
-    drawCoarseArrows(plan, arrows, geo);
-    $('fd-arrowlist').innerHTML = arrows.length ? arrows.map(function (a) {
-      var card = byId(plan.infoCards, a.cardId);
-      var label = nm(card ? card.name : a.cardId).split('：')[0].split(':')[0];
-      var tip = label + ' · ' + nm(P.role(a.fromRoleId).name) + ' → ' + nm(P.role(a.toRoleId).name);
-      return '<span class="fd-ar-chip ro' + (a.incoming ? ' inc' : '') + '" title="' + tip + '">' + (a.incoming ? '↘ ' : '→ ') + label + '</span>';
-    }).join('') : '<span class="pr-item ok">' + t.gridNoArrows + '</span>';
-    var un = (lay.unstaffed || []).map(function (id) { var x = byId(plan.tasks, id); return x ? nm(x.name) : id; });
-    $('fd-ready').innerHTML = '<span class="pr-item ro-note">' + t.gridScoreNote + '</span>' +
-      un.map(function (n) { return '<span class="pr-item bad">⚠ ' + t.gridUnstaffed(n) + '</span>'; }).join('');
+  // ---- seg-scoped info-flow lens (mirrors engine.js's resolveSendMin/staticArrival/infoArrival,
+  // but resolved against P.tasksForSeg/P.handoffsForSeg so it's correct for the coarse days too —
+  // for seg==='fishday' these read the exact same plan.tasks/plan.handoffs data, byte-identical). ----
+  function producerInSeg(segT, cid) { for (var i = 0; i < segT.length; i++) if ((segT[i].produces || []).indexOf(cid) >= 0) return segT[i]; return null; }
+  function sendMinInSeg(segT, h) {
+    var t;
+    if (h.trigger.type === 'atMinute') return (typeof h.trigger.value === 'number' && isFinite(h.trigger.value)) ? h.trigger.value : null;
+    if (h.trigger.type === 'onTaskDone') { t = byId(segT, h.trigger.taskId); return (t && typeof t.startMin === 'number') ? (t.startMin + t.durMin) : null; }
+    if (h.trigger.type === 'beforeTaskStart') { t = byId(segT, h.trigger.taskId || h.toTaskId); return (t && typeof t.startMin === 'number') ? (t.startMin - (h.trigger.leadMin || 0)) : null; }
+    return null;
   }
-  function xesc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
-  function drawCoarseArrows(plan, arrows, geo) {
-    var svg = $('fd-arrows'); if (!svg) return; var s = '';
-    svg.setAttribute('class', 'fd-arrows ro');   // raised above blocks (CSS) so the connectors are visible
-    arrows.forEach(function (a) {
-      if (a.incoming || !a.fromTaskId) return;
-      var gf = geo[a.fromTaskId], gt = geo[a.toTaskId]; if (!gf || !gt) return;
-      var card = byId(plan.infoCards, a.cardId);
-      var tip = xesc(nm(card ? card.name : a.cardId).split('：')[0].split(':')[0] + ' · ' + nm(P.role(a.fromRoleId).name) + ' → ' + nm(P.role(a.toRoleId).name));
-      var fr = gf.x + gf.w, y1 = gf.cy, y2 = gt.cy, d, x2;
-      // coincident all-day blocks have no left→right precedence: draw a clean vertical link at a
-      // shared x instead of the far-right→far-left slice that cut through unrelated lanes.
-      var overlap = Math.max(gf.x, gt.x) < Math.min(fr, gt.x + gt.w);
-      if (overlap) { var sx = Math.max(gf.x, gt.x) + 20; x2 = sx; d = 'M' + sx + ' ' + y1 + ' L ' + sx + ' ' + y2; }
-      else { var x1 = fr + 6; x2 = gt.x - 6; var mx = (x1 + x2) / 2; d = 'M' + x1 + ' ' + y1 + ' C ' + mx + ' ' + y1 + ', ' + mx + ' ' + y2 + ', ' + x2 + ' ' + y2; }
-      s += '<path class="ok ro" data-d="' + a.id + '" d="' + d + '"><title>' + tip + '</title></path>' +
-        '<circle cx="' + x2 + '" cy="' + y2 + '" r="3" fill="rgba(91,107,69,.95)"><title>' + tip + '</title></circle>';
+  function arrivalInSeg(segT, h) { var s = sendMinInSeg(segT, h); return s == null ? null : s + (P.CHANNELS[h.channel] || 0); }
+  function arrowsToInSeg(segH, roleId, cid) { var out = []; segH.forEach(function (h) { if (h.cardId === cid && h.toRoleId === roleId) out.push(h); }); return out; }
+  function infoArrivalSeg(segT, segH, cid, roleId) {
+    var hs = arrowsToInSeg(segH, roleId, cid), best = null;
+    hs.forEach(function (h) { var a = arrivalInSeg(segT, h); if (a != null && (best == null || a < best)) best = a; });
+    return best;
+  }
+  function feedArrowInSeg(segH, segT, toTaskId, cardId) {
+    var to = byId(segT, toTaskId), best = null, bestArr = Infinity, bestTask = null, bestTaskArr = Infinity;
+    if (!to) return null;
+    segH.forEach(function (h) {
+      if (h.cardId !== cardId || h.toRoleId !== to.ownerRoleId) return;
+      var a = arrivalInSeg(segT, h);
+      if (a == null) return;
+      if (h.toTaskId === toTaskId && a < bestTaskArr) { bestTaskArr = a; bestTask = h; }
+      if (a < bestArr) { bestArr = a; best = h; }
     });
-    svg.innerHTML = s;
+    return bestTask || best;
+  }
+  function producedAtSeg(segT, h) { var from = byId(segT, h.fromTaskId); return from ? from.startMin + from.durMin : segWin(daySel)[0]; }
+
+  // ---- unified placement write-through: fishday keeps the legacy timing/staffing channels,
+  // arrival/ops/return use the placement schema (§20.3, buildCfg folds both into their own
+  // overrides channel). This is the ONE place that branches by seg for block placement. ----
+  function writeMove(taskId, startMin, durMin, assignedIds) {
+    if (daySel === 'fishday') dayOv.fishday.timing[taskId] = { startMin: startMin, durMin: durMin };
+    else dayOv[daySel].placement[taskId] = { startMin: startMin, durMin: durMin, assignedIds: (assignedIds || []).slice() };
+  }
+  function writeUnplace(taskId) {
+    if (daySel === 'fishday') dayOv.fishday.staffing[taskId] = [];
+    else dayOv[daySel].placement[taskId] = null;
+  }
+  function writePlace(taskId, startMin, durMin, personId) {
+    if (daySel === 'fishday') { dayOv.fishday.staffing[taskId] = [personId]; dayOv.fishday.timing[taskId] = { startMin: startMin, durMin: durMin }; }
+    else dayOv[daySel].placement[taskId] = { startMin: startMin, durMin: durMin, assignedIds: [personId] };
+  }
+
+  // ---- Task Deck rail (#fd-deck): every unplaced task (required + decoys) for the active seg.
+  // Placed tasks are never in the deck; decoys render identically to required ones (no visual
+  // tell) except a small .req badge marks the ones the day actually needs. ----
+  function buildDeck() {
+    var box = $('fd-deck'); if (!box) return;
+    var t = T(), seg = daySel, plan = currentPlan(), deck = P.deckFor(plan, seg), segT = P.tasksForSeg(plan, seg);
+    var reqUnplaced = deck.unplaced.filter(function (id) { return deck.required.indexOf(id) >= 0; }).length;
+    var chips = deck.unplaced.map(function (id) {
+      var tk = byId(segT, id); if (!tk) return '';
+      var req = deck.required.indexOf(id) >= 0, rr = P.role(tk.ownerRoleId);
+      return '<div class="fd-chip' + (req ? ' req' : '') + (placingChip === id ? ' placing' : '') + '" tabindex="0" role="button" data-task="' + id + '" title="' + nm(tk.name) + '">' +
+        '<span class="fd-chip-ic" style="background:' + rr.color + '">' + rr.icon + '</span>' +
+        '<span class="fd-chip-name">' + nm(tk.name) + '</span>' +
+        '<span class="fd-chip-dur">' + Math.round(tk.durMin) + t.minAbbrev + '</span>' +
+        (req ? '<i class="fd-chip-req-badge" title="' + t.deckRequired + '"></i>' : '') + '</div>';
+    }).join('');
+    box.innerHTML = '<div class="dash-lbl fd-deck-title">' + t.deckTitle + '</div>' +
+      '<div class="fd-deck-count">' + t.deckCount(reqUnplaced) + '</div>' +
+      '<div class="fd-deck-chips">' + (chips || '<span class="pr-item ok">' + t.deckEmpty + '</span>') + '</div>';
   }
 
   function buildDayGrid() {
     var card = $('fd-card'); if (!card) return;
     if (daySel === 'all') { card.classList.add('hidden'); return; }
     card.classList.remove('hidden');
-    var pj = $('fd-projected'); if (pj) pj.style.display = (daySel === 'fishday') ? '' : 'none';
-    if (daySel !== 'fishday') { buildCoarseGrid(daySel); return; }
-    var t0 = T();
-    if ($('fd-title')) $('fd-title').textContent = t0.fdTitle;
-    if ($('fd-hint')) $('fd-hint').textContent = t0.fdHint;
-    if ($('fd-arrows-lbl')) $('fd-arrows-lbl').textContent = t0.fdArrowsLbl;
-    var plan = currentPlan(), fds = P.fishdayTasks(plan), fd = P.fishdaySchedule(plan);
-    var lanes = plan.participants;
-    var W = fdX(FD_T1) + 16, H = RULER_H + lanes.length * LANE_H + 6, html = '';
-    for (var m = FD_T0; m <= FD_T1; m += 60) html += '<div class="fd-tick" style="left:' + fdX(m) + 'px">' + hhmm(m) + '</div>';
+    var seg = daySel, t0 = T(), plan = currentPlan();
+    var segT = P.tasksForSeg(plan, seg), segH = P.handoffsForSeg(plan, seg), fd = P.daySchedule(plan, seg);
+    if (seg === 'fishday') { $('fd-title').textContent = t0.fdTitle; $('fd-hint').textContent = t0.fdHint; }
+    else { $('fd-title').textContent = t0.dayGridTitle(dayLabel(seg)); $('fd-hint').textContent = t0.dayGridHint; }
+    $('fd-arrows-lbl').textContent = t0.fdArrowsLbl;
+    var cb = $('fd-clear-day'); if (cb) { cb.classList.remove('armed'); cb.textContent = t0.clearDayBtn; }
+    buildDeck();
+    var win = segWin(seg), lanes = plan.participants;
+    var W = fdX(win[1]) + 16, H = RULER_H + lanes.length * LANE_H + 6, html = '';
+    for (var m = win[0]; m <= win[1]; m += 60) html += '<div class="fd-tick" style="left:' + fdX(m) + 'px">' + hhmm(m) + '</div>';
     lanes.forEach(function (pp, i) {
       var rr = P.role(pp.roleId), top = RULER_H + i * LANE_H;
       html += '<div class="fd-lane" style="top:' + top + 'px;width:' + W + 'px"></div>' +
         '<div class="fd-lbl" style="top:' + top + 'px"><span class="fd-lbl-ic" style="background:' + rr.color + '">' + rr.icon + '</span>' + nm(pp.name) + '</div>';
     });
-    fds.forEach(function (tk) {
-      if (!tk.assignedIds.length) return;
+    segT.forEach(function (tk) {
+      if (!tk.assignedIds.length) return;                  // unplaced tasks live in the deck, not the canvas
       var g = fdBlockGeo(plan, tk), e = fd.byTask[tk.id];
       var sock = '';
       (tk.neededInfo || []).forEach(function (cid, si) {
         if (cardOwnerOf(plan, cid) === tk.ownerRoleId) return;
-        var arr = P.infoArrival(plan, cid, tk.ownerRoleId);
+        var arr = infoArrivalSeg(segT, segH, cid, tk.ownerRoleId);
         var cls = arr == null ? 'miss' : (arr <= tk.startMin ? 'ok' : 'late');
         sock += '<span class="fd-socket ' + cls + '" tabindex="0" role="button" data-task="' + tk.id + '" data-card="' + cid + '" style="top:' + (si * 11 + 1) + 'px" title="● ' + nm(byId(plan.infoCards, cid).name) + '"></span>';
       });
@@ -387,24 +402,25 @@
     // keep the lane labels pinned if the timeline is already panned
     var sc2 = $('fd-scroll');
     if (sc2 && sc2.scrollLeft) box.querySelectorAll('.fd-lbl').forEach(function (lb) { lb.style.transform = 'translateX(' + sc2.scrollLeft + 'px)'; });
-    drawFdArrows(plan);
-    buildFdArrowList(plan);
-    buildFdReady(plan, fd);
+    drawFdArrows(plan, seg);
+    buildFdArrowList(plan, seg);
+    buildFdReady(plan, fd, seg);
+    if (placingChip) renderDropSlots();                    // keep the tap-to-place slots visible across repaints
   }
 
-  function arrowEnds(plan, h) {
-    var from = byId(plan.tasks, h.fromTaskId), to = byId(plan.tasks, h.toTaskId);
-    if (!from || !to || from.day !== 'fishday' || to.day !== 'fishday' || !from.assignedIds.length || !to.assignedIds.length) return null;
+  function arrowEnds(plan, seg, h) {
+    var segT = P.tasksForSeg(plan, seg), from = byId(segT, h.fromTaskId), to = byId(segT, h.toTaskId);
+    if (!from || !to || !from.assignedIds.length || !to.assignedIds.length) return null;
     var gf = fdBlockGeo(plan, from), gt = fdBlockGeo(plan, to);
     var si = 0; (to.neededInfo || []).forEach(function (cid, i2) { if (cid === h.cardId) si = i2; });
     return { x1: gf.x + gf.w + 8, y1: gf.y + 13, x2: gt.x - 6, y2: gt.y + si * 11 + 6 };
   }
-  function drawFdArrows(plan) {
+  function drawFdArrows(plan, seg) {
     var svg = $('fd-arrows'); if (!svg) return;
-    var s = '';
-    plan.handoffs.forEach(function (h) {
-      var e = arrowEnds(plan, h); if (!e) return;
-      var to = byId(plan.tasks, h.toTaskId), sa = P.staticArrival(plan, h);
+    var s = '', segT = P.tasksForSeg(plan, seg), segH = P.handoffsForSeg(plan, seg);
+    segH.forEach(function (h) {
+      var e = arrowEnds(plan, seg, h); if (!e) return;
+      var to = byId(segT, h.toTaskId), sa = arrivalInSeg(segT, h);
       var late = sa == null || sa > to.startMin;
       var mx = (e.x1 + e.x2) / 2;
       s += '<path class="' + (late ? 'late' : 'ok') + '" data-h="' + h.id + '" d="M' + e.x1 + ' ' + e.y1 + ' C ' + mx + ' ' + e.y1 + ', ' + mx + ' ' + e.y2 + ', ' + e.x2 + ' ' + e.y2 + '"></path>' +
@@ -412,66 +428,115 @@
     });
     svg.innerHTML = s;
   }
-  function buildFdArrowList(plan) {
-    var t = T();
-    $('fd-arrowlist').innerHTML = plan.handoffs.map(function (h) {
-      var to = byId(plan.tasks, h.toTaskId); if (!to || to.day !== 'fishday') return '';
-      var sa = P.staticArrival(plan, h), late = sa == null || sa > to.startMin;
+  function buildFdArrowList(plan, seg) {
+    var t = T(), segT = P.tasksForSeg(plan, seg), segH = P.handoffsForSeg(plan, seg);
+    $('fd-arrowlist').innerHTML = segH.map(function (h) {
+      var to = byId(segT, h.toTaskId); if (!to) return '';
+      var sa = arrivalInSeg(segT, h), late = sa == null || sa > to.startMin;
       var card = byId(plan.infoCards, h.cardId);
       return '<button class="fd-ar-chip ' + (late ? 'late' : 'ok') + '" data-h="' + h.id + '">' + (late ? '⚑' : '✓') + ' ' + nm(card ? card.name : h.cardId).split('：')[0].split(':')[0] + ' <span class="muted2">' + (sa == null ? '—' : hhmm(sa)) + ' ' + t['ch' + h.channel.charAt(0).toUpperCase() + h.channel.slice(1)].split(' ')[0] + '</span></button>';
     }).join('');
   }
-  function buildFdReady(plan, fd) {
-    var t = T(), hints = P.readiness(plan), chips = [];
-    function tn(id) { var x = byId(plan.tasks, id); return x ? nm(x.name) : id; }
+  function buildFdReady(plan, fd, seg) {
+    var t = T(), hints = P.dayReadiness(plan, seg), chips = [], segT = P.tasksForSeg(plan, seg);
+    function tn(id) { var x = byId(segT, id); return x ? nm(x.name) : id; }
     function cn(id) { var x = byId(plan.infoCards, id); return x ? nm(x.name).split('：')[0].split(':')[0] : id; }
+    function chip(type, txt) { return '<span class="pr-item bad" data-type="' + type + '">' + txt + '</span>'; }
     hints.forEach(function (h) {
-      if (h.type === 'MISSING_ARROW') chips.push(t.rhMissing(cn(h.cardId), tn(h.taskId)));
-      else if (h.type === 'ARROW_LATE') chips.push(t.rhLate(cn(h.cardId), tn(h.taskId), h.lateMin));
-      else if (h.type === 'WRONG_FISH_RISK') chips.push(t.rhWrongFish(cn(h.cardId), tn(h.taskId)));
-      else if (h.type === 'DEP_BROKEN') chips.push(t.rhDep(tn(h.taskId), tn(h.depId)));
-      else if (h.type === 'OVERLOAD') { var pp = byId(plan.participants, h.personId); chips.push(t.rhOverload(pp ? nm(pp.name) : h.personId)); }
-      else if (h.type === 'TASK_UNSTAFFED') chips.push(t.rhUnstaffed(tn(h.taskId)));
-      else if (h.type === 'DUTY_UNASSIGNED') chips.push(t.rhDuty(nm(P.role(h.roleId).name)));
+      if (h.type === 'MISSING_ARROW') chips.push(chip(h.type, t.rhMissing(cn(h.cardId), tn(h.taskId))));
+      else if (h.type === 'ARROW_LATE') chips.push(chip(h.type, t.rhLate(cn(h.cardId), tn(h.taskId), h.lateMin)));
+      else if (h.type === 'WRONG_FISH_RISK') chips.push(chip(h.type, t.rhWrongFish(cn(h.cardId), tn(h.taskId))));
+      else if (h.type === 'DEP_BROKEN') chips.push(chip(h.type, t.rhDep(tn(h.taskId), tn(h.depId))));
+      else if (h.type === 'OVERLOAD') { var pp = byId(plan.participants, h.personId); chips.push(chip(h.type, t.rhOverload(pp ? nm(pp.name) : h.personId))); }
+      else if (h.type === 'TASK_UNSTAFFED') chips.push(chip(h.type, t.rhUnstaffed(tn(h.taskId))));
+      else if (h.type === 'DUTY_UNASSIGNED') chips.push(chip(h.type, t.rhDuty(nm(P.role(h.roleId).name))));
+      else if (h.type === 'UNPLACED_REQUIRED') chips.push(chip(h.type, t.rhUnplaced(tn(h.taskId))));
+      else if (h.type === 'DECOY_PLACED') chips.push(chip(h.type, t.rhDecoy(tn(h.taskId))));
+      else if (h.type === 'MISASSIGNED') chips.push(chip(h.type, t.rhMisassigned(tn(h.taskId))));
     });
     $('fd-ready').innerHTML = '<span class="pr-lbl">' + t.fdReadyLbl + '</span>' +
-      (chips.length ? chips.slice(0, 8).map(function (c) { return '<span class="pr-item bad">' + c + '</span>'; }).join('') + (chips.length > 8 ? '<span class="pr-item bad">+' + (chips.length - 8) + '</span>' : '')
+      (chips.length ? chips.slice(0, 8).join('') + (chips.length > 8 ? '<span class="pr-item bad">+' + (chips.length - 8) + '</span>' : '')
                     : '<span class="pr-item ok">' + t.fdReadyOk + '</span>');
-    var proj = P.projected(buildCfg()), pe = $('fd-projected');
-    pe.textContent = t.fdProjected(proj.score, proj.efficiency);
+    // fishday keeps its existing (whole-trip) projected wording; the coarse days show their own
+    // rule-based day score (§20.4) via scoreDay/projectedDay
+    var scoreVal, effVal;
+    if (seg === 'fishday') { var proj = P.projected(buildCfg()); scoreVal = proj.score; effVal = proj.efficiency; }
+    else { var pd = P.projectedDay(buildCfg(), seg); scoreVal = pd.score; effVal = pd.efficiency; }
+    var pe = $('fd-projected');
+    pe.textContent = t.fdProjected(scoreVal, effVal);
     pe.className = 'planhint' + (chips.length ? '' : ' good');
-    if (fdLastProj != null && proj.score > fdLastProj) {
-      floatDelta(pe, '+' + (proj.score - fdLastProj)); pe.classList.add('bump');
+    if (fdLastProj[seg] != null && scoreVal > fdLastProj[seg]) {
+      floatDelta(pe, '+' + (scoreVal - fdLastProj[seg])); pe.classList.add('bump');
       setTimeout(function () { pe.classList.remove('bump'); }, 620);
     }
-    fdLastProj = proj.score;
+    fdLastProj[seg] = scoreVal;
   }
 
-  // ---- block drag / resize / arrow wire (Pointer Events) ----
-  // the best arrow currently feeding (task, card) for its owner — an arrow bound to THIS task
-  // wins over a same-role sibling, so the panel's deadline matches the tapped socket
-  function feedArrow(plan, toTaskId, cardId) {
-    var to = byId(plan.tasks, toTaskId), best = null, bestArr = Infinity, bestTask = null, bestTaskArr = Infinity;
-    if (!to) return null;
-    plan.handoffs.forEach(function (h) {
-      if (h.cardId !== cardId || h.toRoleId !== to.ownerRoleId) return;
-      var a = P.staticArrival(plan, h);
-      if (a == null) return;
-      if (h.toTaskId === toTaskId && a < bestTaskArr) { bestTaskArr = a; bestTask = h; }
-      if (a < bestArr) { bestArr = a; best = h; }
-    });
-    return bestTask || best;
+  // ---- tap-to-place fallback (keyboard/touch parity with the pointer drag below): tap/Enter a
+  // deck chip to arm it, then a row of pulsing .fd-slot targets appears — one per lane, at the
+  // task's own default time — tap/Enter one to place it there. ----
+  function toggleChipPlacing(taskId) {
+    placingChip = (placingChip === taskId) ? null : taskId;
+    paintSetup();
+    if (placingChip) { var s = document.querySelector('.fd-slot'); if (s) s.focus(); }
+    else { var c = document.querySelector('.fd-chip[data-task="' + taskId + '"]'); if (c) c.focus(); }
   }
+  function renderDropSlots() {
+    var canvas = $('fd-canvas'); if (!canvas) return;
+    var plan = currentPlan(), seg = daySel, segT = P.tasksForSeg(plan, seg), tk = byId(segT, placingChip);
+    if (!tk) { placingChip = null; return; }
+    var win = segWin(seg), sn = segSnap(seg);
+    var startMin = clamp(Math.round((tk.startMin || win[0]) / sn) * sn, win[0], win[1] - tk.durMin);
+    var html = '';
+    plan.participants.forEach(function (pp, i) {
+      var top = RULER_H + i * LANE_H + 3;
+      html += '<div class="fd-slot" tabindex="0" role="button" data-task="' + tk.id + '" data-lane="' + i + '" data-start="' + startMin + '" style="left:' + fdX(startMin) + 'px;top:' + top + 'px;width:' + Math.max(10, tk.durMin * PXM) + 'px" title="' + nm(pp.name) + '"></div>';
+    });
+    canvas.querySelectorAll('.fd-slot').forEach(function (o) { o.remove(); });
+    canvas.insertAdjacentHTML('beforeend', html);
+  }
+  function commitDropSlot(el) {
+    var lane = parseInt(el.dataset.lane, 10), startMin = parseInt(el.dataset.start, 10), taskId = el.dataset.task;
+    var plan = currentPlan(), person = plan.participants[lane]; if (!person) return;
+    var segT = P.tasksForSeg(plan, daySel), tk = byId(segT, taskId); if (!tk) return;
+    writePlace(taskId, startMin, tk.durMin, person.id);
+    placingChip = null;
+    paintSetup();
+    var b = document.querySelector('.fd-block[data-task="' + taskId + '"]'); if (b) b.focus();
+  }
+
+  // ---- block drag / resize / chip placement / arrow wire (Pointer Events) ----
   function fdSocketTap(sock) {
-    var plan = currentPlan();
+    var plan = currentPlan(), segT = P.tasksForSeg(plan, daySel), segH = P.handoffsForSeg(plan, daySel);
     if (sock.classList.contains('miss')) { fdAutoDraw(sock.dataset.task, sock.dataset.card); return; }
-    var ex = feedArrow(plan, sock.dataset.task, sock.dataset.card);   // late/ok: edit what feeds it
+    var ex = feedArrowInSeg(segH, segT, sock.dataset.task, sock.dataset.card);   // late/ok: edit what feeds it
     if (ex) openArrowPanel(ex.id);
   }
+  function makeGhost(chip, x, y) {
+    removeGhost();
+    var g = document.createElement('div'); g.className = 'fd-chip ghost'; g.innerHTML = chip.innerHTML;
+    g.style.left = (x - 40) + 'px'; g.style.top = (y - 14) + 'px';
+    document.body.appendChild(g); fdGhost = g;
+  }
+  function removeGhost() { if (fdGhost && fdGhost.parentNode) fdGhost.parentNode.removeChild(fdGhost); fdGhost = null; }
+  function removeDropSlot() { var s = $('fd-dropslot'); if (s && s.parentNode) s.parentNode.removeChild(s); }
+  function isOverDeck(ev) {
+    var deck = $('fd-deck'); if (!deck) return false;
+    var r = deck.getBoundingClientRect();
+    return ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom;
+  }
   function fdPointerDown(ev) {
-    if (daySel !== 'fishday') return;            // coarse days are a read-only view — no drag/wire authoring
     if (ev.button != null && ev.button !== 0 && ev.pointerType === 'mouse') return;
     if (fdWire && ev.pointerId !== fdWire.pid) { ev.preventDefault(); return; }   // a second finger can't hijack a live wire
+    if (fdDrag) return;                                    // a gesture is already in flight
+    var chip = ev.target.closest('.fd-chip');
+    if (chip && !fdWire) {
+      var plan0 = currentPlan(), segT0 = P.tasksForSeg(plan0, daySel), tk0 = byId(segT0, chip.dataset.task); if (!tk0) return;
+      fdDrag = { fromDeck: true, taskId: tk0.id, durMin: tk0.durMin, pid: ev.pointerId, x0: ev.clientX, y0: ev.clientY, moved: false, dropLane: null, dropStart: null };
+      makeGhost(chip, ev.clientX, ev.clientY);
+      chip.setPointerCapture && chip.setPointerCapture(ev.pointerId);
+      ev.preventDefault(); return;
+    }
     var port = ev.target.closest('.fd-port');
     if (port) {
       var r = $('fd-canvas').getBoundingClientRect();
@@ -483,9 +548,9 @@
     if (sock) { fdSocketTap(sock); ev.preventDefault(); return; }
     if (fdWire) return;                                   // a wire is live — don't start a drag underneath it
     var blk = ev.target.closest('.fd-block'); if (!blk) return;
-    var plan = currentPlan(), tk = byId(plan.tasks, blk.dataset.task); if (!tk) return;
+    var plan = currentPlan(), segT = P.tasksForSeg(plan, daySel), tk = byId(segT, blk.dataset.task); if (!tk) return;
     var resize = !!ev.target.closest('.fd-rsz');
-    fdDrag = { taskId: tk.id, el: blk, pid: ev.pointerId, resize: resize, x0: ev.clientX, startMin: tk.startMin, durMin: tk.durMin };
+    fdDrag = { taskId: tk.id, el: blk, pid: ev.pointerId, resize: resize, x0: ev.clientX, startMin: tk.startMin, durMin: tk.durMin, assignedIds: tk.assignedIds.slice() };
     blk.setPointerCapture && blk.setPointerCapture(ev.pointerId);
     ev.preventDefault();
   }
@@ -493,6 +558,20 @@
     var svg = $('fd-arrows'), old = svg && svg.querySelector('.wire');
     if (old) old.remove();
     fdWire = null;
+  }
+  function updateDropSlot(ev) {
+    var canvas = $('fd-canvas'); if (!canvas) { removeDropSlot(); fdDrag.dropLane = null; return; }
+    var r = canvas.getBoundingClientRect();
+    var localX = ev.clientX - r.left, localY = ev.clientY - r.top;
+    var plan = currentPlan(), lanes = plan.participants;
+    if (localX < LBL_W || localY < 0 || localY > r.height) { removeDropSlot(); fdDrag.dropLane = null; fdDrag.dropStart = null; return; }
+    var li = clamp(Math.floor((localY - RULER_H) / LANE_H), 0, lanes.length - 1);
+    var win = segWin(daySel);
+    var startMin = clamp(fdMin(localX), win[0], win[1] - fdDrag.durMin);
+    var slot = $('fd-dropslot');
+    if (!slot) { slot = document.createElement('div'); slot.id = 'fd-dropslot'; slot.className = 'fd-slot drag'; canvas.appendChild(slot); }
+    slot.style.left = fdX(startMin) + 'px'; slot.style.top = (RULER_H + li * LANE_H + 3) + 'px'; slot.style.width = Math.max(10, fdDrag.durMin * PXM) + 'px';
+    fdDrag.dropLane = li; fdDrag.dropStart = startMin;
   }
   function fdPointerMove(ev) {
     if (fdWire) {
@@ -504,16 +583,26 @@
       p.setAttribute('class', 'wire'); p.setAttribute('d', 'M' + fdWire.x0 + ' ' + fdWire.y0 + ' L ' + x + ' ' + y);
       svg.appendChild(p); return;
     }
+    if (fdDrag && fdDrag.fromDeck) {
+      if (fdDrag.pid != null && ev.pointerId !== fdDrag.pid) return;
+      if (ev.pointerType === 'mouse' && ev.buttons === 0) { removeGhost(); removeDropSlot(); fdDrag = null; paintSetup(); return; }
+      if (Math.abs(ev.clientX - fdDrag.x0) > 5 || Math.abs(ev.clientY - fdDrag.y0) > 5) fdDrag.moved = true;
+      if (fdGhost) { fdGhost.style.left = (ev.clientX - 40) + 'px'; fdGhost.style.top = (ev.clientY - 14) + 'px'; }
+      updateDropSlot(ev);
+      return;
+    }
     if (!fdDrag) return;
     if (fdDrag.pid != null && ev.pointerId !== fdDrag.pid) return;
     if (ev.pointerType === 'mouse' && ev.buttons === 0) { fdDrag = null; paintSetup(); return; }  // self-heal a stuck drag
-    var dMin = Math.round((ev.clientX - fdDrag.x0) / PXM / 5) * 5;
+    var sn = segSnap(daySel), win2 = segWin(daySel);
+    var dMin = Math.round((ev.clientX - fdDrag.x0) / PXM / sn) * sn;
     if (fdDrag.resize) {
-      var nd = clamp(fdDrag.durMin + dMin, 5, FD_T1 - fdDrag.startMin);
+      var nd = clamp(fdDrag.durMin + dMin, sn, win2[1] - fdDrag.startMin);
       fdDrag.el.style.width = Math.max(10, nd * PXM) + 'px'; fdDrag.newDur = nd;
     } else {
-      var ns = clamp(fdDrag.startMin + dMin, FD_T0, FD_T1 - fdDrag.durMin);
+      var ns = clamp(fdDrag.startMin + dMin, win2[0], win2[1] - fdDrag.durMin);
       fdDrag.el.style.left = fdX(ns) + 'px'; fdDrag.newStart = ns;
+      fdDrag.el.classList.toggle('over-deck', isOverDeck(ev));   // about to drop back onto the deck (unplace)
     }
   }
   // wire drop test with touch slop: exact hit first, then any matching socket within 14px
@@ -529,12 +618,13 @@
     return best;
   }
   // a re-timed producer can strand an atMinute send before the card exists — re-clamp its arrows
+  // (fishday-only: the atMinute self-heal is part of its byte-pinned dep-chain contract)
   function reclampArrows(taskId) {
     var plan = currentPlan();
     plan.handoffs.forEach(function (h) {
       if (h.fromTaskId !== taskId || !h.trigger || h.trigger.type !== 'atMinute') return;
       var pa = producedAt(plan, h);
-      if (h.trigger.value < pa) fdOv.handoffs[h.id] = Object.assign({}, h, { trigger: { type: 'atMinute', value: pa } });
+      if (h.trigger.value < pa) dayOv.fishday.handoffs[h.id] = Object.assign({}, h, { trigger: { type: 'atMinute', value: pa } });
     });
   }
   function fdPointerUp(ev) {
@@ -543,35 +633,52 @@
       var sock = fdDropSocket(ev);
       fdDrag = null; fdWireClear();
       if (sock) {
-        var ex = !sock.classList.contains('miss') && feedArrow(currentPlan(), sock.dataset.task, sock.dataset.card);
-        var to2 = byId(currentPlan().tasks, sock.dataset.task);
-        var onTime = ex && to2 && P.staticArrival(currentPlan(), ex) <= to2.startMin;
+        var plan = currentPlan(), segT = P.tasksForSeg(plan, daySel), segH = P.handoffsForSeg(plan, daySel);
+        var ex = !sock.classList.contains('miss') && feedArrowInSeg(segH, segT, sock.dataset.task, sock.dataset.card);
+        var to2 = byId(segT, sock.dataset.task);
+        var onTime = ex && to2 && arrivalInSeg(segT, ex) <= to2.startMin;
         if (onTime) openArrowPanel(ex.id);                          // already fed on time — edit, don't duplicate
         else fdAutoDraw(sock.dataset.task, sock.dataset.card);      // missing or late — draw (a faster duplicate is a legit fix)
       }
       buildDayGrid(); updatePlanUI(); return;
     }
+    if (fdDrag && fdDrag.fromDeck) {
+      if (fdDrag.pid != null && ev.pointerId !== fdDrag.pid) return;
+      var wasTap = !fdDrag.moved, lane = fdDrag.dropLane, start = fdDrag.dropStart, taskId = fdDrag.taskId, durMin = fdDrag.durMin;
+      removeGhost(); removeDropSlot(); fdDrag = null;
+      if (wasTap) { toggleChipPlacing(taskId); return; }
+      if (lane != null && start != null) {
+        var plan2 = currentPlan(), person = plan2.participants[lane];
+        if (person) writePlace(taskId, start, durMin, person.id);
+      }
+      paintSetup();
+      return;
+    }
     if (!fdDrag) return;
     if (fdDrag.pid != null && ev.pointerId !== fdDrag.pid) return;
     var d = fdDrag; fdDrag = null;
-    if (d.resize && d.newDur != null && d.newDur !== d.durMin) fdOv.timing[d.taskId] = { startMin: d.startMin, durMin: d.newDur };
-    else if (!d.resize && d.newStart != null && d.newStart !== d.startMin) fdOv.timing[d.taskId] = { startMin: d.newStart, durMin: d.durMin };
+    if (d.el) d.el.classList.remove('over-deck');
+    if (!d.resize && isOverDeck(ev)) { writeUnplace(d.taskId); paintSetup(); return; }
+    if (d.resize && d.newDur != null && d.newDur !== d.durMin) writeMove(d.taskId, d.startMin, d.newDur, d.assignedIds);
+    else if (!d.resize && d.newStart != null && d.newStart !== d.startMin) writeMove(d.taskId, d.newStart, d.durMin, d.assignedIds);
     else return;
-    reclampArrows(d.taskId);
+    if (daySel === 'fishday') reclampArrows(d.taskId);
     paintSetup();
   }
   function fdPointerCancel() {
     if (!fdDrag && !fdWire) return;             // touch scrolls fire pointercancel constantly — only clean real gestures
+    removeGhost(); removeDropSlot();
     fdDrag = null; fdWireClear(); paintSetup();
   }
-  // draw the arrow for (consumer task, card) from the task that produces the card
+  // draw the arrow for (consumer task, card) from the task that produces the card, within the active seg
   function fdAutoDraw(toTaskId, cardId) {
-    var plan = currentPlan(), to = byId(plan.tasks, toTaskId), from = producerOf(plan, cardId);
+    var plan = currentPlan(), seg = daySel, segT = P.tasksForSeg(plan, seg);
+    var to = byId(segT, toTaskId), from = producerInSeg(segT, cardId);
     if (!to || !from) return;
     var card = byId(plan.infoCards, cardId);
     var assume = (to.assumeOn || []).indexOf(cardId) >= 0;
     var id = 'h_' + cardId.replace('ic_', '') + '_' + to.ownerRoleId + '_' + (fdUid++);
-    fdOv.handoffs[id] = { cardId: cardId, fromRoleId: from.ownerRoleId, fromTaskId: from.id, toRoleId: to.ownerRoleId, toTaskId: to.id,
+    dayOv[seg].handoffs[id] = { cardId: cardId, fromRoleId: from.ownerRoleId, fromTaskId: from.id, toRoleId: to.ownerRoleId, toTaskId: to.id,
       trigger: { type: 'onTaskDone', taskId: from.id }, channel: 'faceToFace', ifLate: assume ? 'assume' : 'idle',
       reworkKind: assume ? 'wrongFish' : null, content: { en: nm2(card.name, 'en'), jp: nm2(card.name, 'jp') } };
     paintSetup();
@@ -579,25 +686,27 @@
   }
   function nm2(o, lang) { return o ? (lang === 'jp' ? (o.jp || o.en) : o.en) : ''; }
 
-  // ---- arrow edit panel ----
+  // ---- arrow edit panel (now seg-aware — the same modal edits fishday AND coarse-day arrows) ----
   var CH_LIST = ['faceToFace', 'radio', 'phone', 'chat', 'board'];
-  // the earliest minute a card can physically leave: its producing task's finish
+  // the earliest minute a card can physically leave: its producing task's finish (fishday-only —
+  // shared with Live mode + reclampArrows, which always run against plan.tasks/plan.handoffs)
   function producedAt(plan, h) {
     var from = byId(plan.tasks, h.fromTaskId);
     return from && from.day === 'fishday' ? from.startMin + from.durMin : FD_T0;
   }
   function openArrowPanel(hid) {
-    var plan = currentPlan(), h = byId(plan.handoffs, hid); if (!h) return;
-    arrowEdit = hid;
-    var t = T(), card = byId(plan.infoCards, h.cardId), from = byId(plan.tasks, h.fromTaskId), to = byId(plan.tasks, h.toTaskId);
+    var plan = currentPlan(), seg = daySel, segT = P.tasksForSeg(plan, seg), segH = P.handoffsForSeg(plan, seg);
+    var h = byId(segH, hid); if (!h) return;
+    arrowEdit = hid; arrowEditSeg = seg;
+    var t = T(), card = byId(plan.infoCards, h.cardId), from = byId(segT, h.fromTaskId), to = byId(segT, h.toTaskId);
     $('ar-title').textContent = nm(card ? card.name : h.cardId);
     $('ar-sub').textContent = t.arFrom + ' ' + (from ? nm(from.name) : h.fromRoleId) + ' → ' + t.arTo + ' ' + (to ? nm(to.name) : h.toRoleId);
     var trigDone = h.trigger.type === 'onTaskDone';
-    var sendMin = P.resolveSendMin(plan, h), minSend = producedAt(plan, h);
+    var sendMin = sendMinInSeg(segT, h), minSend = producedAtSeg(segT, h);
     var chOpts = CH_LIST.map(function (c) {
       return '<option value="' + c + '"' + (h.channel === c ? ' selected' : '') + '>' + t['ch' + c.charAt(0).toUpperCase() + c.slice(1)] + ' (+' + P.CHANNELS[c] + t.chMin + ')</option>';
     }).join('');
-    var arr = P.staticArrival(plan, h), needBy = to ? to.startMin : 0, late = arr == null || arr > needBy;
+    var arr = arrivalInSeg(segT, h), needBy = to ? to.startMin : 0, late = arr == null || arr > needBy;
     $('ar-body').innerHTML =
       '<div class="ar-row"><span class="dt-h">' + t.arTrigger + '</span>' +
         '<select class="ar-sel" id="ar-trig"><option value="onTaskDone"' + (trigDone ? ' selected' : '') + '>' + t.arTrigDone + (from ? ' — ' + nm(from.name) : '') + '</option>' +
@@ -612,28 +721,43 @@
   }
   function arrowPatch() {
     if (!arrowEdit) return;
-    var plan = currentPlan(), h = byId(plan.handoffs, arrowEdit); if (!h) return;
+    var plan = currentPlan(), seg = arrowEditSeg, segT = P.tasksForSeg(plan, seg), segH = P.handoffsForSeg(plan, seg);
+    var h = byId(segH, arrowEdit); if (!h) return;
     var trig = $('ar-trig').value, ch = $('ar-ch').value, tv = $('ar-time').value;
     var patch = { channel: ch };
     if (trig === 'onTaskDone') patch.trigger = { type: 'onTaskDone', taskId: h.fromTaskId };
     else {
       var mm = tv ? (parseInt(tv.slice(0, 2), 10) * 60 + parseInt(tv.slice(3, 5), 10)) : h.trigger.value || 0;
-      mm = Math.max(mm, producedAt(plan, h));           // a card can't be sent before it exists
+      mm = Math.max(mm, producedAtSeg(segT, h));           // a card can't be sent before it exists
       patch.trigger = { type: 'atMinute', value: mm };
     }
     // always store the FULL merged arrow: fix-provided arrows have no template entry, and a
     // partial patch would reach mergePlan's push-as-new branch as a malformed handoff
-    fdOv.handoffs[arrowEdit] = Object.assign({}, h, patch);
+    dayOv[seg].handoffs[arrowEdit] = Object.assign({}, h, patch);
     paintSetup();
     openArrowPanel(arrowEdit);
   }
   function arrowErase() {
     if (!arrowEdit) return;
-    fdOv.handoffs[arrowEdit] = null;
-    arrowEdit = null;
+    dayOv[arrowEditSeg].handoffs[arrowEdit] = null;
+    arrowEdit = null; arrowEditSeg = null;
     $('arrow-modal').classList.remove('show');
     modalClosed();
     paintSetup();
+  }
+  // #fd-clear-day: two-step confirm (armed on the FIRST click, executes on the SECOND for the
+  // same day) — no native confirm() dialog, consistent with every other custom modal in this app.
+  function clearDayClick() {
+    var btn = $('fd-clear-day'); if (!btn) return;
+    var seg = daySel;
+    if (btn.dataset.armed === seg) {
+      btn.dataset.armed = '';
+      P.tasksForSeg(currentPlan(), seg).forEach(function (tk) { writeUnplace(tk.id); });
+      placingChip = null;
+      paintSetup();
+      return;
+    }
+    btn.dataset.armed = seg; btn.classList.add('armed'); btn.textContent = T().clearDayConfirmBtn;
   }
 
   // =========================================================================
@@ -1368,7 +1492,11 @@
     $('rules-close').addEventListener('click', function () { $('rules-modal').classList.remove('show'); modalClosed(); });
     $('rules-modal').addEventListener('click', function (e) { if (e.target === $('rules-modal')) { $('rules-modal').classList.remove('show'); modalClosed(); } });
 
-    $('day-select').addEventListener('click', function (e) { var b = e.target.closest('.day-btn'); if (b) { daySel = b.dataset.day; paintSetup(); } });
+    $('day-select').addEventListener('click', function (e) {
+      var b = e.target.closest('.day-btn'); if (!b) return;
+      daySel = b.dataset.day; placingChip = null; removeGhost(); removeDropSlot();
+      paintSetup();
+    });
     $('editors').addEventListener('change', function (e) {
       var s = e.target.closest('.ed-sel'); if (!s) return;
       fixed[s.dataset.fix] = (s.value === 'on');
@@ -1406,8 +1534,8 @@
     $('btn-clear').addEventListener('click', function () { for (var k in fixed) fixed[k] = false; fdReset(); mcReset(); paintSetup(); });
     $('launch').addEventListener('click', launch);
 
-    // fishday editor: drag blocks / draw & edit arrows (§7)
-    $('fd-canvas').addEventListener('pointerdown', fdPointerDown);
+    // day editor: deck chips + drag blocks / draw & edit arrows, on every day tab (§20)
+    $('fd-wrap').addEventListener('pointerdown', fdPointerDown);
     document.addEventListener('pointermove', fdPointerMove);
     document.addEventListener('pointerup', fdPointerUp);
     document.addEventListener('pointercancel', fdPointerCancel);
@@ -1416,8 +1544,12 @@
       var sl = this.scrollLeft;
       this.querySelectorAll('.fd-lbl').forEach(function (lb) { lb.style.transform = 'translateX(' + sl + 'px)'; });
     });
-    $('fd-canvas').addEventListener('click', function (e) { var p = e.target.closest && e.target.closest('path[data-h]'); if (p) openArrowPanel(p.getAttribute('data-h')); });
+    $('fd-canvas').addEventListener('click', function (e) {
+      var p = e.target.closest && e.target.closest('path[data-h]'); if (p) { openArrowPanel(p.getAttribute('data-h')); return; }
+      var slot = e.target.closest && e.target.closest('.fd-slot'); if (slot) commitDropSlot(slot);
+    });
     $('fd-arrowlist').addEventListener('click', function (e) { var c = e.target.closest('.fd-ar-chip'); if (c) openArrowPanel(c.dataset.h); });
+    $('fd-clear-day').addEventListener('click', clearDayClick);
     $('ar-body') && $('arrow-modal').addEventListener('change', function (e) { if (e.target.closest('.ar-sel') || e.target.closest('.ar-time')) arrowPatch(); });
     $('ar-delete').addEventListener('click', arrowErase);
     $('ar-close').addEventListener('click', function () { arrowEdit = null; $('arrow-modal').classList.remove('show'); modalClosed(); });
@@ -1483,19 +1615,26 @@
         if (el.classList.contains('station')) { e.preventDefault(); openProblemPanel(el.id.replace('st-', '')); }
         else if (el.classList.contains('warn') && el.dataset.station) { e.preventDefault(); openProblemPanel(el.dataset.station); }
         else if (el.classList.contains('fd-socket')) { e.preventDefault(); fdSocketTap(el); }
+        else if (el.classList.contains('fd-chip')) { e.preventDefault(); toggleChipPlacing(el.dataset.task); }
+        else if (el.classList.contains('fd-slot')) { e.preventDefault(); commitDropSlot(el); }
         else if (el.classList.contains('fd-block')) { e.preventDefault(); }   // Space must not scroll the editor away
         return;
       }
-      // fishday blocks: ←/→ nudge ±5 min · Shift+←/→ resize ±5 min (coarse blocks are read-only)
-      if (daySel === 'fishday' && el.classList.contains('fd-block') && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+      // any day's blocks: ←/→ nudge by the seg's snap · Shift+←/→ resize by the same step
+      if (el.classList.contains('fd-block') && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
         e.preventDefault();
-        var plan = currentPlan(), tk = byId(plan.tasks, el.dataset.task); if (!tk) return;
-        var d = e.key === 'ArrowLeft' ? -5 : 5;
-        if (e.shiftKey) fdOv.timing[tk.id] = { startMin: tk.startMin, durMin: clamp(tk.durMin + d, 5, FD_T1 - tk.startMin) };
-        else fdOv.timing[tk.id] = { startMin: clamp(tk.startMin + d, FD_T0, FD_T1 - tk.durMin), durMin: tk.durMin };
-        reclampArrows(tk.id);
+        var plan = currentPlan(), segT = P.tasksForSeg(plan, daySel), tk = byId(segT, el.dataset.task); if (!tk) return;
+        var sn = segSnap(daySel), win = segWin(daySel), d = e.key === 'ArrowLeft' ? -sn : sn;
+        if (e.shiftKey) writeMove(tk.id, tk.startMin, clamp(tk.durMin + d, sn, win[1] - tk.startMin), tk.assignedIds);
+        else writeMove(tk.id, clamp(tk.startMin + d, win[0], win[1] - tk.durMin), tk.durMin, tk.assignedIds);
+        if (daySel === 'fishday') reclampArrows(tk.id);
         paintSetup();
         var nb = document.querySelector('.fd-block[data-task="' + tk.id + '"]'); if (nb) nb.focus();
+      } else if (el.classList.contains('fd-block') && (e.key === 'Delete' || e.key === 'Backspace')) {
+        e.preventDefault();
+        var plan2 = currentPlan(), segT2 = P.tasksForSeg(plan2, daySel), tk2 = byId(segT2, el.dataset.task); if (!tk2) return;
+        writeUnplace(tk2.id);
+        paintSetup();
       }
     });
 
@@ -1538,14 +1677,15 @@
 
   // the Morning-authored plan survives a Live detour: snapshot on the way in, restore on the way back
   function snapshotMorning() {
-    morningSnap = JSON.parse(JSON.stringify({ fixed: fixed, mcOv: mcOv, fdOv: fdOv, daySel: daySel }));
+    morningSnap = JSON.parse(JSON.stringify({ fixed: fixed, mcOv: mcOv, dayOv: dayOv, daySel: daySel }));
   }
   function restoreMorning() {
     if (!morningSnap) return;
     fixed = JSON.parse(JSON.stringify(morningSnap.fixed));
     mcOv = JSON.parse(JSON.stringify(morningSnap.mcOv));
-    fdOv = JSON.parse(JSON.stringify(morningSnap.fdOv));
+    dayOv = JSON.parse(JSON.stringify(morningSnap.dayOv));
     daySel = morningSnap.daySel;
+    placingChip = null;
   }
   function enterMode(m) {
     var was = appMode;
@@ -1568,7 +1708,7 @@
 
   function startLive() {
     for (var k in fixed) fixed[k] = true; fixed.fixHandoffs = false;   // classic decisions sound; the arrows are the puzzle
-    fdReset(); mcReset(); daySel = 'fishday';
+    fdReset(); mcReset(); daySel = 'fishday'; placingChip = null;
     liveState = { fixes: 0, addressed: {}, phase: 'brief', currentGap: null, result: null };
     launchLive();
   }
@@ -1730,11 +1870,11 @@
     var trig = { type: 'onTaskDone', taskId: from ? from.id : null };
     if (g.kind === 'late') {
       var ex = plan.handoffs.filter(function (h) { return h.cardId === g.cardId && h.toRoleId === to.ownerRoleId; })[0];
-      if (ex) fdOv.handoffs[ex.id] = Object.assign({}, ex, { channel: ch, trigger: trig });
+      if (ex) dayOv.fishday.handoffs[ex.id] = Object.assign({}, ex, { channel: ch, trigger: trig });
     } else {
       var assume = (to.assumeOn || []).indexOf(g.cardId) >= 0;
       var id = 'h_' + g.cardId.replace('ic_', '') + '_' + to.ownerRoleId + '_' + (fdUid++);
-      fdOv.handoffs[id] = { cardId: g.cardId, fromRoleId: from.ownerRoleId, fromTaskId: from.id, toRoleId: to.ownerRoleId, toTaskId: to.id, trigger: trig, channel: ch, ifLate: assume ? 'assume' : 'idle', reworkKind: assume ? 'wrongFish' : null, content: { en: '', jp: '' } };
+      dayOv.fishday.handoffs[id] = { cardId: g.cardId, fromRoleId: from.ownerRoleId, fromTaskId: from.id, toRoleId: to.ownerRoleId, toTaskId: to.id, trigger: trig, channel: ch, ifLate: assume ? 'assume' : 'idle', reworkKind: assume ? 'wrongFish' : null, content: { en: '', jp: '' } };
     }
     liveState.addressed[g.taskId + '|' + g.cardId] = true; liveState.fixes++;
     var now = sim.clockMin;

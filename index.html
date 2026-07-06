@@ -79,9 +79,15 @@
     </div>
 
     <div class="card hidden" id="fd-card">
-      <h2 id="fd-title" data-i18n="fdTitle"></h2>
+      <div class="fd-card-head">
+        <h2 id="fd-title" data-i18n="fdTitle"></h2>
+        <button class="btn sm ghost" id="fd-clear-day" data-i18n="clearDayBtn"></button>
+      </div>
       <div class="tag" id="fd-hint" data-i18n="fdHint" style="margin:-6px 0 12px;"></div>
-      <div class="fd-scroll" id="fd-scroll"><div class="fd-canvas" id="fd-canvas"></div></div>
+      <div class="fd-wrap" id="fd-wrap">
+        <div class="fd-deck" id="fd-deck"></div>
+        <div class="fd-scroll" id="fd-scroll"><div class="fd-canvas" id="fd-canvas"></div></div>
+      </div>
       <div class="dash-lbl" id="fd-arrows-lbl" data-i18n="fdArrowsLbl" style="margin-top:12px;"></div>
       <div class="fd-arrowlist" id="fd-arrowlist"></div>
       <div class="planready" id="fd-ready"></div>
