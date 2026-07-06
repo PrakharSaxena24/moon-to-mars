@@ -58,6 +58,10 @@
       badgeDayClean: '✓ DAY READY',
       dayTasksLine: function (done, total) { return done + ' / ' + total + ' of the day’s tasks ran clean'; },
       fixpackCleanDay: function (d) { return '✅ ' + d + ' has no gaps — ready to run for real.'; },
+      // --- §20 Phase 5: coarse-day (arrival/ops/return) Run report — scored by P.scoreDay, no animation ---
+      rDayScoreOk: function (d, score) { return d + ': ' + score + ' / 100 — Day ready ✓'; },
+      rDayScoreGaps: function (d, score, n) { return d + ': ' + score + ' / 100 — ' + n + ' gap' + (n === 1 ? '' : 's'); },
+      autoArrangeBtn: 'Auto-arrange the arrows ▶',
 
       // --- run ---
       overallLbl: 'Overall readiness', budgetLbl: 'Budget used', warningsLbl: 'Live warnings', perfLbl: 'Performance',
@@ -303,6 +307,10 @@
       badgeDayClean: '✓ この日OK',
       dayTasksLine: function (done, total) { return 'この日のタスク ' + done + ' / ' + total + ' が順調'; },
       fixpackCleanDay: function (d) { return '✅ ' + d + ' はギャップなし——本番で実行できます。'; },
+      // --- §20 Phase 5：粗粒度日（到着/運航/帰路）の実行レポート——P.scoreDayで採点、アニメーションなし ---
+      rDayScoreOk: function (d, score) { return d + '：' + score + ' / 100 ——準備OK ✓'; },
+      rDayScoreGaps: function (d, score, n) { return d + '：' + score + ' / 100 ——ギャップ' + n + '件'; },
+      autoArrangeBtn: '矢印を自動配置 ▶',
 
       // --- run ---
       overallLbl: '全体準備度', budgetLbl: '予算消化', warningsLbl: 'リアルタイム警告', perfLbl: 'パフォーマンス',

@@ -941,6 +941,10 @@
 
   function launch() {
     stopAnim(); clearFinishTimer();                       // never stack a second rAF loop or a stale report reveal
+    // §20 Phase 5: a coarse authored day (arrival/ops/return) never animates — Run goes straight
+    // to a report scored by the authored plan.days arrangement (P.scoreDay). Fishday + whole-trip
+    // ('all') are unchanged: they still play the day/minute-clock animation.
+    if (P.AUTHORABLE.indexOf(daySel) >= 0 && daySel !== 'fishday') { runDayReport(); return; }
     sim = P.createSim({ seed: (Math.floor(Math.random() * 1e9) >>> 0) || 1, overrides: buildCfg().overrides }, daySel);
     paused = false; livePausedForFix = false; document.body.classList.add('running');
     closeModals();
@@ -956,6 +960,17 @@
     renderSim(sim); startAnim();
     runFn = step;
     if (timer) clearInterval(timer); timer = setInterval(step, tickMs());
+  }
+  // §20 Phase 5: coarse-day Run — no sim, no animation. Score the authored plan.days arrangement
+  // directly and jump to the report (reusing the same #report DOM the animated paths render into).
+  function runDayReport() {
+    if (timer) { clearInterval(timer); timer = null; }
+    sim = null; paused = false; livePausedForFix = false; document.body.classList.remove('running');
+    closeModals();
+    $('setup').classList.add('hidden'); $('run').classList.add('hidden'); $('live-dock').classList.add('hidden'); $('report').classList.remove('hidden');
+    var seg = daySel, sc = P.scoreDay(currentPlan(), seg);
+    lastResult = { trip: null, day: sc, segment: seg, coarse: true };
+    renderReport(lastResult);
   }
   function restartTimer() { if (timer) { clearInterval(timer); timer = setInterval(runFn || step, tickMs()); } }
   function step() {
@@ -1394,10 +1409,16 @@
 
   var CAT_ORDER = ['objective', 'schedule', 'roles', 'info', 'budget', 'safety', 'quality', 'health'];
   var CAT_KEY = { objective: 'catObjective', schedule: 'catSchedule', roles: 'catRoles', info: 'catInfo', budget: 'catBudget', safety: 'catSafety', quality: 'catQuality', health: 'catHealth' };
+  var GRADE_COLOR = { A: 'var(--build)', B: 'var(--leader)', C: 'var(--idle)', D: 'var(--wait)' };
 
   function renderReport(res) {
+    // the individuals table has no coarse-day (scoreDay) analogue — hide its card for a coarse
+    // report, and restore it for the animated fishday/whole-trip paths (idempotent either way).
+    var indivCard = $('individuals').closest('.card');
+    if (res.coarse) { if (indivCard) indivCard.classList.add('hidden'); renderDayReport(res); return; }
+    if (indivCard) indivCard.classList.remove('hidden');
     var t = T(), sc = res.trip, day = res.day, head = day || sc;
-    $('r-grade').textContent = head.grade; $('r-grade').style.color = { A: 'var(--build)', B: 'var(--leader)', C: 'var(--idle)', D: 'var(--wait)' }[head.grade];
+    $('r-grade').textContent = head.grade; $('r-grade').style.color = GRADE_COLOR[head.grade];
     if (day) {
       $('r-verdict').textContent = day.clean ? t.rDayDone(dayLabel(res.segment)) : t.rDayGaps(dayLabel(res.segment));
       var perfectD = day.clean && day.grade === 'A';
@@ -1443,6 +1464,59 @@
         td(iv.action) + td(iv.decision) + td(iv.load, true) + td(iv.fatigue, true) + td(iv.coop) + td(iv.contribution) + '</tr>';
     }).join('');
     $('individuals').innerHTML = th + rows;
+  }
+
+  // §20 Phase 5: coarse-day (arrival/ops/return) report — scored straight off the authored
+  // plan.days arrangement via P.scoreDay, no sim/animation involved. Reuses the same DOM the
+  // animated fishday/whole-trip report renders into (renderReport branches to this for res.coarse).
+  function renderDayReport(res) {
+    var t = T(), seg = res.segment, sc = res.day, plan = currentPlan();
+    var hints = P.dayReadiness(plan, seg);
+    $('r-grade').textContent = sc.grade; $('r-grade').style.color = GRADE_COLOR[sc.grade];
+    $('r-verdict').textContent = sc.clean ? t.rDayScoreOk(dayLabel(seg), sc.score) : t.rDayScoreGaps(dayLabel(seg), sc.score, hints.length);
+    var perfectD = sc.clean && sc.grade === 'A';
+    var bd = $('r-badge'); bd.textContent = perfectD ? t.badgeDayClean : ''; bd.classList.toggle('show', perfectD);
+    $('r-conds').innerHTML =
+      '<span class="cond ' + (sc.efficiency === 100 ? 'met' : 'unmet') + '">' + t.rcEff(sc.efficiency) + '</span>' +
+      '<span class="cond ' + (sc.idleMin === 0 ? 'met' : 'unmet') + '">' + t.rcIdle(sc.idleMin) + '</span>' +
+      '<span class="cond ' + (sc.reworkMin === 0 ? 'met' : 'unmet') + '">' + t.rcRework(sc.reworkMin) + '</span>' +
+      (sc.dinnerMin != null ? '<span class="cond ' + (sc.dinnerMin <= 1080 ? 'met' : 'unmet') + '">' + t.rcDinner(hhmm(sc.dinnerMin)) + '</span>' : '');
+    // the day's own 8-category rule-based score (§20.4) — same renderer + CAT_MAX as the trip scorecard.
+    // scoreDay's per-category values are clamped floats (only its total is rounded), unlike score()'s
+    // pre-rounded categories — round here at the display layer so the pillar numbers read as whole points.
+    $('scorecard').innerHTML = CAT_ORDER.map(function (k) {
+      var val = Math.round(sc.categories[k]), max = P.CAT_MAX[k], pct = Math.round(val / max * 100);
+      return '<div class="pillar"><div class="pl-top"><span>' + t[CAT_KEY[k]] + '</span><b>' + val + '<small>/' + max + '</small></b></div><div class="pl-bar"><i style="width:' + pct + '%"></i></div></div>';
+    }).join('');
+    // fix-list: every dayReadiness hint, worded with the same rh* strings the live editor uses
+    var segT = P.tasksForSeg(plan, seg);
+    function tn(id) { var x = byId(segT, id); return x ? nm(x.name) : id; }
+    function cn(id) { var x = byId(plan.infoCards, id); return x ? nm(x.name).split('：')[0].split(':')[0] : id; }
+    function hintTxt(h) {
+      if (h.type === 'UNPLACED_REQUIRED') return t.rhUnplaced(tn(h.taskId));
+      if (h.type === 'DECOY_PLACED') return t.rhDecoy(tn(h.taskId));
+      if (h.type === 'MISASSIGNED') return t.rhMisassigned(tn(h.taskId));
+      if (h.type === 'MISSING_ARROW') return t.rhMissing(cn(h.cardId), tn(h.taskId));
+      if (h.type === 'ARROW_LATE') return t.rhLate(cn(h.cardId), tn(h.taskId), h.lateMin);
+      if (h.type === 'WRONG_FISH_RISK') return t.rhWrongFish(cn(h.cardId), tn(h.taskId));
+      if (h.type === 'DEP_BROKEN') return t.rhDep(tn(h.taskId), tn(h.depId));
+      if (h.type === 'OVERLOAD') { var pp = byId(plan.participants, h.personId); return t.rhOverload(pp ? nm(pp.name) : h.personId); }
+      return '';
+    }
+    if (!hints.length) $('fixpack').innerHTML = '<div class="fix-clean">' + t.fixpackCleanDay(dayLabel(seg)) + '</div>';
+    else $('fixpack').innerHTML = hints.map(function (h) {
+      return '<div class="fix-row" data-type="' + h.type + '"><div class="fix-main"><div class="fix-body">' + hintTxt(h) + '</div></div></div>';
+    }).join('') + '<button class="btn primary" id="btn-day-autofix">' + t.autoArrangeBtn + '</button>';
+    $('individuals').innerHTML = '';
+  }
+
+  // "Auto-arrange the arrows ▶" — the coarse-day analogue of the fishday fix-pack: heal this
+  // day's arrows to face-to-face (P.applyDayFix), persist the patch into dayOv, then re-score.
+  function applyDayFixAndRerun() {
+    var seg = daySel, cfg = P.applyDayFix(buildCfg(), seg);
+    var patch = (cfg.overrides.days && cfg.overrides.days[seg] && cfg.overrides.days[seg].handoffs) || {};
+    for (var k in patch) dayOv[seg].handoffs[k] = Object.assign({}, dayOv[seg].handoffs[k], patch[k]);
+    launch();
   }
 
   function applyFixAndRerun(fixId) {
@@ -1576,7 +1650,10 @@
     $('detail-close').addEventListener('click', closeDetail);
     $('detail-modal').addEventListener('click', function (e) { if (e.target === $('detail-modal')) closeDetail(); });
 
-    $('fixpack').addEventListener('click', function (e) { var b = e.target.closest('.fix-apply'); if (b) applyFixAndRerun(b.dataset.fix); });
+    $('fixpack').addEventListener('click', function (e) {
+      var b = e.target.closest('.fix-apply'); if (b) { applyFixAndRerun(b.dataset.fix); return; }
+      if (e.target.closest('#btn-day-autofix')) applyDayFixAndRerun();
+    });
     // after a LIVE run's report, every action stays in the live experience
     $('btn-tweak').addEventListener('click', function () { if (appMode === 'live') enterMode('morning'); else toSetup(); });
     $('btn-again').addEventListener('click', function () { if (appMode === 'live') startLive(); else launch(); });
