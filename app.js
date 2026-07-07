@@ -826,7 +826,7 @@
     return [from, to];                                        // disconnected fallback -> single straight leg
   }
   function routeWaypoints(f, fromId, toId) {                  // store pass-through station centres (final leg = fanned tx/ty)
-    var path = stationPath(fromId, toId), W = anim.w, H = anim.h, feet = FEET_BASE * stageScaleNow(), wp = [], i, st;
+    var path = stationPath(fromId, toId), W = anim.w, H = anim.h, feet = FEET_BASE * (USE_CANVAS ? stageScaleNow() : 1), wp = [], i, st;
     for (i = 1; i < path.length - 1; i++) { st = P.station(path[i]); wp.push({ x: st.x * W, y: st.y * H + feet }); }
     f.wp = wp; f.wpi = 0;
   }
@@ -886,6 +886,9 @@
     anim = { running: false, raf: null, last: 0, w: 0, h: 0, fig: {}, guest: {}, boat: null, wakes: [], hotPts: [],
       cascade: { hops: [], has: false }, ghost: [], trail: [], strikeSeg: -1, chain: [], chainOn: false,
       motes: [], acts: null, actsAt: -1, tweens: {}, fanfared: false, skyKey: '' };
+    // §21.4 bridge state is module-scoped: clear it per run so a frozen gap's tint/spotlight can't leak into the next cold-open
+    stageTint = null; stageSpotPid = null; stageGapState = null;
+    stageTrail.length = 0; stageChain = []; stageGhost = [{}, {}, {}];
     // dashboard readouts carry tween state on the DOM node — a fresh run must not
     // tween from (or float a delta against) the previous run's final value
     ['dash-eff', 'dash-ready'].forEach(function (id) {
@@ -920,7 +923,7 @@
     anim.w = d.w; anim.h = d.h;
     if (USE_CANVAS && stageCtx && window.PRS_STAGE) PRS_STAGE.resizeStage({ w: anim.w, h: anim.h }, window.devicePixelRatio || 1);
     var k2;
-    for (k2 in anim.fig) { var f2 = anim.fig[k2]; f2.cx *= sx; f2.cy *= sy; f2.tx *= sx; f2.ty *= sy; }
+    for (k2 in anim.fig) { var f2 = anim.fig[k2]; f2.cx *= sx; f2.cy *= sy; f2.tx *= sx; f2.ty *= sy; if (f2.wp) for (var wI = 0; wI < f2.wp.length; wI++) { f2.wp[wI].x *= sx; f2.wp[wI].y *= sy; } }
     for (k2 in anim.guest) { var g2 = anim.guest[k2]; g2.cx *= sx; g2.cy *= sy; }
     if (anim.boat) { anim.boat.cx *= sx; anim.boat.cy *= sy; }
     anim.trail.length = 0;
@@ -938,6 +941,7 @@
     P.STATIONS.forEach(function (s) {
       var d = document.createElement('div'); d.className = 'station'; d.id = 'st-' + s.id;
       d.setAttribute('data-st', s.id); d.setAttribute('tabindex', '0'); d.setAttribute('role', 'button');
+      d.setAttribute('aria-label', nm(s.name));   // §21.4: canvas hides .st-nm, so the hotspot needs its own accessible name (status appended live in renderSim)
       d.style.left = (s.x * 100) + '%'; d.style.top = (s.y * 100) + '%';
       d.innerHTML = '<div class="st-arch"></div><div class="st-badge" id="badge-' + s.id + '"></div><div class="st-halo"></div><div class="st-ic">' + s.icon + '</div><div class="st-nm">' + nm(s.name) + '</div><div class="st-ring" id="ring-' + s.id + '"></div>';
       box.appendChild(d);
@@ -996,7 +1000,8 @@
       anim.fig[pid2] = { el: ae, bub: ae.querySelector('.bub'), nmEl: ae.querySelector('.nm'),
         cx: ae._cx != null ? ae._cx : dims.w / 2, cy: ae._cy != null ? ae._cy : dims.h / 2,
         tx: ae._cx != null ? ae._cx : dims.w / 2, ty: ae._cy != null ? ae._cy : dims.h / 2,
-        st: ae._st || '', lang: '' };
+        st: ae._st || '', lang: '',
+        pid: pid2, spdMul: figSpeedMul(pid2), spd: 0, wp: [], wpi: 0, stn: ae._stn };   // keep road-follow/speed cache across a lang-switch rebuild
     }
     // cascade comet trail ghosts (pooled)
     anim.ghost = [];
@@ -1346,6 +1351,7 @@
       if (f.lang !== L) { f.nmEl.innerHTML = '<i>' + P.role(p.roleId).icon + '</i>' + nm(p.name); f.lang = L; }
       var t = pos[p.id]; if (t) { f.tx = t.x; f.ty = t.y; }
       if (f.stn !== p.station) { routeWaypoints(f, f.stn, p.station); f.stn = p.station; }   // engine moved this figure: recompute the road route
+      if (f.el) f.el._stn = p.station;   // persist current station on the DOM node so a keepActors rebuild keeps the route
       // the rAF loop owns walking/faceL; the live spotlight owns spot — preserve them across state writes
       var keep = (f.el.className.indexOf('walking') >= 0 ? ' walking' : '') +
                  (f.el.className.indexOf('faceL') >= 0 ? ' faceL' : '') +
@@ -1371,6 +1377,8 @@
         node.classList.toggle('terr-green', tv === 'green');
         node.classList.toggle('terr-amber', tv === 'amber');
         node.classList.toggle('terr-red', tv === 'red');
+        // §21.4: canvas hides .st-nm, so keep the hotspot's accessible name current (+ live problem status)
+        node.setAttribute('aria-label', nm(P.station(st.id).name) + (hot ? ' — ' + T()['p_' + st.dominantProblem.id + '_title'] : ''));
       }
     });
     var ban = $('banner'); if (s.bannerOn && appMode !== 'live') { ban.textContent = T().bannerText; ban.classList.add('show'); } else ban.classList.remove('show');
@@ -1393,7 +1401,9 @@
     var el = $('stage-roster'); if (!el) return;
     var t = T();
     var lines = s.participants.map(function (p) {
-      return P.role(p.roleId).icon + ' ' + nm(p.name) + ' — ' + (t[STATE_KEY[p.state]] || p.state);
+      // §21.4: during a Live freeze the canvas shows the gap taxonomy on the spotlighted crewmate — mirror it to AT
+      var pst = (stageGapState && stageGapState.pid === p.id) ? stageGapState.state : p.state;
+      return P.role(p.roleId).icon + ' ' + nm(p.name) + ' — ' + (t[STATE_KEY[pst]] || pst);
     });
     var sig = L + '|' + lines.join('¦');
     if (el._sig === sig) return;
@@ -1812,6 +1822,7 @@
     $('btn-guests').addEventListener('click', function () {
       guestsVisible = !guestsVisible; updateRunButtons();   // view.guestsVisible is read fresh every rAF frame — no rebuild needed
     });
+    if (!USE_CANVAS) $('btn-guests').style.display = 'none';   // the guests toggle only gates the canvas layer; it's a no-op in the ?dom fallback
     $('btn-drawer').addEventListener('click', function () {
       dashboardOpen = !dashboardOpen;
       $('runwrap').classList.toggle('drawer-closed', !dashboardOpen);
@@ -1997,6 +2008,7 @@
   function clearGapFocus() {
     for (var pid in anim.fig) { var f = anim.fig[pid]; if (f && f.el) f.el.classList.remove('spot'); }
     stageSpotPid = null; stageGapState = null;                    // canvas: drop the spotlight + gap taxonomy
+    if (USE_CANVAS && sim) updateStageRoster(sim);               // refresh AT (renderSim doesn't run during a freeze)
   }
   function paintGapFocus(gap) {
     var plan = currentPlan(), to = byId(plan.tasks, gap.taskId); if (!to) return;
@@ -2011,6 +2023,7 @@
       f.st = st2; f.el._st = st2;
       stageSpotPid = pid; stageGapState = { pid: pid, state: st2 };  // canvas: gold spotlight + gap taxonomy on this figure
     }
+    if (USE_CANVAS && sim) updateStageRoster(sim);               // refresh AT during the freeze (renderSim is paused)
   }
   function openGap(gap) {
     liveState.currentGap = gap; liveState.phase = 'prompt';

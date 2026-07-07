@@ -1715,7 +1715,7 @@ function drawFigures(ctx, sim, t, view) {
     ctx.fillStyle = torsoGrad;
     roundRect(ctx, trX, trY, trW, trH, trR);
     ctx.fill();
-    ctx.lineWidth = 1;
+    ctx.lineWidth = 1 * scale;
     ctx.strokeStyle = rgba(PAL.ink, 0.35);
     roundRect(ctx, trX, trY, trW, trH, trR);
     ctx.stroke();
@@ -1739,7 +1739,7 @@ function drawFigures(ctx, sim, t, view) {
     ctx.fillStyle = rgba(PAL.skin, 1);
     ctx.arc(cx, headCy, headR, 0, Math.PI * 2);
     ctx.fill();
-    ctx.lineWidth = 1;
+    ctx.lineWidth = 1 * scale;
     ctx.strokeStyle = rgba(PAL.ink, 0.3);
     ctx.stroke();
     rimLightArc(ctx, cx, headCy, headR, 0.4);
