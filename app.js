@@ -801,6 +801,12 @@
   var STALL_STATES = { confused: 1, meeting: 1, waiting: 1, tired: 1, onFire: 1, waitInfo: 1, rework: 1 };
   var YUKATA = ['#3d5a6c', '#7c4a5a', '#5b6b45', '#a3823c'];      // guest coat palette (washi-friendly)
   var anim = null;
+  // ---- Tier 2 canvas stage (CLAUDE.md §21) — additive, behind USE_CANVAS; the DOM stage stays intact ----
+  var USE_CANVAS = false;                // P1: canvas built + behind the flag, DOM stays the default. Flip true to preview.
+                                         // P2 flips it on for real; the default Live screen also needs the §21.4 draw-state bridge (P3).
+  var guestsVisible = false;             // §21.1: the 13 guests are hidden by default (toggle is P4)
+  var stageCtx = null;                   // #stage 2D context (captured in buildSitemap)
+  var stageTrail = [], stageGhost = [{}, {}, {}], stageChain = [];  // canvas-owned cascade scratch (separate from anim.*)
   function mapDims() { var m = $('sitemap'); return { w: m.clientWidth || 900, h: m.clientHeight || 480 }; }
   function animReset() {
     anim = { running: false, raf: null, last: 0, w: 0, h: 0, fig: {}, guest: {}, boat: null, wakes: [], hotPts: [],
@@ -842,6 +848,12 @@
     var map = $('sitemap');
     var dims = mapDims(); anim.w = dims.w; anim.h = dims.h;
     rebuildPaths();
+    // Tier 2: mount + size the canvas stage; body.canvas-stage hides the DOM stage layers (CSS)
+    if (USE_CANVAS && window.PRS_STAGE) {
+      var cv = $('stage');
+      if (cv) { PRS_STAGE.initStage(cv, { w: anim.w, h: anim.h }); stageCtx = cv.getContext('2d'); }
+      document.body.classList.add('canvas-stage');
+    }
     // sea + micro-life layer (west-coast water band, drifting gulls, jumping fish) — pure ambience
     var sea = document.getElementById('sealayer');
     if (!sea) { sea = document.createElement('div'); sea.id = 'sealayer'; sea.className = 'sealayer'; map.insertBefore(sea, $('paths')); }
@@ -871,7 +883,7 @@
     anim.guest = {};
     for (var g = 0; g < P.GUESTS; g++) {
       var ge = $('gg' + g), cast = acts0[g] && acts0[g].act === 'cast';
-      anim.guest['g' + g] = { el: ge, cast: cast,
+      anim.guest['g' + g] = { el: ge, cast: cast, act: (acts0[g] && acts0[g].act) || 'stroll',
         homeX: cast ? 0.165 + (g % 4) * 0.013 : 0, homeY: cast ? 0.48 + ((g * 7) % 5) * 0.09 : 0,
         cx: ge._cx != null ? ge._cx : dims.w * 0.5, cy: ge._cy != null ? ge._cy : dims.h * 0.62 };
     }
@@ -945,7 +957,7 @@
     for (var i = 0; i < anim.motes.length; i++) {
       var m = anim.motes[i];
       if (m.state !== 0 || now < m.send) continue;
-      if (now > m.send + 15) { m.state = 2; continue; }           // long past (fast-forward) — skip silently
+      if (now > m.send + 15) { m.state = 2; m.noPing = true; continue; }   // long past (fast-forward) — skip silently (canvas honors noPing)
       m.state = 1; m.t0 = 0;
       if (m.same || RM.matches) { m.state = 2; pingStation(m.toSt, m.late); }
       else m.el.classList.add('on');
@@ -1036,15 +1048,16 @@
     for (var pid in anim.fig) {
       var f = anim.fig[pid]; if (!f.el) continue;
       var dx = f.tx - f.cx, dy = f.ty - f.cy, dist = Math.sqrt(dx * dx + dy * dy);
-      if (rm) { f.cx = f.tx; f.cy = f.ty; f.el.classList.remove('walking'); }
+      if (rm) { f.cx = f.tx; f.cy = f.ty; f.el.classList.remove('walking'); f.walking = false; }
       else if (dist > 0.35) {
         var v = Math.min(WALK, 5 * dist);
         var stp = Math.min(dist, v * dt);
         f.cx += dx / dist * stp; f.cy += dy / dist * stp;
         var moving = dist > 2.5;
         f.el.classList.toggle('walking', moving);
-        if (moving && Math.abs(dx) > 3) f.el.classList.toggle('faceL', dx < 0);
-      } else { f.el.classList.remove('walking'); }
+        f.walking = moving;
+        if (moving && Math.abs(dx) > 3) { f.el.classList.toggle('faceL', dx < 0); f.faceL = dx < 0; }
+      } else { f.el.classList.remove('walking'); f.walking = false; }
       f.el._cx = f.cx; f.el._cy = f.cy;
       setXY(f.el, f.cx, f.cy);
     }
@@ -1059,7 +1072,7 @@
         var gx = gs.cast ? gs.homeX : g.x, gy = gs.cast ? gs.homeY : g.y;
         var hush = false, nx = gs.cx / anim.w, ny = gs.cy / anim.h;
         for (var h = 0; h < hot.length; h++) { var dxg = nx - hot[h].x, dyg = ny - hot[h].y; if (dxg * dxg + dyg * dyg < HUSH_R2) { hush = true; break; } }
-        gs.el.classList.toggle('hushed', hush);
+        gs.el.classList.toggle('hushed', hush); gs.hushed = hush; gs.act = g.act;
         if (!hush) {
           if (rm) { gs.cx = gx * anim.w; gs.cy = gy * anim.h; }
           else { gs.cx += (gx * anim.w - gs.cx) * kAmb; gs.cy += (gy * anim.h - gs.cy) * kAmb; }
@@ -1097,6 +1110,19 @@
     }
     updateCascade(ts);
     updateTweens(ts);
+    // Tier 2: paint the canvas scene from the same interpolated caches the DOM stage uses (read-only)
+    if (USE_CANVAS && stageCtx && sim && window.PRS_STAGE) {
+      PRS_STAGE.scene(stageCtx, sim, ts / 1000, {
+        w: anim.w, h: anim.h, lang: L, rm: RM.matches,
+        night: sim.mode === 'minute' && (sim.clockMin < 330 || sim.clockMin >= 1110),
+        speedMult: speedMult, guestsVisible: guestsVisible,
+        hoverPid: null, spotlightPid: null, tintMap: null,
+        fig: anim.fig, guest: anim.guest, boat: anim.boat, wakes: anim.wakes,
+        motes: anim.motes, cascade: anim.cascade,
+        ghost: stageGhost, trail: stageTrail, chain: stageChain, hotPts: anim.hotPts,
+        frozen: !!(paused || livePausedForFix || (sim && sim.paused))
+      });
+    }
     anim.raf = requestAnimationFrame(frame);
   }
 
@@ -1231,7 +1257,7 @@
       f.el.className = 'astro s-' + p.state + keep;
       f.bub.textContent = BUB[p.state] || '';
       if (f.st !== p.state) {                    // state change: pop the bubble chip once
-        f.st = p.state; f.el._st = p.state;
+        f.st = p.state; f.el._st = p.state; f.bubT0 = anim.last || 0;
         if (!RM.matches && f.bub.textContent) { f.bub.classList.remove('pop'); void f.bub.offsetWidth; f.bub.classList.add('pop'); }
       }
       if (STALL_STATES[p.state]) { var st = P.station(p.station); anim.hotPts.push({ x: st.x, y: st.y }); }
@@ -1750,6 +1776,7 @@
         if (!anim || $('run').classList.contains('hidden')) return;
         var d = mapDims(), sx = anim.w ? d.w / anim.w : 1, sy = anim.h ? d.h / anim.h : 1;
         anim.w = d.w; anim.h = d.h;
+        if (USE_CANVAS && stageCtx && window.PRS_STAGE) PRS_STAGE.resizeStage({ w: anim.w, h: anim.h }, window.devicePixelRatio || 1);
         var k2;
         for (k2 in anim.fig) { var f2 = anim.fig[k2]; f2.cx *= sx; f2.cy *= sy; f2.tx *= sx; f2.ty *= sy; }
         for (k2 in anim.guest) { var g2 = anim.guest[k2]; g2.cx *= sx; g2.cy *= sy; }
@@ -1990,8 +2017,9 @@
     // player just committed SHOULD, as visible feedback for the fix
     for (var mi = 0; mi < anim.motes.length; mi++) {
       var m = anim.motes[mi];
-      if (m.send <= now) m.state = 2;
+      if (m.send <= now) { m.state = 2; m.noPing = true; }
       if (m.role === to.ownerRoleId && m.card === g.cardId) {
+        m.noPing = false;                             // the just-committed delivery SHOULD ping/fly (visible fix feedback)
         if (m.same || RM.matches) { m.state = 2; pingStation(m.toSt, m.late); }
         else { m.state = 1; m.t0 = 0; m.el.classList.add('on'); }
       }

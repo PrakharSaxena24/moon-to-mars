@@ -699,3 +699,22 @@ button{font-family:inherit;}
   .score-float{animation:none !important;opacity:1;}
   .banner{transition:none !important;}
 }
+
+/* ===== Tier 2 canvas stage (CLAUDE.md §21) — additive; only active under body.canvas-stage ===== */
+#stage{position:absolute;inset:0;z-index:0;pointer-events:none;border-radius:4px;}
+body.canvas-stage #skytint,
+body.canvas-stage #paths,
+body.canvas-stage #motes,
+body.canvas-stage #figs,
+body.canvas-stage #cascade-pulse,
+body.canvas-stage #sealayer,
+body.canvas-stage #ambient,
+body.canvas-stage .cghost,
+body.canvas-stage .cstatic{visibility:hidden;}
+/* stations stay as focusable hotspots over the canvas; hide only their visible art (the ⛔ badge stays DOM per §21.4) */
+body.canvas-stage .station .st-arch,
+body.canvas-stage .station .st-halo,
+body.canvas-stage .station .st-ic,
+body.canvas-stage .station .st-nm,
+body.canvas-stage .station .st-ring{visibility:hidden;}
+body.canvas-stage .sitemap::after{display:none;} /* vignette is drawn on the canvas */
