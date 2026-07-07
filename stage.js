@@ -1666,7 +1666,8 @@ function drawFigures(ctx, sim, t, view) {
     var f = view.fig[p.id];
     if (!f) continue;
     var role = P.role(p.roleId) || { color: '#5b6b45', icon: '' };
-    var state = p.state;
+    // §21.4 Live bridge: the gap-focus figure shows the gap taxonomy (迷い/手待ち/手戻り) the app painted, not raw engine state
+    var state = (view.gapState && view.gapState.pid === p.id) ? view.gapState.state : p.state;
     var cx = f.cx, feetY = f.cy;
     var dim = (STATE_DIM[state] != null) ? STATE_DIM[state] : 1;
     var roleRGB = hexRGB(role.color);

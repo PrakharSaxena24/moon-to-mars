@@ -38,6 +38,7 @@ body{
 .wrap{max-width:920px;margin:0 auto;width:100%;}
 body.running .wrap{max-width:1500px;}   /* §21.5: wider full stage while running (setup/report keep 920) */
 .hidden{display:none !important;}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0;padding:0;margin:-1px;}
 .muted{color:var(--ink2);} .muted2{color:var(--ink3);font-size:11.5px;}
 .tabular,.bigreadout,.big{font-variant-numeric:tabular-nums;}
 
@@ -215,6 +216,8 @@ button{font-family:inherit;}
 
 /* ============ RUN: site map (night map) + dashboard (paper HUD) ============ */
 .runwrap{display:grid;grid-template-columns:1fr 312px;gap:14px;margin-bottom:14px;}
+.runwrap.drawer-closed{grid-template-columns:1fr;}
+.runwrap.drawer-closed .dashboard{display:none;}
 .sitemap{
   position:relative;height:clamp(460px,74vh,780px);border-radius:var(--r-lg);overflow:hidden;border:1px solid var(--indigo-line);   /* §21.5: taller stage */
   background:

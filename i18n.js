@@ -66,6 +66,8 @@
       // --- run ---
       overallLbl: 'Overall readiness', budgetLbl: 'Budget used', warningsLbl: 'Live warnings', perfLbl: 'Performance',
       speedLbl: 'Speed', pauseBtn: 'Pause', resumeBtn: 'Resume', quitBtn: 'End & review',
+      guestsShow: 'Show guests', guestsHide: 'Hide guests', guestsToggleAria: 'Show or hide the 13 hosted guests on the map',
+      drawerShow: 'Show dashboard', drawerHide: 'Hide dashboard', drawerAria: 'Show or hide the dashboard panel to widen the map',
       noWarnings: 'No warnings — the plan is running clean.',
       bannerText: '⛔ The rehearsal froze — a critical gap stopped the team',
       legWorking: 'working', legStuck: 'stalled (a gap)', legResolved: 'done',
@@ -133,6 +135,9 @@
       // --- run: efficiency readouts ---
       effLbl: 'Efficiency',
       idleLine: function (i, r) { return 'idle ' + i + ' min · rework ' + r + ' min'; },
+
+      // --- run: offscreen a11y roster (canvas stage has no DOM figures) ---
+      rosterHeading: 'Crew status',
 
       // --- run: live pressure (18:00 dinner countdown) + fanfare ---
       dinnerIn: function (tm) { return '🍽 dinner in ' + tm; },
@@ -315,6 +320,8 @@
       // --- run ---
       overallLbl: '全体準備度', budgetLbl: '予算消化', warningsLbl: 'リアルタイム警告', perfLbl: 'パフォーマンス',
       speedLbl: '速度', pauseBtn: '一時停止', resumeBtn: '再開', quitBtn: '終了して講評',
+      guestsShow: 'ゲストを表示', guestsHide: 'ゲストを隠す', guestsToggleAria: '地図上の13人のゲストの表示・非表示を切り替え',
+      drawerShow: 'ダッシュボードを表示', drawerHide: 'ダッシュボードを隠す', drawerAria: 'ダッシュボードパネルの表示・非表示を切り替えて地図を広げる',
       noWarnings: '警告なし——計画は順調に進行中。',
       bannerText: '⛔ リハーサル停止——重大なギャップでチームが止まりました',
       legWorking: '作業中', legStuck: '停止（ギャップ）', legResolved: '完了',
@@ -382,6 +389,9 @@
       // --- run: efficiency readouts ---
       effLbl: '稼働効率',
       idleLine: function (i, r) { return '手待ち ' + i + '分・手戻り ' + r + '分'; },
+
+      // --- run: offscreen a11y roster (canvas stage has no DOM figures) ---
+      rosterHeading: '要員の状況',
 
       // --- run: live pressure (18:00 夕食カウントダウン) + ファンファーレ ---
       dinnerIn: function (tm) { return '🍽 夕食まで ' + tm; },

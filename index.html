@@ -99,7 +99,7 @@
 
   <!-- ============ RUN ============ -->
   <section id="run" class="hidden">
-    <div class="runwrap">
+    <div class="runwrap" id="runwrap">
       <div class="sitemap" id="sitemap">
         <canvas id="stage"></canvas>
         <div class="skytint" id="skytint"></div>
@@ -113,6 +113,7 @@
         <div class="dinnertag hidden" id="dinnertag"></div>
         <div class="fanfare" id="fanfare"></div>
       </div>
+      <div id="stage-roster" class="sr-only" aria-live="polite"></div>
       <aside class="dashboard" id="dashboard">
         <div class="dash-head"><span class="dash-day" id="dash-day"></span><span class="dash-phase" id="dash-phase"></span></div>
         <div class="dash-sec">
@@ -159,8 +160,11 @@
 
     <div class="controls">
       <button class="btn" id="btn-pause"></button>
+      <button class="btn ghost" id="btn-guests"></button>
+      <button class="btn ghost" id="btn-drawer"></button>
       <button class="btn ghost" id="btn-quit" data-i18n="quitBtn"></button>
     </div>
+
     <div class="logbox" id="logbox"></div>
   </section>
 

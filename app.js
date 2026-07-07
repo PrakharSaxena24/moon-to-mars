@@ -100,6 +100,7 @@
     document.documentElement.lang = L;
     document.querySelectorAll('[data-i18n]').forEach(function (el) { var v = T()[el.getAttribute('data-i18n')]; if (typeof v === 'string') el.textContent = v; });
     $('lang-en').classList.toggle('on', L === 'en'); $('lang-ja').classList.toggle('on', L === 'ja');
+    updateRunButtons();   // keep the pause/guests/drawer imperative labels (and aria-labels) in sync with the language
     paintSetup(); buildRules(); buildLegend();
     // mid-run: rebuild station labels but keep every walker where it stands (no teleport)
     if (!$('run').classList.contains('hidden') && sim && anim) { buildSitemap(true); renderSim(sim); }
@@ -873,12 +874,13 @@
   var YUKATA = ['#3d5a6c', '#7c4a5a', '#5b6b45', '#a3823c'];      // guest coat palette (washi-friendly)
   var anim = null;
   // ---- Tier 2 canvas stage (CLAUDE.md §21) — additive, behind USE_CANVAS; the DOM stage stays intact ----
-  // P1: the Canvas 2D stage is built but OFF by default (the DOM stage stays the default per §21.9).
-  // Preview it live by adding ?canvas to the URL; P2 makes it the default (needs the §21.4 Live draw-state bridge, P3).
-  var USE_CANVAS = /[?&#]canvas/i.test(location.search + location.hash);
+  // Tier 2: the Canvas 2D stage is now the DEFAULT (§21). Add ?dom to the URL to fall back to the old DOM stage.
+  var USE_CANVAS = !/[?&#]dom(&|=|$)/i.test(location.search + location.hash);
   var guestsVisible = false;             // §21.1: the 13 guests are hidden by default (toggle is P4)
+  var dashboardOpen = true;              // dashboard drawer: open by default; closing widens the stage to full width
   var stageCtx = null;                   // #stage 2D context (captured in buildSitemap)
   var stageTrail = [], stageGhost = [{}, {}, {}], stageChain = [];  // canvas-owned cascade scratch (separate from anim.*)
+  var stageSpotPid = null, stageTint = null, stageGapState = null;  // §21.4 Live draw-state bridge -> the scene() view
   function mapDims() { var m = $('sitemap'); return { w: m.clientWidth || 900, h: m.clientHeight || 480 }; }
   function animReset() {
     anim = { running: false, raf: null, last: 0, w: 0, h: 0, fig: {}, guest: {}, boat: null, wakes: [], hotPts: [],
@@ -905,6 +907,29 @@
       var p = document.createElement('div'); p.className = 'path'; p.style.left = ax + 'px'; p.style.top = ay + 'px'; p.style.width = len + 'px'; p.style.transform = 'rotate(' + ang + 'deg)';
       paths.appendChild(p);
     });
+  }
+
+  // Re-fit the canvas/DOM stage to the CURRENT #sitemap box: rescale every mover's live (interpolated)
+  // position by the width/height ratio, resize the Tier-2 canvas backing store, rebuild the
+  // pixel-anchored paths, and let renderSim recompute fresh walk targets. This is the SAME path the
+  // window-resize handler uses (factored out here so the dashboard-drawer toggle can call it too —
+  // its class flip changes .runwrap's grid-template-columns, so the stage must re-fit immediately).
+  function refitStage() {
+    if (!anim || $('run').classList.contains('hidden')) return;
+    var d = mapDims(), sx = anim.w ? d.w / anim.w : 1, sy = anim.h ? d.h / anim.h : 1;
+    anim.w = d.w; anim.h = d.h;
+    if (USE_CANVAS && stageCtx && window.PRS_STAGE) PRS_STAGE.resizeStage({ w: anim.w, h: anim.h }, window.devicePixelRatio || 1);
+    var k2;
+    for (k2 in anim.fig) { var f2 = anim.fig[k2]; f2.cx *= sx; f2.cy *= sy; f2.tx *= sx; f2.ty *= sy; }
+    for (k2 in anim.guest) { var g2 = anim.guest[k2]; g2.cx *= sx; g2.cy *= sy; }
+    if (anim.boat) { anim.boat.cx *= sx; anim.boat.cy *= sy; }
+    anim.trail.length = 0;
+    // px-anchored reduced-motion chain markers rebuild at the new scale next frame
+    if (anim.chainOn) { anim.chain.forEach(function (n) { n.remove(); }); anim.chain = []; anim.chainOn = false; }
+    rebuildPaths();
+    if (sim) renderSim(sim);
+    // renderSim repaints from engine state — a live freeze must keep its taxonomy + tint
+    if (appMode === 'live' && livePausedForFix && liveState && liveState.currentGap) paintGapFocus(liveState.currentGap);
   }
 
   // keepActors=true (language switch / resize) reuses the ambient cast so nobody teleports
@@ -1184,7 +1209,7 @@
         w: anim.w, h: anim.h, scale: stageScaleNow(), lang: L, rm: RM.matches,
         night: sim.mode === 'minute' && (sim.clockMin < 330 || sim.clockMin >= 1110),
         speedMult: speedMult, guestsVisible: guestsVisible,
-        hoverPid: null, spotlightPid: null, tintMap: null,
+        hoverPid: null, spotlightPid: stageSpotPid, tintMap: stageTint, gapState: stageGapState,
         fig: anim.fig, guest: anim.guest, boat: anim.boat, wakes: anim.wakes,
         motes: anim.motes, cascade: anim.cascade,
         ghost: stageGhost, trail: stageTrail, chain: stageChain, hotPts: anim.hotPts,
@@ -1357,6 +1382,23 @@
     scheduleMotes(s);
     updatePressure(s);
     renderDashboard(s);
+    if (USE_CANVAS) updateStageRoster(s);
+  }
+
+  // §21.4 offscreen a11y roster: the canvas stage draws the 11 duty-holders with no DOM, so a
+  // screen-reader loses the crew entirely. Mirror their name/role/state into a visually-hidden,
+  // aria-live=polite list. Read-only (no sim writes); rebuilt only when the text actually changes
+  // so the live region doesn't thrash on every tick.
+  function updateStageRoster(s) {
+    var el = $('stage-roster'); if (!el) return;
+    var t = T();
+    var lines = s.participants.map(function (p) {
+      return P.role(p.roleId).icon + ' ' + nm(p.name) + ' — ' + (t[STATE_KEY[p.state]] || p.state);
+    });
+    var sig = L + '|' + lines.join('¦');
+    if (el._sig === sig) return;
+    el._sig = sig;
+    el.innerHTML = '<h2>' + t.rosterHeading + '</h2><ul>' + lines.map(function (ln) { return '<li>' + ln + '</li>'; }).join('') + '</ul>';
   }
 
   // minute-mode pressure: a live countdown to the 18:00 dinner + the fanfare payoff
@@ -1436,7 +1478,13 @@
       '<span class="lg">🔁 ' + t.legRework + '</span>' +
       '<span class="lg"><span class="lg-dot done">✓</span>' + t.legResolved + '</span>';
   }
-  function updateRunButtons() { $('btn-pause').textContent = paused ? T().resumeBtn : T().pauseBtn; }
+  function updateRunButtons() {
+    $('btn-pause').textContent = paused ? T().resumeBtn : T().pauseBtn;
+    var gb = $('btn-guests');
+    if (gb) { gb.textContent = guestsVisible ? T().guestsHide : T().guestsShow; gb.setAttribute('aria-label', T().guestsToggleAria); }
+    var db = $('btn-drawer');
+    if (db) { db.textContent = dashboardOpen ? T().drawerHide : T().drawerShow; db.setAttribute('aria-label', T().drawerAria); }
+  }
 
   // ---- modal focus management: remember the invoker, restore focus on close ----
   var lastFocus = null;
@@ -1761,6 +1809,15 @@
     $('inspect-modal').addEventListener('click', function (e) { if (e.target === $('inspect-modal')) closeInspector(); });
 
     $('btn-pause').addEventListener('click', function () { paused = !paused; updateRunButtons(); });
+    $('btn-guests').addEventListener('click', function () {
+      guestsVisible = !guestsVisible; updateRunButtons();   // view.guestsVisible is read fresh every rAF frame — no rebuild needed
+    });
+    $('btn-drawer').addEventListener('click', function () {
+      dashboardOpen = !dashboardOpen;
+      $('runwrap').classList.toggle('drawer-closed', !dashboardOpen);
+      updateRunButtons();
+      refitStage();   // same resize path window-resize uses, so the stage re-fits the new (now full) width immediately
+    });
     $('btn-quit').addEventListener('click', function () {
       if (!sim || sim.finished) return;
       sim.finished = 'incomplete';
@@ -1838,28 +1895,11 @@
       }
     });
 
-    // ---- window resize: rescale every mover + rebuild the pixel-anchored paths ----
+    // ---- window resize: rescale every mover + rebuild the pixel-anchored paths (see refitStage) ----
     var rszT = null;
     window.addEventListener('resize', function () {
       if (rszT) clearTimeout(rszT);
-      rszT = setTimeout(function () {
-        rszT = null;
-        if (!anim || $('run').classList.contains('hidden')) return;
-        var d = mapDims(), sx = anim.w ? d.w / anim.w : 1, sy = anim.h ? d.h / anim.h : 1;
-        anim.w = d.w; anim.h = d.h;
-        if (USE_CANVAS && stageCtx && window.PRS_STAGE) PRS_STAGE.resizeStage({ w: anim.w, h: anim.h }, window.devicePixelRatio || 1);
-        var k2;
-        for (k2 in anim.fig) { var f2 = anim.fig[k2]; f2.cx *= sx; f2.cy *= sy; f2.tx *= sx; f2.ty *= sy; }
-        for (k2 in anim.guest) { var g2 = anim.guest[k2]; g2.cx *= sx; g2.cy *= sy; }
-        if (anim.boat) { anim.boat.cx *= sx; anim.boat.cy *= sy; }
-        anim.trail.length = 0;
-        // px-anchored reduced-motion chain markers rebuild at the new scale next frame
-        if (anim.chainOn) { anim.chain.forEach(function (n) { n.remove(); }); anim.chain = []; anim.chainOn = false; }
-        rebuildPaths();
-        if (sim) renderSim(sim);
-        // renderSim repaints from engine state — a live freeze must keep its taxonomy + tint
-        if (appMode === 'live' && livePausedForFix && liveState && liveState.currentGap) paintGapFocus(liveState.currentGap);
-      }, 130);
+      rszT = setTimeout(function () { rszT = null; refitStage(); }, 130);
     });
   }
 
@@ -1872,7 +1912,7 @@
   var LIVE_CH = ['board', 'chat', 'radio', 'faceToFace'];
   function ldPanel(id) { ['ld-brief', 'ld-prompt', 'ld-spot', 'ld-result'].forEach(function (p) { var e = $(p); if (e) e.classList.toggle('on', p === id); }); }
   function closeModals() { ['detail-modal', 'inspect-modal', 'arrow-modal', 'rules-modal'].forEach(function (m) { var e = $(m); if (e) e.classList.remove('show'); }); lastFocus = null; }
-  function clearStationTints() { P.STATIONS.forEach(function (s) { var n = $('st-' + s.id); if (n) n.classList.remove('terr-green', 'terr-amber', 'terr-red'); }); }
+  function clearStationTints() { P.STATIONS.forEach(function (s) { var n = $('st-' + s.id); if (n) n.classList.remove('terr-green', 'terr-amber', 'terr-red'); }); stageTint = null; }
   function chIcon(ch) { return { board: '📋', chat: '💬', radio: '📻', phone: '📞', faceToFace: '🤝' }[ch] || '•'; }
   function personName(task) { var pid = task.assignedIds[0], p = pid && byId(currentPlan().participants, pid); return p ? nm(p.name) : nm(P.role(task.ownerRoleId).name); }
 
@@ -1956,10 +1996,12 @@
   }
   function clearGapFocus() {
     for (var pid in anim.fig) { var f = anim.fig[pid]; if (f && f.el) f.el.classList.remove('spot'); }
+    stageSpotPid = null; stageGapState = null;                    // canvas: drop the spotlight + gap taxonomy
   }
   function paintGapFocus(gap) {
     var plan = currentPlan(), to = byId(plan.tasks, gap.taskId); if (!to) return;
     clearStationTints(); var stn = $('st-' + to.station); if (stn) stn.classList.add('terr-red');
+    stageTint = {}; stageTint[to.station] = 'red';                // canvas: the gap-focus station goes red
     clearGapFocus();
     var pid = to.assignedIds[0], f = pid && anim.fig[pid];
     if (f) {
@@ -1967,6 +2009,7 @@
       f.el.className = 'astro s-' + st2 + ' spot' + (f.el.className.indexOf('faceL') >= 0 ? ' faceL' : '');
       if (f.bub) f.bub.textContent = BUB[st2] || '⏳';
       f.st = st2; f.el._st = st2;
+      stageSpotPid = pid; stageGapState = { pid: pid, state: st2 };  // canvas: gold spotlight + gap taxonomy on this figure
     }
   }
   function openGap(gap) {
@@ -2063,6 +2106,7 @@
     fd2.missing.forEach(function (x) { var t = byId(plan2.tasks, x.taskId); if (t) set(t.station, 'amber'); });
     fd2.wrongFish.forEach(function (id) { var t = byId(plan2.tasks, id); if (t) set(t.station, 'red'); });
     for (var st in m) { var n = $('st-' + st); if (n) n.classList.add('terr-' + m[st]); }
+    stageTint = m;   // canvas: blast-radius preview tints
   }
 
   function commitChannel(g, ch) {
