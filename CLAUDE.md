@@ -738,60 +738,223 @@ monotone). A **coarse-day Run → `scoreDay` report** (grade + 8-category scorec
 
 ---
 
-## 21. Graphics & motion upgrade — render-direction plan (2026-07-07, PLANNING; Tier 2 recommended, NOT yet built)
-Owner wants the character movement and overall graphics "much better," on a **bigger screen**. This section is
-the decision record; nothing here is built yet. Live samples of each tier (animated) + an effort table were
-pitched as an artifact (`graphics-tiers-v1`). Two facts frame every option:
+## 21. Graphics & motion upgrade — Tier 2 Canvas 2D stage (APPROVED 2026-07-07 · build spec; NOT yet built)
+Owner wants character movement and overall graphics "much better," on a **bigger screen**. Decisions are now
+**locked** (owner sign-off 2026-07-07, §21.1); this section is the build spec, grounded by a 6-surface codebase
+recon (render inventory · interaction/a11y · layout/CSS · verify · i18n · dead-code). Two facts still frame it:
 - **The engine, `scoreDay`, and all 155 verify checks are safe under ANY render change** — rendering only *reads*
-  deterministic sim state, never writes back. Risk lives entirely in the presentation layer.
-- **No shortcut exists** under §11 (no build / no CDN / offline / few plain files): "better graphics" = either push
-  procedural art harder (CSS/canvas we hand-craft) or embed generated sprite art as `data:` URIs. No asset packs.
+  deterministic sim state, never writes back (confirmed: `renderSim`/`frame` are pure over `sim`, app.js:1208;
+  `verify.js` imports only `engine.js`, so its 155 are structurally immune, and §Section-10 already pins the four
+  cosmetic helpers the scene consumes). Risk lives **entirely** in the presentation layer.
+- **No shortcut exists** under §11 (no build / no CDN / offline / few plain files): "better graphics" =
+  hand-crafted procedural **Canvas 2D** art. No library, no asset packs.
 
-### 21.1 Current baseline
-Run screen `#sitemap` = `clamp(380–580px)` tall, `.wrap` running `max-width:1180px`, dashboard a fixed `312px`
-sidebar (`.runwrap` grid `1fr 312px`). 24 figures are DOM/CSS pawns positioned by `translate3d` in the `frame()`
-rAF loop, walking **straight beelines** to stations (they ignore the dashed `ADJ` roads).
+### 21.1 Locked decisions (owner sign-off 2026-07-07)
+| Axis | Decision |
+|---|---|
+| Render tier | **Tier 2 — hand-rolled Canvas 2D** `scene(ctx, sim, t)` under a DOM HUD; new `stage.js`, vanilla ES5, no library |
+| Art direction | **Richer washi/lacquer** — evolve the indigo-night + gold/hanko identity (procedural gradients, contact shadows, lantern light-pools, footstep dust, rim light) |
+| Screen / layout | **Full-width stage + collapsible dashboard drawer** (`.wrap` → ~1440–1600, `#sitemap` → ~70–80vh) |
+| Cast on stage | **11 duty-holders only** (8 organizers + 3 chefs); the 13 guests **hidden by default with a "Show guests" toggle**; `👥 13 ゲスト` legend kept as a text reminder |
+| Characters | "Bigger screen" = **larger scene, not bigger people** — the 11 pawns keep relative scale |
+| Tests | `verify.js` stays the committed guardrail (155, passes trivially); Playwright E2E stays an **ephemeral** per-phase gate — **nothing pushed to GitHub** (§21.7) |
+| Coarse-day animation | **Deferred** — recon shows it needs an *engine* change (§21.8b), out of Tier 2's zero-engine-behaviour-risk scope |
 
-### 21.2 Tiers considered (with tradeoffs)
-- **Tier 1 — Upgrade the DOM stage.** Bigger map, walk-the-roads (route along `ADJ`), better easing, richer CSS
-  pawns, more ambient life. Tech: DOM/CSS/rAF (as today). Effort ~½ session. Risk: verify untouched, E2E holds
-  (same hooks), a11y unchanged. Ceiling: "nicer flat diagram."
-- **Tier 2 — Canvas 2D stage (RECOMMENDED).** A `<canvas>` *scene* (sea, island, characters, boat, particles,
-  lighting) under a DOM HUD (dashboard/dock/modals/report stay DOM). Hand-rolled **Canvas 2D**, vanilla ES5,
-  **no library**. Unlocks gradient-shaded bodies, soft contact shadows, lantern light-pools, footstep dust, rim
-  light, parallax, a camera, buttery gait. Tech via `getContext('2d')` + `devicePixelRatio` scaling; reuse the
-  existing `frame()` loop. Effort ~1.5–2 sessions. Risk: **verify untouched**; the two real costs are (a) an
-  **accessibility shadow** — transparent DOM hotspots over stations/figures + an offscreen roster, because canvas
-  has no DOM for click-to-inspect / keyboard / screen-readers — and (b) **rewriting the 69 Playwright E2E** hooks
-  that query `.astro`/`#figs`. `prefers-reduced-motion` → draw one static frame.
-- **Tier 3 — Canvas + embedded sprite art.** Tier 2 plus real illustrated/pixel-art people & island, generated
-  and embedded as `data:` URIs (offline, deterministic). Best-looking; effort ~2.5–3 sessions, **dominated by
-  making the art**, plus an aesthetic pivot. Same a11y/E2E cost as Tier 2.
-- **Tier 4 — WebGL (NOT recommended).** GPU + GLSL shaders — unlocks animated/refractive water, dynamic
-  normal-mapped lighting, bloom, 2.5-D, thousands of particles. Native (offline-capable if hand-rolled), but
-  **overkill** for ~24 sprites on one static map, far more code/fragility (buffers/shaders/matrices, GPU variance,
-  context-loss), and to be pleasant wants a library (Pixi/three) which breaks offline/no-build or bloats the repo.
-  Same a11y/E2E cost as canvas *plus* GPU complexity. Justified only if the goal becomes a shader-showcase island.
+### 21.2 Invariants & guardrails (do not violate)
+- **Engine behaviour untouched.** No edits to `engine.js` scoring/sim logic; `scene()` only *reads* (§21.3
+  read-list). The one allowed engine touch is the §21.8a **dead-code deletion** (removing already-unreferenced,
+  verified-single-use `dayLayout`/`derivedHandoffs` + helpers) — a zero-*behaviour*-risk removal, not a logic change.
+- **`verify.js` stays green** every phase (155 → 139 after §21.8a; the printed total is *+N* once the new i18n
+  parity assertions land in phase 4, §21.6/§21.7). It never imports render code.
+- **`frame()` motion math is preserved**, not rewritten — only its *output* changes (setXY → canvas, §21.3).
+- **Offline / no-build / vanilla ES5 / no library / few plain files** (§11) holds. `stage.js` is one new plain file.
+- **fishday + Live must not regress** — the canonical Day-3 minute run and the Live cold-open path are the
+  behavioural anchors (existing Playwright win-path + `verify.js` §Section-7/§Section-13).
 
-### 21.3 Motion wins (apply to every tier, cheap→moderate, low risk)
-Walk the `ADJ` roads instead of beelines · acceleration/settle easing + per-person speed variation + crowd
-separation at stations · 4-way directional facing + idle fidgets · richer environmental life.
+### 21.3 Architecture — new `stage.js` render layer
+**Module boundary.** New global `PRS_STAGE` (mirrors the `window.PRS` style) exposing:
+- `initStage(canvasEl, dims)` — grab `getContext('2d')`, size the backing store to `dims.w*dpr × dims.h*dpr`,
+  `ctx.setTransform(dpr,0,0,dpr,0,0)` so **all existing `normalized×anim.w/anim.h` math is reused verbatim** (DPR
+  is absent today — the DOM stage gets crispness free; canvas must add it or text/edges blur).
+- `scene(ctx, sim, t, view)` — one `clearRect` + full redraw per frame, bottom→top (order below). **`view` is the
+  per-frame render-state bundle** the scene needs beyond `sim`: the interpolated caches (`fig`/`guest`/`boat`/
+  `wake`/`mote`/`cascade`/`ghost`/`trail`/`chain`/`hotPts`/`tweens`) **plus** the flags `guestsVisible`,
+  `hoverPid`, `spotlightPid`, and the per-station `tintMap`. This param is **required**: the eased `cx/cy` walk
+  positions are *not* recomputable from `sim` (that is the "people walk, not teleport" feature), and `anim` is
+  closure-private to app.js's IIFE — so the caches must be handed in, not re-derived. (Equivalently, ownership of
+  the caches could move into `PRS_STAGE` behind a `PRS_STAGE.update(...)`; passing `view` is the smaller change.)
+- `resizeStage(dims, dpr)` — reallocate the backing store on the debounced resize (app.js:1746) and on dpr change (monitor move).
+- internal **pooled particle/effect list** (`{t0, duration, kind, …}`) + a **camera** — the phase-1 camera is the
+  **identity transform** (no pan/zoom; "larger scene, not bigger people"); parallax/pan is deferred to a later phase.
 
-### 21.4 Screen / layout (orthogonal to tier)
-Bigger + dashboard drawer (widen `1180 → ~1440–1600`, map `→ ~70–80vh`, dashboard = collapsible drawer so the
-stage gets full width — **recommended**) · full-bleed stage (near-fullscreen map, HUD overlays; most cinematic,
-hardest responsive) · just-bigger (enlarge map, keep the 312px sidebar; minimal change).
+**Integration point.** `frame()` (app.js:1028) and `renderSim` (app.js:1208) **keep every computation** —
+`figTargets`→`f.tx/ty`, the `anim.fig[pid].cx/cy` walk, guest easing (`kAmb`), the boat quadratic bay-arc,
+`updateMotes`/`updateCascade`/`updateTweens`, the `RM` snaps, participant `state`, `hotPts`, and the territory
+`tintMap` — and **drop every DOM mutation**, routing the results into `view` instead. That means removing not just
+`setXY(el,…)` but *all* render-side DOM writes: the `.astro` `innerHTML` creation + `nm`/`className`/`bub` writes,
+the `ring`/`badge`/`stalled` text/class writes (except the badge chip, §21.4), and the per-frame `walking`/`faceL`/
+`hushed`/`sailing` classes + `wake.style.opacity` + cascade `ghost.show`/opacity + station `.strike` toggles.
+Nothing writes back to `sim`. `startAnim`/`stopAnim` lifecycle (leak-guarded per §18; halts when `#run` is hidden,
+app.js:1030) is reused. `buildSitemap` (app.js:833) **stops injecting the `#sealayer` and `#ambient` DOM layers**
+(their sea/gulls/fish/guests/boat/wakes art now lives in `scene()`; keep the `#guests-tag` legend) and instead
+allocates/sizes the canvas right after `anim.w/anim.h` are set (line 843); the `anim.guest`/`anim.boat`/`anim.wakes`
+caches carry **positions only, no `.el`**. On `keepActors` rebuilds (language switch, app.js:105) the canvas
+**persists** (resize only → no flicker).
 
-### 21.5 Art direction (orthogonal to tier)
-Richer washi/lacquer (evolve today's indigo-night + gold/hanko identity — safest, **recommended**) · pixel-art
-(retro, cohesive, procedurally embeddable) · illustrated/vector (crisp at any size, more drawing effort).
+**Draw order** (flattens today's stage layers — territory halo `z-1` up through the `z5` *stage* art like the
+cascade — into one canvas; the `z5` HUD chips `.st-badge`/`.nowtag`/`.guests-tag` and everything above stay DOM, §21.5):
+1. **ground** — radial island base + stipple noise + inner vignette; inset red ring when `sim.bannerOn`.
+2. **sea band** — bay-silhouette water fill + shore inner-shadow + dashed gold foam + animated shimmer stripes (`t`).
+3. **sea life** — 3 gulls (sweep left→right, sin bob) + 3 jumping fish (7 s arc); deterministic from `t`.
+4. **roads** — 8 dashed `ADJ` segments, `lineDashOffset` marching from `t`.
+5. **skytint** — full-cover day-phase gradient from the **SKY 10-stop table** interpolated on `sim.clockMin`, drawn
+   **under** actors so day-tint never darkens pawns (preserve today's z1 < z3); minute-mode only.
+6. **guests** (*gated by the Show-guests toggle, OFF by default*) — 13 yukata pawns from
+   `P.ambientActors(seed, t/2600)`, cast-guests at fixed shore homes, **hush** (dim+freeze within `HUSH_R2` of a stalled holder's station).
+7. **boat + wakes** — composite skiff (hull path + mast + sail + hinomaru) at `P.boatState(sim).param` through the
+   DOCK→BOATC→SEA quadratic bezier; sin bob, extra rock at sea, flip on outbound/ground; pooled gold wake puffs fading 900 ms.
+8. **stations ×7** — per-id landmark glyph (roof / awning+lantern / red-cross / coin / dock-planks / wave-arcs),
+   icon disc + emoji + bilingual name, **territory halo + border tint** from `P.stationReadiness(sim)`
+   (green/amber/red), crew-count ring, pulsing stalled ring, night lantern glow (red overrides). *(The `⛔`
+   problem badge stays a DOM chip — §21.4/§21.5 — so its problem-title text stays in the a11y tree; not canvas-drawn.)*
+9. **figures ×11** — role-coloured pawns (`P.role(id).color`) at `figTargets` fan-stacks (rows of 4, +36 px feet
+   offset): contact shadow, swing-phase legs while walking, torso/head/cap, **state foot-aura**
+   (red/amber/blue/green from `p.state`), speech-bubble chip (`BUB` map) with pop-on-change, name chip on
+   stall/spot/hover, Live **spotlight** ring (gold) on the gap-focus pid.
+10. **motes** — gold/red handoff dots flying `A→B` on a smoothstep arc when `sim.clockMin` crosses their send-min,
+    pinging the target station on arrival (minute-mode, fishday handoffs).
+11. **cascade** — red comet along `P.cascadeTrace` hops (1000 ms/seg) + 3 fading ghost dots + per-hop strike ring;
+    **RM fork** → static red chain markers above affected stations.
 
-### 21.6 Recommendation & open decisions
-**Recommended:** Tier 2 (Canvas 2D) · richer-washi style · bigger full-width stage with a dashboard drawer ·
-road-follow motion. The honest visual leap with zero risk to the verified engine/scoring; work concentrates in a
-new `stage.js` render layer + restoring a11y/E2E. **Open, pending owner sign-off:** final tier, art direction,
-screen layout, and whether "bigger screen" also means **bigger/fewer/more-detailed characters** vs. just a
-larger map. **Build shape when green-lit:** new `stage.js` (`scene(ctx, sim, t)` + pooled particles/camera) slots
-into `frame()`; an a11y-overlay module; Opus writes the render core + a11y shadow, Sonnet does scene pieces + E2E
-rewrite. Deferred items from §20.8 (animate authored coarse-day runs; retire dead `dayLayout`/`derivedHandoffs`)
-fold in naturally with the render rewrite.
+**Ported constants** (today split across CSS + JS → all become `stage.js` JS constants): SKY 10-stop table
+(app.js:1176); figure state→aura + territory colours + YUKATA palette + `BUB` emoji map (app.js:93);
+`DOCK`/`SEA`/`BOATC` + `HUSH_R2` (app.js:799–800); effect durations (ping 560 / strike 340 / bubpop / wake 900 /
+mote flight 650–1550 / cascade hop 1000) — CSS-class+`setTimeout` effects become timed pooled entries.
+
+**Scene reads (never writes) — the safe contract:** `P.STATIONS`/`P.station`, `P.role().color`,
+`sim.participants[].{state,station,name,roleId,id}`, `sim.stations[].{crewIds,dominantProblem}`,
+`P.stationReadiness(sim)`, `P.boatState(sim)`, `P.ambientActors(sim.cfg.seed, phase)`, `P.cascadeTrace(sim.plan)`,
+`P.resolveSendMin`/`P.staticArrival` + `plan.handoffs`, `sim.clockMin`/`sim.sched`, `speedMult`, `sim.bannerOn`,
+`RM.matches`, `L`. (`verify.js` §Section-10 already pins determinism + score-purity of the four cosmetic helpers.)
+
+### 21.4 Accessibility shadow (real cost #1 — smaller than first feared)
+**Key recon insight:** the *only* click/keyboard-inspectable thing inside `#sitemap` is the 7 `.station` nodes
+(click delegation on `#stations` app.js:1673 + Enter/Space app.js:1717 → `openProblemPanel`). The `.astro` figures
+are **not** clickable (only CSS hover-name + `data-pid`). Therefore:
+- **Keep `#stations` AS the shadow.** `buildSitemap` (app.js:839) emits an **art-less** `.station` box — keep the
+  node + `id`/`data-st`/`tabindex=0`/`role=button`/`class` and the `.terr-*` tint class, but **drop the `.st-arch`/
+  `.st-ic`/`.st-halo`/`.st-ring`/`.st-nm` children** (their art moves to `scene()`; leaving them double-draws over
+  the canvas). The box stays transparent + focusable **over** the canvas, so the click delegation (1673), keyboard
+  (1717), `openProblemPanel`, and the territory-tint class stay **byte-identical** → zero interaction rewrite.
+  Mirrors `.warn[data-station]`'s accessible contract. **The `#badge-<id>` DOM chip stays** (renderSim's badge
+  write, app.js:1245, is unchanged) so the problem-title text remains in the a11y tree.
+- **Offscreen roster** (new): a visually-hidden `aria-live=polite` list of the 11 duty-holders — `nm(name)` + role
+  icon + state text (via the `st*` i18n keys, §21.6) — since canvas figures have no DOM. **Hover-name** (optional):
+  transparent per-figure hotspots synced to `figTargets` px (carrying `.astro`/`data-pid` for the E2E hook) with
+  `pointer-events:auto` + `pointerover`/`pointerout` setting `view.hoverPid`; the name chip is drawn canvas-side
+  keyed on `hoverPid`/stall/spot (the old pure-CSS `.fig:hover ~ .nm` path dies with the DOM figure). If hover-name
+  is cut for simplicity, drop it from scope and rely on the roster + always-on stall/spot name reveal.
+- **Re-point the Live coupling.** `paintBlast` (app.js:1959), `paintGapFocus` (app.js:1862) and `renderSim`'s
+  territory tint (app.js:1246) currently toggle DOM classes on `#st-<id>`/`.astro`; re-point them to canvas
+  draw-state (a per-station tint map + a spotlighted-pid flag) **and** fold the tint / frozen status into the
+  station hotspot `aria-label` + roster, or the blast-radius + frozen-spotlight teaching moment is lost to AT.
+- **Keep as DOM overlays:** `#nowtag`/`#dinnertag`/`#banner`/`#fanfare` (clock + dinner countdown as `aria-live`).
+- **Reduced motion:** `scene()` draws ONE static frame and stops scheduling rAF (mirror today's `RM` branches);
+  add an `RM.addEventListener('change')` when wiring (absent today).
+
+### 21.5 Screen / layout — full-width stage + dashboard drawer
+- **Widen** `body.running .wrap` `1180 → ~1440–1600` (scope to `.running` so #setup/#report keep their column;
+  verify #report's 2-col scorecard still reads at the new width). **Map height** `#sitemap` clamp → `~70–80vh`.
+- **Drawer:** toggle a class on `.runwrap` (owns `grid-template-columns:1fr 312px`, style.css:217) → `1fr` when
+  closed (**reuse the existing `@media(max-width:760px)` collapse pattern**); the `#dashboard` aside slides off as
+  an overlay. **Add a toggle control** to `#run` markup (none exists) — drive its label imperatively
+  (`drawerShow`/`drawerHide`, §21.6), mirroring `updateRunButtons` (app.js:1342).
+- **Guests toggle:** add a second control to `#run` markup (beside the `#guests-tag` legend), backed by a
+  **default-OFF** `guestsVisible` state var that `frame()` copies into `view.guestsVisible` to gate draw-order item 6;
+  label flips `guestsShow`/`guestsHide` imperatively (§21.6). Hiding guests does **not** affect `hotPts` (computed in
+  renderSim from duty-holder `STALL_STATES`, app.js:1237; only *consumed* by the guest layer, app.js:1061).
+- **Canvas insertion:** `<canvas id="stage">` `position:absolute;inset:0` inside `#sitemap`, `z` **below** the
+  `.station` shadow + all kept HUD chips (`.st-badge` z5 / `.guests-tag` z5 / `.nowtag` z5 / `.dinnertag` z6 /
+  `.banner` z8 / `.fanfare` z9 — unchanged; the emptied `#skytint`/`#paths` DOM layers at z1 are removed).
+  **Vignette: draw it on the canvas** (one layer, no z-juggling) and drop `.sitemap::after` (z1) so no stale art sits above.
+- **DPR + resize** wired at `buildSitemap` (app.js:843) and the debounced resize (app.js:1746) — reallocate the
+  backing store + re-apply the dpr transform; recompute dpr (monitor move), not just w/h. Movers already rescale.
+- **Responsive:** add rules above 1180; reproduce the 640px `.station{60px}` / `.astro scale(.88)` shrink as canvas
+  draw-scaling (those DOM rules stop applying once drawn); add map-height breakpoints; `#live-dock` stays a
+  `.runwrap` sibling (may need its own treatment under the taller map).
+
+### 21.6 i18n additions (append to BOTH `en` and `ja` in the same edit)
+Flat `STR{en,ja}` namespace; state-toggle labels follow the `pauseBtn`/`resumeBtn` two-key + imperative pattern
+(`data-i18n` only fills `textContent` for the current language, so it can't flip by state):
+- **Drawer:** `drawerShow` / `drawerHide` / `drawerAria`.
+- **Guests:** `guestsShow` / `guestsHide` / `guestsToggleAria` (the toggle gates the canvas guest-layer draw; reuse `guestsShort` for the count tag).
+- **a11y cluster** (function-valued where a name is injected, resolved via `nm()`): `figAria(name, role, state)`,
+  `stationAria(name, status)`, readiness words `readyGreen`/`readyAmber`/`readyRed`, `rosterHeading`, `stageAria`.
+- **New plumbing:** this is the **first** code that writes `aria-label` from i18n — re-apply it on language switch
+  (fold into the existing `buildSitemap(true)`+`renderSim` relabel branch, app.js:105). Mind the `en/ja` (i18n) vs
+  `en/jp` (entity data via `nm()`) key asymmetry.
+- **Make parity real:** add a symmetric-keys assertion to `verify.js` (it can `require('./i18n.js')`) so 281/281→N/N
+  becomes an enforced anchor — today parity is convention-only (nothing checks it).
+
+### 21.7 Tests
+- **`verify.js`** — unaffected by the render swap; stays 155 (→139 after §21.8a) **+ the new i18n parity check**.
+  Committed guardrail, runs `node verify.js`.
+- **Playwright E2E (ephemeral, nothing pushed).** Survive unchanged: all HUD / dashboard / controls / live-dock /
+  modal / report hooks (outside `#sitemap`). Re-point the `#sitemap`-interior hooks — station assertions land on the
+  shadow hotspots (`.station`/`#st-<id>`/`data-st`/`.terr-*` preserved); figure assertions on the roster or
+  `data-pid` hotspots; keep `#nowtag`/`#dinnertag`/`#banner`/`#fanfare` as DOM. Purely-decorative selectors
+  (`#boat`, `.mote`, `#paths`, guests, sea, cascade, sky) get `data-testid` stubs or roster/pixel assertions.
+  Regenerate → run → discard each phase.
+
+### 21.8 Deferred-item fold-in — one includes, one stays deferred
+- **(a) Retire dead `dayLayout`/`derivedHandoffs` — INCLUDE (safe, verify-only).** Already gone from `app.js`
+  (§20 Phase-4). Delete from `engine.js` the two functions (979–1016, 1022–1051), their exports (line 1530), the
+  `HOUR_DT` const **and its export on line 1529** (careful: line 1529 also exports the *kept* `DAY_HOUR_START/END` —
+  remove only `HOUR_DT`), and the helpers only they use (`clampInt` / the standalone `inSeg` fn / `laneTopoOrder` /
+  `ROLE_ORDER`). Delete the `verify.js` §19 grid block (252–280, 16 checks → **155 − 16 = 139**). **Keep**
+  `DAY_WINDOWS` (live via `segWin`, app.js:287) and `DAY_HOUR_START/END` (referenced by the coarse-day windows in
+  `DAY_WINDOWS`, engine.js:50–51). Zero behaviour change; do it last (delete the checks with the functions).
+- **(b) Animate authored coarse-day runs — STAYS DEFERRED (needs an engine change).** Recon finding: the *data*
+  exists (`daySchedule(plan,seg)` is a full deterministic timeline over the shared `STATIONS`), but a coarse day
+  produces **no sim** today — `launch()` diverts to a static `scoreDay` report (app.js:972), because the minute-sim
+  is hard-wired to fishday: `createSim` gate `segment==='fishday'` (engine.js:1184), and `tickMinute`/`boatState`/
+  `buildMotes` are bound to `fishdaySchedule` / `plan.tasks` / `plan.handoffs(day==='fishday')`. Animating coarse
+  days = **generalizing the engine minute-sim** (§20.3 planned, unbuilt) + open content decisions (does a coarse
+  day show the fishday-specific efficiency/dinner/关所 HUD? does Arrival/Return get a real boat arc? coarse motes
+  from `handoffsForSeg`). That is engine work with its own verify anchors — **out of Tier 2's zero-engine-risk
+  scope.** Track as a separate follow-on after Tier 2 ships.
+
+### 21.9 Phase plan (agent tier · acceptance = `node verify.js` green + ephemeral E2E green each phase)
+0. ✅ Spec (this §21) + 6-surface grounded recon — Opus.
+1. **`stage.js` scaffold** (Opus render core): canvas + DPR + resize + camera + a *static* `scene()` reading sim
+   state, behind a flag so the DOM stage still works. Accept: static frame matches station/figure layout; 155 green.
+2. **Port motion** (Opus core + Sonnet scene pieces): the `sim`-driven draw layers (ground / sea / roads / skytint /
+   guests / boat / stations / figures / motes / cascade), road-follow gait + easing + 4-way facing + crowd
+   separation (motion wins §21.10), RM static frame. Flip the default to canvas. Accept: visual parity-plus over the
+   DOM stage; fishday confirmed; 155 green. *(The Live-only overlays — blast radius, gold gap-focus spotlight,
+   gap-focus tint — need the phase-3 draw-state bridge, so "Live visually confirmed" is a phase-3 acceptance.)*
+3. **a11y shadow + E2E rewrite** (Opus a11y + Sonnet E2E): art-less `#stations`-as-shadow + offscreen roster +
+   re-point `paintBlast`/`paintGapFocus`/tint to `view` draw-state (spotlightPid + tintMap). Accept: ephemeral E2E
+   green (win path, click-to-inspect, keyboard, JA parity); **Live overlays visually confirmed**; screen-reader roster verified.
+4. **Layout + art + i18n** (Sonnet + Opus art pass): drawer + widen + map height + responsive; richer-washi
+   procedural art (contact shadows, lantern pools, dust, rim light); new i18n keys + parity check. Accept:
+   responsive at 640/760/1180/1600; 155 (+parity) green; E2E green.
+5. **Dead-code retirement + adversarial close-out** (Sonnet delete + Opus/Fable multi-lens review): §21.8a delete
+   (→139); full review for regressions. Accept: 139 (+parity) verify + E2E green, no fishday/Live regression.
+   *(Coarse-day animation §21.8b is a separate follow-on, not in this plan.)*
+Effort estimate (from §21.10): ~1.5–2 sessions.
+
+### 21.10 Decision record — alternatives considered (2026-07-07)
+- **Tier 1 (upgrade the DOM stage):** bigger map, road-follow, richer CSS pawns; ~½ session, a11y/E2E untouched.
+  Rejected — ceiling is "nicer flat diagram."
+- **Tier 3 (canvas + embedded sprite art):** Tier 2 + illustrated/pixel `data:`-URI art; ~2.5–3 sessions,
+  dominated by art-making + an aesthetic pivot. Deferred — can layer on top of Tier 2's canvas later.
+- **Tier 4 (WebGL):** GPU shaders (refractive water, bloom); overkill for ~11 pawns (24 with guests toggled on) on a static map, and to be
+  pleasant wants a library (breaks §11). Rejected.
+- **Layout alternatives:** full-bleed (most cinematic, hardest responsive) · just-bigger (keep the 312px sidebar).
+  Chose the drawer as the balance.
+- **Art alternatives:** pixel-art · illustrated/vector — both an aesthetic pivot; chose richer-washi (safest,
+  cohesive with the shipped indigo-night + gold/hanko identity).
+- **Motion wins (adopted into Tier 2):** road-follow instead of beelines · accel/settle easing + per-person speed +
+  crowd separation · 4-way facing + idle fidgets · richer environmental life.
+- Live samples of each tier (animated) + an effort table were pitched earlier as an artifact (`graphics-tiers-v1`).
