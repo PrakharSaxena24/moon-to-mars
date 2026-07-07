@@ -36,7 +36,7 @@ body{
   padding:22px 16px 48px;line-height:1.5;
 }
 .wrap{max-width:920px;margin:0 auto;width:100%;}
-body.running .wrap{max-width:1180px;}
+body.running .wrap{max-width:1500px;}   /* §21.5: wider full stage while running (setup/report keep 920) */
 .hidden{display:none !important;}
 .muted{color:var(--ink2);} .muted2{color:var(--ink3);font-size:11.5px;}
 .tabular,.bigreadout,.big{font-variant-numeric:tabular-nums;}
@@ -216,7 +216,7 @@ button{font-family:inherit;}
 /* ============ RUN: site map (night map) + dashboard (paper HUD) ============ */
 .runwrap{display:grid;grid-template-columns:1fr 312px;gap:14px;margin-bottom:14px;}
 .sitemap{
-  position:relative;height:clamp(380px,58vh,580px);border-radius:var(--r-lg);overflow:hidden;border:1px solid var(--indigo-line);
+  position:relative;height:clamp(460px,74vh,780px);border-radius:var(--r-lg);overflow:hidden;border:1px solid var(--indigo-line);   /* §21.5: taller stage */
   background:
     radial-gradient(ellipse at 28% 18%, #1c2733, var(--indigo-deep) 72%);
   box-shadow:var(--shadow2);
