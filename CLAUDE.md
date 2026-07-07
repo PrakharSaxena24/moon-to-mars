@@ -456,14 +456,17 @@ Design source (kept out of git via `.gitignore`): `シミュレーション型�
 ---
 
 ## 15. Status
-**Concept: COMPLETE. Implementation: MVP SHIPPED 2026-07-02. Layer 0 "Living Harbor" SHIPPED 2026-07-03.
-Play-first two-mode rebuild SHIPPED 2026-07-03 (§17). Polish pass (31 audited fixes + graphics/movement
-overhaul) SHIPPED 2026-07-05 (§18).**
-All §12.6 phases done at `/Users/tanakai/aibos/OgasawaraSim`. The engine is headless-verified (`node verify.js`,
-**91 checks**: the classic gradient D→A, the fishday temporal block — gappy = 8/D, 91% efficiency, 220 idle min,
-2 wrong-fish, dinner 18:30; all fixes = 100/A, 100%, zero idle, dinner 18:00 — plus the Layer 0 cosmetic-helper
-block) and DOM-verified (45-check Playwright E2E, §18). §13 contingency branches and Layers 2–4 (§16) remain
-the backlog.
+**Concept: COMPLETE. MVP SHIPPED 2026-07-02. Layer 0 "Living Harbor" 2026-07-03 (§16). Play-first two-mode
+rebuild 2026-07-03 (§17). Polish pass 2026-07-05 (§18). All-day grid 2026-07-06 (§19, superseded). Authorable
+hour-level all-days rebuild SHIPPED 2026-07-06 (§20).**
+**LIVE on GitHub Pages: https://prakharsaxena24.github.io/moon-to-mars/** (pushed 2026-07-06; `main` → Pages
+serves `main`/root, auto-deploys on push; `gh` authed as PrakharSaxena24).
+Headless-verified `node verify.js` **155 checks** (classic D→A gradient, the fishday temporal block — gappy 8/D,
+91% eff, 220 idle, 2 wrong-fish, dinner 18:30; all fixes 100/A, 0 idle, dinner 18:00 — Layer 0 helpers, and the
+§20 authorable-day anchors: per-day 100 via canonDay, cleared→D, monotone gradient, channel-at-hour pricing,
+façade equality, purity) + DOM-verified **69-check Playwright E2E** (§20.8). Next: **graphics/motion upgrade —
+§21 (render-direction plan; Tier 2 = Canvas 2D recommended, not yet built)**. §13 contingency branches and
+Layers 2–4 (§16) remain the backlog.
 
 ---
 
@@ -732,3 +735,63 @@ monotone). A **coarse-day Run → `scoreDay` report** (grade + 8-category scorec
 - **Deferred (this release):** animated playback of an authored *coarse* day (Run shows a scored report; the
   animated "watch people stall" stays fishday/Live, per §20.1). Cleanup: retire the dead §19
   `dayLayout`/`derivedHandoffs` + their verify checks. Optional: pre-clear Arrival as a tutorial.
+
+---
+
+## 21. Graphics & motion upgrade — render-direction plan (2026-07-07, PLANNING; Tier 2 recommended, NOT yet built)
+Owner wants the character movement and overall graphics "much better," on a **bigger screen**. This section is
+the decision record; nothing here is built yet. Live samples of each tier (animated) + an effort table were
+pitched as an artifact (`graphics-tiers-v1`). Two facts frame every option:
+- **The engine, `scoreDay`, and all 155 verify checks are safe under ANY render change** — rendering only *reads*
+  deterministic sim state, never writes back. Risk lives entirely in the presentation layer.
+- **No shortcut exists** under §11 (no build / no CDN / offline / few plain files): "better graphics" = either push
+  procedural art harder (CSS/canvas we hand-craft) or embed generated sprite art as `data:` URIs. No asset packs.
+
+### 21.1 Current baseline
+Run screen `#sitemap` = `clamp(380–580px)` tall, `.wrap` running `max-width:1180px`, dashboard a fixed `312px`
+sidebar (`.runwrap` grid `1fr 312px`). 24 figures are DOM/CSS pawns positioned by `translate3d` in the `frame()`
+rAF loop, walking **straight beelines** to stations (they ignore the dashed `ADJ` roads).
+
+### 21.2 Tiers considered (with tradeoffs)
+- **Tier 1 — Upgrade the DOM stage.** Bigger map, walk-the-roads (route along `ADJ`), better easing, richer CSS
+  pawns, more ambient life. Tech: DOM/CSS/rAF (as today). Effort ~½ session. Risk: verify untouched, E2E holds
+  (same hooks), a11y unchanged. Ceiling: "nicer flat diagram."
+- **Tier 2 — Canvas 2D stage (RECOMMENDED).** A `<canvas>` *scene* (sea, island, characters, boat, particles,
+  lighting) under a DOM HUD (dashboard/dock/modals/report stay DOM). Hand-rolled **Canvas 2D**, vanilla ES5,
+  **no library**. Unlocks gradient-shaded bodies, soft contact shadows, lantern light-pools, footstep dust, rim
+  light, parallax, a camera, buttery gait. Tech via `getContext('2d')` + `devicePixelRatio` scaling; reuse the
+  existing `frame()` loop. Effort ~1.5–2 sessions. Risk: **verify untouched**; the two real costs are (a) an
+  **accessibility shadow** — transparent DOM hotspots over stations/figures + an offscreen roster, because canvas
+  has no DOM for click-to-inspect / keyboard / screen-readers — and (b) **rewriting the 69 Playwright E2E** hooks
+  that query `.astro`/`#figs`. `prefers-reduced-motion` → draw one static frame.
+- **Tier 3 — Canvas + embedded sprite art.** Tier 2 plus real illustrated/pixel-art people & island, generated
+  and embedded as `data:` URIs (offline, deterministic). Best-looking; effort ~2.5–3 sessions, **dominated by
+  making the art**, plus an aesthetic pivot. Same a11y/E2E cost as Tier 2.
+- **Tier 4 — WebGL (NOT recommended).** GPU + GLSL shaders — unlocks animated/refractive water, dynamic
+  normal-mapped lighting, bloom, 2.5-D, thousands of particles. Native (offline-capable if hand-rolled), but
+  **overkill** for ~24 sprites on one static map, far more code/fragility (buffers/shaders/matrices, GPU variance,
+  context-loss), and to be pleasant wants a library (Pixi/three) which breaks offline/no-build or bloats the repo.
+  Same a11y/E2E cost as canvas *plus* GPU complexity. Justified only if the goal becomes a shader-showcase island.
+
+### 21.3 Motion wins (apply to every tier, cheap→moderate, low risk)
+Walk the `ADJ` roads instead of beelines · acceleration/settle easing + per-person speed variation + crowd
+separation at stations · 4-way directional facing + idle fidgets · richer environmental life.
+
+### 21.4 Screen / layout (orthogonal to tier)
+Bigger + dashboard drawer (widen `1180 → ~1440–1600`, map `→ ~70–80vh`, dashboard = collapsible drawer so the
+stage gets full width — **recommended**) · full-bleed stage (near-fullscreen map, HUD overlays; most cinematic,
+hardest responsive) · just-bigger (enlarge map, keep the 312px sidebar; minimal change).
+
+### 21.5 Art direction (orthogonal to tier)
+Richer washi/lacquer (evolve today's indigo-night + gold/hanko identity — safest, **recommended**) · pixel-art
+(retro, cohesive, procedurally embeddable) · illustrated/vector (crisp at any size, more drawing effort).
+
+### 21.6 Recommendation & open decisions
+**Recommended:** Tier 2 (Canvas 2D) · richer-washi style · bigger full-width stage with a dashboard drawer ·
+road-follow motion. The honest visual leap with zero risk to the verified engine/scoring; work concentrates in a
+new `stage.js` render layer + restoring a11y/E2E. **Open, pending owner sign-off:** final tier, art direction,
+screen layout, and whether "bigger screen" also means **bigger/fewer/more-detailed characters** vs. just a
+larger map. **Build shape when green-lit:** new `stage.js` (`scene(ctx, sim, t)` + pooled particles/camera) slots
+into `frame()`; an a11y-overlay module; Opus writes the render core + a11y shadow, Sonnet does scene pieces + E2E
+rewrite. Deferred items from §20.8 (animate authored coarse-day runs; retire dead `dayLayout`/`derivedHandoffs`)
+fold in naturally with the render rewrite.
