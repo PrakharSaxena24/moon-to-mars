@@ -802,8 +802,9 @@
   var YUKATA = ['#3d5a6c', '#7c4a5a', '#5b6b45', '#a3823c'];      // guest coat palette (washi-friendly)
   var anim = null;
   // ---- Tier 2 canvas stage (CLAUDE.md §21) — additive, behind USE_CANVAS; the DOM stage stays intact ----
-  var USE_CANVAS = false;                // P1: canvas built + behind the flag, DOM stays the default. Flip true to preview.
-                                         // P2 flips it on for real; the default Live screen also needs the §21.4 draw-state bridge (P3).
+  // P1: the Canvas 2D stage is built but OFF by default (the DOM stage stays the default per §21.9).
+  // Preview it live by adding ?canvas to the URL; P2 makes it the default (needs the §21.4 Live draw-state bridge, P3).
+  var USE_CANVAS = /[?&#]canvas/i.test(location.search + location.hash);
   var guestsVisible = false;             // §21.1: the 13 guests are hidden by default (toggle is P4)
   var stageCtx = null;                   // #stage 2D context (captured in buildSitemap)
   var stageTrail = [], stageGhost = [{}, {}, {}], stageChain = [];  // canvas-owned cascade scratch (separate from anim.*)
