@@ -966,6 +966,15 @@
       d.innerHTML = '<div class="st-arch"></div><div class="st-badge" id="badge-' + s.id + '"></div><div class="st-halo"></div><div class="st-ic">' + s.icon + '</div><div class="st-nm">' + nm(s.name) + '</div><div class="st-ring" id="ring-' + s.id + '"></div>';
       box.appendChild(d);
     });
+    // §map: clickable hotspots over Hinata's Food / Fishing-rod / Transport sections (canvas only;
+    // positioned each frame in frame() from PRS_STAGE.hubSections so they track the drawn sub-zones)
+    if (USE_CANVAS && window.PRS_STAGE && PRS_STAGE.hubSections) {
+      ['food', 'rod', 'transport'].forEach(function (sid) {
+        var b = document.createElement('div'); b.className = 'sec-hot'; b.id = 'sec-' + sid;
+        b.setAttribute('data-sec', sid); b.setAttribute('tabindex', '0'); b.setAttribute('role', 'button');
+        box.appendChild(b);
+      });
+    }
     var map = $('sitemap');
     var dims = mapDims(); anim.w = dims.w; anim.h = dims.h;
     rebuildPaths();
@@ -1230,7 +1239,7 @@
     updateTweens(ts);
     // Tier 2: paint the canvas scene from the same interpolated caches the DOM stage uses (read-only)
     if (USE_CANVAS && stageCtx && sim && window.PRS_STAGE) {
-      PRS_STAGE.scene(stageCtx, sim, ts / 1000, {
+      var stageView = {
         w: anim.w, h: anim.h, scale: stageScaleNow(), lang: L, rm: RM.matches,
         night: sim.mode === 'minute' && (sim.clockMin < 330 || sim.clockMin >= 1110),
         speedMult: speedMult, guestsVisible: guestsVisible,
@@ -1239,7 +1248,9 @@
         motes: anim.motes, cascade: anim.cascade,
         ghost: stageGhost, trail: stageTrail, chain: stageChain, hotPts: anim.hotPts,
         frozen: !!(paused || livePausedForFix || (sim && sim.paused))
-      });
+      };
+      PRS_STAGE.scene(stageCtx, sim, ts / 1000, stageView);
+      if (PRS_STAGE.hubSections) syncHubSections(PRS_STAGE.hubSections(stageView));
     }
     anim.raf = requestAnimationFrame(frame);
   }
@@ -1591,6 +1602,27 @@
     if (!wasOpen) $('detail-close').focus();
   }
   function closeDetail() { $('detail-modal').classList.remove('show'); modalClosed(); }
+  // §map: clicking a Hinata section (Food / Fishing rod / Transport) opens an info panel
+  function openSectionPanel(id) {
+    var t = T(), ic = { food: '🍱', rod: '🎣', transport: '🚤' };
+    $('detail-ic').textContent = ic[id] || '📍';
+    $('detail-title').textContent = t['sec_' + id + '_t'] || id;
+    $('detail-sub').textContent = nm(P.station('mess').name);   // "Hinata"
+    $('detail-body').innerHTML = '<div class="dt-note">' + (t['sec_' + id + '_b'] || '') + '</div>';
+    var wasOpen = $('detail-modal').classList.contains('show');
+    if (!wasOpen) modalOpening('detail-modal');
+    $('detail-modal').classList.add('show');
+    if (!wasOpen) $('detail-close').focus();
+  }
+  // position the 3 Hinata section hotspots over where stage.js draws them (dead-banded per frame)
+  function syncHubSections(secs) {
+    for (var i = 0; i < secs.length; i++) {
+      var sc = secs[i], hb = $('sec-' + sc.id); if (!hb) continue;
+      var lx = sc.cx - sc.r, ty = sc.cy - sc.r, d = sc.r * 2;
+      if (hb._sl !== lx || hb._stp !== ty) { hb.style.left = lx + 'px'; hb.style.top = ty + 'px'; hb.style.width = d + 'px'; hb.style.height = d + 'px'; hb._sl = lx; hb._stp = ty; }
+      if (hb._lb !== sc.label) { hb.setAttribute('aria-label', sc.label); hb._lb = sc.label; }
+    }
+  }
 
   // =========================================================================
   // REPORT
@@ -1865,7 +1897,10 @@
       if (appMode === 'live' && liveState) { livePausedForFix = false; clearGapFocus(); liveFinish(); }   // stay in the live flow
       else finish();
     });
-    $('stations').addEventListener('click', function (e) { var st = e.target.closest('.station'); if (st) openProblemPanel(st.id.replace('st-', '')); });
+    $('stations').addEventListener('click', function (e) {
+      var sec = e.target.closest('.sec-hot'); if (sec) { openSectionPanel(sec.getAttribute('data-sec')); return; }
+      var st = e.target.closest('.station'); if (st) openProblemPanel(st.id.replace('st-', ''));
+    });
     $('dash-warnings').addEventListener('click', function (e) { var w = e.target.closest('.warn'); if (w && w.dataset.station) openProblemPanel(w.dataset.station); });
     $('detail-close').addEventListener('click', closeDetail);
     $('detail-modal').addEventListener('click', function (e) { if (e.target === $('detail-modal')) closeDetail(); });
@@ -1909,7 +1944,8 @@
       var el = e.target;
       if (!el || !el.classList) return;
       if (e.key === 'Enter' || e.key === ' ') {
-        if (el.classList.contains('station')) { e.preventDefault(); openProblemPanel(el.id.replace('st-', '')); }
+        if (el.classList.contains('sec-hot')) { e.preventDefault(); openSectionPanel(el.getAttribute('data-sec')); }
+        else if (el.classList.contains('station')) { e.preventDefault(); openProblemPanel(el.id.replace('st-', '')); }
         else if (el.classList.contains('warn') && el.dataset.station) { e.preventDefault(); openProblemPanel(el.dataset.station); }
         else if (el.classList.contains('fd-socket')) { e.preventDefault(); fdSocketTap(el); }
         else if (el.classList.contains('fd-chip')) { e.preventDefault(); toggleChipPlacing(el.dataset.task); }

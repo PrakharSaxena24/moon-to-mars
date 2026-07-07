@@ -705,6 +705,9 @@ button{font-family:inherit;}
 
 /* ===== Tier 2 canvas stage (CLAUDE.md §21) — additive; only active under body.canvas-stage ===== */
 #stage{position:absolute;inset:0;z-index:0;pointer-events:none;border-radius:4px;}
+/* §map: transparent clickable hotspots over Hinata's Food/Fishing-rod/Transport sections (canvas-drawn) */
+.sec-hot{position:absolute;z-index:4;border-radius:50%;cursor:pointer;pointer-events:auto;}
+.sec-hot:hover,.sec-hot:focus-visible{outline:2px solid var(--accent-light);outline-offset:2px;background:rgba(227,196,107,.12);}
 body.canvas-stage #skytint,
 body.canvas-stage #paths,
 body.canvas-stage #motes,

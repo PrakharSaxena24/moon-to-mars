@@ -1747,15 +1747,50 @@ function drawStations_glyph(ctx, id, cx, cy, r, na) {
   ctx.restore();
 }
 
-// HINATA COMMAND-CENTRE COMPOUND (station flag hub===true) — visual-first-draft improvement:
-// replaces the normal ~42px icon disc with a big base/HQ that reads as the group's command
-// centre: a wide lacquer platform, a folded-in roof (the old 'command' peak + the mess awning's
-// red-tile motif, both bigger — Hinata absorbed both stations, engine.js:65/69), the station's
-// own icon big in the middle, and three small labelled sub-zones in a row beneath the platform —
-// kitchen / rod-check & load / discussion, where the team actually preps and plans. Reuses
-// bevelDisc / roundRect / chip / lightPool / rimLightArc / contactShadow — no new palette
-// entries. `r` is the caller's already-scaled footprint radius (≈2.7x a normal station disc, so
-// the whole compound reads ~2.5-3x a normal footprint across).
+// HUB_FOOT_MULT — single source of truth for Hinata's footprint multiplier (a normal station
+// disc's radius × this = the hub's footR). Read by BOTH drawStations() (sizing the compound it
+// draws, incl. the territory halo / stalled ring / crew badge that already key off footR) and
+// hubSections() (sizing the compound the app layer places DOM hotspots over) so the two can never
+// drift apart. Hinata absorbs command+finance+clinic (engine.js:65/69-71) and is the dominant
+// structure on the land side of the map; the land runs to x≈0.55 and the hub sits at 0.30,0.44,
+// well clear of the shoreline even at this larger footprint.
+var HUB_FOOT_MULT = 3.6;
+
+// the 3 sub-zones Hinata offers — Food / Fishing rod / Transport (replaces the old
+// Kitchen/Rod-Check/Discuss trio). id = stable hotspot key (matches hubSections()'s contract);
+// icon = the emoji drawn in the small disc; en/jp = the bilingual chip label, read the same way
+// nm() reads entity {en,jp} pairs elsewhere in this file (_lang==='ja' ? jp : en).
+var HUB_SECTIONS = [
+  { id: 'food',      icon: '🍱', en: 'Food',        jp: '食事' },
+  { id: 'rod',       icon: '🎣', en: 'Fishing rod',  jp: '釣竿' },
+  { id: 'transport', icon: '🚤', en: 'Transport',    jp: '移動' }
+];
+
+// SHARED SOURCE OF TRUTH for the three sub-zone rects, in already-scaled CSS px, given the hub's
+// own draw centre (hubCx, hubCy — the SAME discCy drawStations passes into drawStations_hub) and
+// its footR. drawStations_hub draws directly from this; hubSections() (exported, read by the app
+// layer to place clickable hotspots) returns the IDENTICAL geometry — so the drawn art and the tap
+// targets can never drift apart. Pure: no ctx writes, no state reads beyond its arguments.
+function hubSectionRects(hubCx, hubCy, footR) {
+  var zy = hubCy + footR * 1.05;
+  var zr = footR * 0.19;             // sub-zone icon-disc radius — bigger/clearer, proportional to the hub
+  var out = [], i, z;
+  for (i = 0; i < HUB_SECTIONS.length; i++) {
+    z = HUB_SECTIONS[i];
+    out.push({ id: z.id, icon: z.icon, en: z.en, jp: z.jp, cx: hubCx + (i - 1) * footR, cy: zy, r: zr });
+  }
+  return out;
+}
+
+// HINATA COMMAND-CENTRE COMPOUND (station flag hub===true) — replaces the normal ~42px icon disc
+// with a big base/lodge that reads as the group's dominant structure: a wide lacquer platform, a
+// roofed lodge (peaked roof + red-tile eave, folded in from the old 'command'/'mess' motifs,
+// engine.js:65/69, PLUS real timber-and-washi walls with a doorway and two lantern-lit windows so
+// it reads as a proper base rather than a floating roof), the station's own icon big in the
+// middle, and three small labelled sub-zones in a row beneath the platform — Food / Fishing rod /
+// Transport, where the team actually eats, gears up, and moves. Reuses bevelDisc / roundRect /
+// chip / lightPool / rimLightArc / contactShadow — no new palette entries. `r` is the caller's
+// already-scaled footprint radius (HUB_FOOT_MULT × a normal station disc).
 function drawStations_hub(ctx, cx, cy, r, rimRgb, na, ic) {
   ctx.save();
 
@@ -1788,6 +1823,37 @@ function drawStations_hub(ctx, cx, cy, r, rimRgb, na, ic) {
   // ridge lantern — the HQ's own light, graded by nightAmount like every other station's lantern
   lightPool(ctx, cx, roofY - roofH - 2 * scale, (7 + 5 * na) * scale, PAL.lantern, 0.14 + 0.46 * na);
 
+  // lodge walls beneath the roof — the "proper base/lodge" read: a warm timber-and-washi wall
+  // band, a dark doorway, and two lantern-lit windows (brighter at night, same na grade as the
+  // ridge lantern above).
+  var wallW = roofW * 1.62, wallH = r * 0.5, wallX = cx - wallW / 2, wallY = roofY;
+  roundRect(ctx, wallX, wallY, wallW, wallH, 3 * scale);
+  var wallGrad = ctx.createLinearGradient(0, wallY, 0, wallY + wallH);
+  wallGrad.addColorStop(0, rgba(liftRGB(PAL.washiWarm, -6), 1));
+  wallGrad.addColorStop(1, rgba(liftRGB(PAL.moss, -30), 1));
+  ctx.fillStyle = wallGrad; ctx.fill();
+  ctx.lineWidth = 1 * scale; ctx.strokeStyle = rgba(PAL.indigoDeep, 0.4); ctx.stroke();
+  // doorway, centred, flush with the platform
+  var doorW = wallW * 0.15, doorH = wallH * 0.82, doorX = cx - doorW / 2, doorY = wallY + wallH - doorH;
+  roundRect(ctx, doorX, doorY, doorW, doorH, 2 * scale);
+  ctx.fillStyle = rgba(PAL.ink, 0.72); ctx.fill();
+  // two lit windows flanking the door
+  var winW = wallW * 0.1, winH = wallH * 0.34, winY = wallY + wallH * 0.28, wi, winX, winOff = [-0.30, 0.30];
+  for (wi = 0; wi < winOff.length; wi++) {
+    winX = cx + winOff[wi] * wallW - winW / 2;
+    roundRect(ctx, winX, winY, winW, winH, 1.5 * scale);
+    ctx.fillStyle = rgba(PAL.lantern, 0.32 + 0.5 * na);
+    ctx.fill();
+    ctx.lineWidth = 0.8 * scale; ctx.strokeStyle = rgba(PAL.ink, 0.55); ctx.stroke();
+  }
+  // upper-left rim light along the wall's top edge (key-light convention)
+  ctx.beginPath();
+  ctx.moveTo(wallX + 2 * scale, wallY + 1.2 * scale);
+  ctx.lineTo(wallX + wallW * 0.42, wallY + 1.2 * scale);
+  ctx.lineWidth = 1.2 * scale;
+  ctx.strokeStyle = rgba(PAL.rimWhite, 0.2);
+  ctx.stroke();
+
   // the station's own icon, big, centred on the platform
   ctx.save();
   ctx.font = Math.round(r * 0.62) + 'px sans-serif';
@@ -1796,31 +1862,28 @@ function drawStations_hub(ctx, cx, cy, r, rimRgb, na, ic) {
   ctx.fillText(ic, cx, cy + 2 * scale);
   ctx.restore();
 
-  // three small labelled sub-zones in a row beneath the platform
-  var zones = [
-    { icon: '🍳', en: 'Kitchen', jp: '厨房' },
-    { icon: '🎣', en: 'Rod Check', jp: '竿点検' },
-    { icon: '💬', en: 'Discuss', jp: '打合せ' }
-  ];
-  var zy = cy + r * 1.05, zir = 9 * scale, zi, zx, zg;
-  for (zi = 0; zi < zones.length; zi++) {
-    zx = cx + (zi - 1) * r * 1.0;
-    contactShadow(ctx, zx, zy + zir * 0.7, zir * 2.2, zir * 0.8, 0.16);
-    zg = ctx.createLinearGradient(0, zy - zir, 0, zy + zir);
+  // three small labelled sub-zones in a row beneath the platform — Food / Fishing rod / Transport,
+  // geometry from the SAME hubSectionRects() helper hubSections() reads, so the drawn art and the
+  // app layer's clickable hotspots always land in exactly the same place.
+  var rects = hubSectionRects(cx, cy, r), zi, rct, zg;
+  for (zi = 0; zi < rects.length; zi++) {
+    rct = rects[zi];
+    contactShadow(ctx, rct.cx, rct.cy + rct.r * 0.7, rct.r * 2.2, rct.r * 0.8, 0.16);
+    zg = ctx.createLinearGradient(0, rct.cy - rct.r, 0, rct.cy + rct.r);
     zg.addColorStop(0, rgba(liftRGB(PAL.washi, -4), 1));
     zg.addColorStop(1, rgba(liftRGB(PAL.washi, -28), 1));
-    ctx.beginPath(); ctx.arc(zx, zy, zir, 0, Math.PI * 2);
+    ctx.beginPath(); ctx.arc(rct.cx, rct.cy, rct.r, 0, Math.PI * 2);
     ctx.fillStyle = zg; ctx.fill();
     ctx.lineWidth = 1 * scale; ctx.strokeStyle = rgba(PAL.goldDeep, 0.55); ctx.stroke();
-    rimLightArc(ctx, zx, zy, zir - 1 * scale, 0.3, PAL.rimWhite);
+    rimLightArc(ctx, rct.cx, rct.cy, rct.r - 1 * scale, 0.3, PAL.rimWhite);
     ctx.save();
-    ctx.font = Math.round(10 * scale) + 'px sans-serif';
+    ctx.font = Math.round(rct.r * 1.05) + 'px sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(zones[zi].icon, zx, zy + 0.5 * scale);
+    ctx.fillText(rct.icon, rct.cx, rct.cy + 0.5 * scale);
     ctx.restore();
-    chip(ctx, zx, zy + zir + 3 * scale, (_lang === 'ja' ? zones[zi].jp : zones[zi].en), {
-      font: '600 ' + Math.round(8 * scale) + 'px system-ui,sans-serif',
-      pad: 3 * scale, h: 11 * scale, r: 2 * scale,
+    chip(ctx, rct.cx, rct.cy + rct.r + 3 * scale, (_lang === 'ja' ? rct.jp : rct.en), {
+      font: '600 ' + Math.round(9 * scale) + 'px system-ui,sans-serif',
+      pad: 3 * scale, h: 12 * scale, r: 2 * scale,
       bg: rgba(PAL.washi, 0.88), border: rgba(PAL.goldDeep, 0.4)
     });
   }
@@ -1856,7 +1919,7 @@ function drawStations(ctx, sim, t, view) {
     // the normal ~42px icon disc; footR is the generic "disc footprint radius" every halo/shadow/
     // ring/badge/name below is sized from, so the whole treatment scales up with it unchanged.
     var isHub = !!st.hub;
-    var footR = isHub ? discR * 2.7 : discR;
+    var footR = isHub ? discR * HUB_FOOT_MULT : discR;
 
     // wide, faint ground shadow under the whole disc block, resting on the station's ground point
     contactShadow(ctx, cx, cy, footR * 2.6, footR * 0.9, 0.2);
@@ -1933,15 +1996,45 @@ function drawStations(ctx, sim, t, view) {
       ctx.restore();
     }
     // bilingual name — plain gold text (no box), matching .st-nm (style.css:268) so it never occludes pawns.
-    // Hub gets extra clearance so the name sits below its sub-zone row instead of overlapping it.
+    // Hub gets extra clearance, PROPORTIONAL to footR (not a fixed px offset), so the name always
+    // clears the sub-zone chip row beneath it regardless of HUB_FOOT_MULT.
     ctx.save();
     ctx.font = '600 ' + Math.round(11 * scale) + 'px sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'top';
     ctx.shadowColor = 'rgba(0,0,0,.55)'; ctx.shadowBlur = 3 * scale;
     ctx.fillStyle = rgba(PAL.gold, 1);
-    ctx.fillText(nm(st.name), cx, discCy + footR + (isHub ? 34 * scale : 6 * scale));
+    ctx.fillText(nm(st.name), cx, discCy + footR + (isHub ? footR * 0.6 : 6 * scale));
     ctx.restore();
   }
+}
+
+// ---- hubSections (exported on window.PRS_STAGE) ----
+// PUBLIC, pure, read-only: returns the SAME 3 sub-zone rects drawStations_hub just drew, in CSS
+// px, so the app layer can place DOM click/keyboard hotspots exactly on top of them. Finds the hub
+// station via P.STATIONS[].hub (the same flag drawStations() keys its isHub branch off) and
+// computes its centre the SAME way drawStations() does — stationPx(hubSt, view) plus the module
+// `scale` for the discCy/discR offsets — then feeds it through the SAME hubSectionRects() helper
+// drawStations_hub calls, so the drawn art and the returned geometry can never drift apart.
+// Returns [] if there is no hub station, it is hidden, or view is missing/degenerate. Safe to call
+// every frame: no ctx writes, no state mutation, reads only P.STATIONS + the module `scale`.
+function hubSections(view) {
+  if (!view || !(view.w > 0) || !(view.h > 0) || !P || !P.STATIONS) return [];
+  var hubSt = null, i;
+  for (i = 0; i < P.STATIONS.length; i++) {
+    if (P.STATIONS[i].hub) { hubSt = P.STATIONS[i]; break; }
+  }
+  if (!hubSt || hubSt.hidden) return [];
+  var p = stationPx(hubSt, view);
+  var discCy = p.y - 11 * scale;          // mirrors drawStations()'s discCy math exactly
+  var discR = 21 * scale;                 // mirrors drawStations()'s discR constant
+  var footR = discR * HUB_FOOT_MULT;
+  var rects = hubSectionRects(p.x, discCy, footR);
+  var out = [], j, z;
+  for (j = 0; j < rects.length; j++) {
+    z = rects[j];
+    out.push({ id: z.id, label: (_lang === 'ja' ? z.jp : z.en), cx: z.cx, cy: z.cy, r: z.r });
+  }
+  return out;
 }
 
 
@@ -2428,5 +2521,5 @@ function drawCascade(ctx, sim, t, view) {
 }
 
 
-  window.PRS_STAGE = { initStage: initStage, resizeStage: resizeStage, scene: scene };
+  window.PRS_STAGE = { initStage: initStage, resizeStage: resizeStage, scene: scene, hubSections: hubSections };
 })();

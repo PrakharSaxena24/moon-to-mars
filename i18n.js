@@ -242,6 +242,9 @@
       pnCause: 'Why it stalls', pnNeeded: 'Needed', pnFix: 'The fix',
       fixGapLbl: 'gap', fixGapLblN: 'gaps', gapChip: 'gap',
       detailDecoy: 'Running clean — no gap here.',
+      sec_food_t: '🍱 Food', sec_food_b: 'The kitchen at Hinata — the chefs (Akiyama · Nao · Kaito) cook here; meals are served morning and night, and the packed lunches are made each morning with help from the AIBOS team.',
+      sec_rod_t: '🎣 Fishing rod', sec_rod_b: 'Where the fishing rods and tackle are checked and loaded before heading out to the iso rock or the jigging grounds.',
+      sec_transport_t: '🚤 Transport', sec_transport_b: 'Boats & movement — Nobu-san’s boat runs the shore to the iso rock (rock fishing); Kimura-san’s boat works the open water (jigging).',
 
       // --- rules ---
       rulesTitle: 'How it works',
@@ -496,6 +499,9 @@
       pnCause: '止まる理由', pnNeeded: '必要な役割', pnFix: '修正',
       fixGapLbl: '件', fixGapLblN: '件', gapChip: '要修正',
       detailDecoy: '順調——ここにギャップはありません。',
+      sec_food_t: '🍱 食事', sec_food_b: 'ひなたの厨房——料理長（秋山・ナオ・カイト）がここで調理。朝夕に食事を提供し、昼のお弁当はAIBOSメンバーの手伝いで毎朝用意します。',
+      sec_rod_t: '🎣 釣竿', sec_rod_b: '磯やジギングへ出る前に、釣竿・仕掛けを点検して積み込む場所。',
+      sec_transport_t: '🚤 移動', sec_transport_b: '船と移動——のぶさんの船は磯（磯釣り）へ、きむらさんの船は沖（ジギング）へ。',
 
       // --- rules ---
       rulesTitle: '遊び方',
