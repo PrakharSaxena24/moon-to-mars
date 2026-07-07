@@ -38,8 +38,7 @@
   // =========================================================================
 
   // 8 road segments between stations (app.js:791)
-  var ADJ = [['command', 'port'], ['command', 'clinic'], ['command', 'finance'], ['command', 'lodging'],
-             ['port', 'vessel'], ['lodging', 'mess'], ['mess', 'finance'], ['finance', 'clinic']];
+  var ADJ = [['mess', 'port'], ['mess', 'clinic'], ['mess', 'lodging'], ['port', 'vessel']];   // §map v2: Hinata(mess) hub + port->iso boat route
 
   // boat quadratic arc anchors, normalized: pos = qbez(DOCK, BOATC, SEA, param).
   // NEW GEOGRAPHY: Nobu-san sails from the PORT shore (0.52,0.55) out to the iso rock (0.82,0.72).
@@ -609,6 +608,97 @@ function drawGround_vignette(ctx, w, h) {
   ctx.restore();
 }
 
+// ---- LAND (visual-first-draft improvement: LAND must read as clearly different from OCEAN) ----
+// LAND is the canvas's LEFT region (x <~0.55); OCEAN is the RIGHT (drawSea). The shoreline is the
+// same gentle curve drawSea_traceShore already draws for the ocean fill.
+
+// Builds ONE path — left edge + top + bottom of the canvas, with the right edge tracing the exact
+// shoreline curve (calls drawSea_traceShore directly, never duplicates its control points) — so
+// land and sea always meet with zero seam/gap. Begins its own ctx path; caller clips/fills/strokes.
+function drawGround_landPath(ctx, w, h) {
+  ctx.beginPath();
+  ctx.moveTo(0, -0.02 * h);
+  ctx.lineTo(w * 0.57, -0.02 * h);
+  drawSea_traceShore(ctx, w, h);   // appends the shore curve as its own closed sub-path
+  ctx.lineTo(0, 1.02 * h);
+  ctx.lineTo(0, -0.02 * h);
+  ctx.closePath();
+}
+
+// LAND grass-fleck / mottling texture — a second deterministic cached tile (Park-Miller LCG, no
+// Math.random — same technique as paperTexture above) in earthy moss/mossLight/washiWarm dabs
+// instead of paper fibres. Caller must already be clipped to the land region. Alpha kept low.
+var _landGrainPat = null;
+function drawGround_landTexture(ctx, w, h) {
+  if (typeof document === 'undefined') return;
+  if (!_landGrainPat) {
+    var pc = document.createElement('canvas');
+    pc.width = 110; pc.height = 110;
+    var g = pc.getContext('2d');
+    if (!g) return;
+    var seed = 733459, i, x0, y0, r, pick;
+    var nx = function () { seed = (seed * 16807) % 2147483647; return seed; };
+    for (i = 0; i < 260; i++) {
+      x0 = nx() % 110; y0 = nx() % 110; r = 0.6 + (nx() % 100) / 100;
+      pick = nx() % 100;
+      g.fillStyle = pick < 45 ? rgba(PAL.mossLight, 0.5) : (pick < 80 ? rgba(PAL.moss, 0.45) : rgba(PAL.washiWarm, 0.4));
+      g.beginPath(); g.arc(x0, y0, r, 0, 6.2832); g.fill();
+    }
+    _landGrainPat = ctx.createPattern(pc, 'repeat');
+    if (!_landGrainPat) return;
+  }
+  ctx.save();
+  ctx.globalAlpha *= 0.16;
+  ctx.fillStyle = _landGrainPat;
+  ctx.fillRect(0, 0, w, h);
+  ctx.restore();
+}
+
+// LAND fill — muted moss/olive + warm-earth gradient (lit upper-left -> deep lower-right, per the
+// scene's upper-left key-light convention), clipped to drawGround_landPath, plus the grass-fleck
+// texture. The ocean itself is never touched here — drawSea (clipped to its own path) keeps blue.
+function drawGround_landFill(ctx, w, h) {
+  ctx.save();
+  drawGround_landPath(ctx, w, h);
+  ctx.clip();
+
+  var g = ctx.createLinearGradient(0, 0, w * 0.6, h);
+  g.addColorStop(0, rgba(PAL.mossLight, 0.92));
+  g.addColorStop(0.40, rgba(PAL.moss, 0.9));
+  g.addColorStop(0.75, rgba(liftRGB(PAL.moss, -16), 0.94));
+  g.addColorStop(1, rgba(liftRGB(PAL.moss, -28), 0.96));
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, w, h);
+
+  // warm earthy pools — washi-toned, not neon; a sun-warmed clearing low, a gold catch upper-mid
+  lightPool(ctx, w * 0.16, h * 0.84, 300 * scale, PAL.washiWarm, 0.10);
+  lightPool(ctx, w * 0.30, h * 0.14, 220 * scale, PAL.gold, 0.06);
+
+  drawGround_landTexture(ctx, w, h);
+  ctx.restore();
+}
+
+// LAND coastline — a soft sandy strand hugging the SAME shore curve, clipped to the land side only
+// (drawSea's own shallow-water fade handles the water side of the same line, so the two together
+// read as one continuous strand where green land meets blue water).
+function drawGround_landStrand(ctx, w, h) {
+  ctx.save();
+  drawGround_landPath(ctx, w, h);
+  ctx.clip();
+  ctx.beginPath();
+  drawSea_traceShore(ctx, w, h);
+  ctx.strokeStyle = rgba(PAL.washiWarm, 0.24);
+  ctx.lineWidth = 26 * scale;
+  ctx.lineCap = 'round';
+  ctx.stroke();
+  ctx.beginPath();
+  drawSea_traceShore(ctx, w, h);
+  ctx.strokeStyle = rgba(liftRGB(PAL.gold, 20), 0.30);
+  ctx.lineWidth = 9 * scale;
+  ctx.stroke();
+  ctx.restore();
+}
+
 function drawGround(ctx, sim, t, view) {
   if (!view || !(view.w > 0) || !(view.h > 0)) return;
   var w = view.w, h = view.h;
@@ -616,7 +706,12 @@ function drawGround(ctx, sim, t, view) {
   // 1. base island radial gradient — richer lacquer-depth stops (style.css .sitemap background, enriched)
   drawGround_ellipseBase(ctx, w, h);
 
-  // 2. faint topographic contour hints, laid into the base before the stipple/paper grain sit on top
+  // 1b. LAND — paint everything LEFT of the shoreline a warm moss/earth colour so land obviously
+  // reads as land, not water. The ocean itself is untouched; drawSea (below, its own clip) keeps
+  // the cool blue palette — this is the only place stage.js tints the land side of the map.
+  drawGround_landFill(ctx, w, h);
+
+  // 2. faint topographic contour hints, laid over the land fill before the stipple/paper grain sit on top
   drawGround_contours(ctx, w, h);
 
   // 3. stipple / dot-noise texture, two overlapping ring fields (style.css .sitemap::before)
@@ -624,16 +719,9 @@ function drawGround(ctx, sim, t, view) {
   drawGround_ringField(ctx, w, h, 0.22, 0.30, 90, 0.05 * 0.55);
   drawGround_ringField(ctx, w, h, 0.28, 0.68, 110, 0.04 * 0.55);
 
-  // 3b. NEW GEOGRAPHY: soft beach/shore band along x≈0.52..0.58 — warm sand where the land meets
-  // the ocean; the sea's shallow edge fades to transparent over it so it reads as a lit strand
-  var sandX0 = w * 0.50, sandW = w * 0.10;
-  var sand = ctx.createLinearGradient(sandX0, 0, sandX0 + sandW, 0);
-  sand.addColorStop(0, rgba(PAL.washiWarm, 0));
-  sand.addColorStop(0.45, rgba(PAL.washiWarm, 0.14));
-  sand.addColorStop(0.75, rgba(liftRGB(PAL.gold, 10), 0.1));
-  sand.addColorStop(1, rgba(PAL.washiWarm, 0));
-  ctx.fillStyle = sand;
-  ctx.fillRect(sandX0, 0, sandW, h);
+  // 3b. NEW GEOGRAPHY: a sandy strand hugging the shoreline curve — warm band on the land side of
+  // the same curve drawSea traces; the sea's own shallow-water fade covers the water side of it.
+  drawGround_landStrand(ctx, w, h);
 
   // 4. subtle warm horizon glow, low on the map — an ambient light suggestion (not a lantern), centred
   // just below the visible frame so only its upper arc grazes the shoreline. Graded by nightAmount(): a
@@ -1659,6 +1747,87 @@ function drawStations_glyph(ctx, id, cx, cy, r, na) {
   ctx.restore();
 }
 
+// HINATA COMMAND-CENTRE COMPOUND (station flag hub===true) — visual-first-draft improvement:
+// replaces the normal ~42px icon disc with a big base/HQ that reads as the group's command
+// centre: a wide lacquer platform, a folded-in roof (the old 'command' peak + the mess awning's
+// red-tile motif, both bigger — Hinata absorbed both stations, engine.js:65/69), the station's
+// own icon big in the middle, and three small labelled sub-zones in a row beneath the platform —
+// kitchen / rod-check & load / discussion, where the team actually preps and plans. Reuses
+// bevelDisc / roundRect / chip / lightPool / rimLightArc / contactShadow — no new palette
+// entries. `r` is the caller's already-scaled footprint radius (≈2.7x a normal station disc, so
+// the whole compound reads ~2.5-3x a normal footprint across).
+function drawStations_hub(ctx, cx, cy, r, rimRgb, na, ic) {
+  ctx.save();
+
+  // wide lacquer platform — same bevel treatment as a normal station disc, just the big footprint
+  bevelDisc(ctx, cx, cy, r, PAL.indigo, rimRgb);
+
+  // folded-in roof: 'command's peaked silhouette + the old 'mess' awning's red-tile eave, bigger
+  var roofW = r * 0.92, roofH = r * 0.62, roofY = cy - r * 0.55, i2;
+  ctx.beginPath();
+  ctx.moveTo(cx, roofY - roofH);
+  ctx.lineTo(cx - roofW, roofY);
+  ctx.lineTo(cx + roofW, roofY);
+  ctx.closePath();
+  ctx.fillStyle = '#2c3844'; ctx.fill();
+  ctx.lineWidth = 1.4 * scale; ctx.strokeStyle = 'rgba(227,196,107,.85)'; ctx.stroke();
+  // red-tile awning band along the roof's eave (mess motif, folded in)
+  ctx.save();
+  roundRect(ctx, cx - roofW, roofY - roofH * 0.24, roofW * 2, roofH * 0.24, 3 * scale);
+  ctx.clip();
+  ctx.fillStyle = rgba(TERR.red.rgb, 1);
+  for (i2 = cx - roofW; i2 < cx + roofW; i2 += 12 * scale) ctx.fillRect(i2, roofY - roofH * 0.24, 7 * scale, roofH * 0.24);
+  ctx.restore();
+  // upper-left rim light on the roof ridge (key-light convention)
+  ctx.beginPath();
+  ctx.moveTo(cx, roofY - roofH);
+  ctx.lineTo(cx - roofW, roofY);
+  ctx.lineWidth = 1.6 * scale;
+  ctx.strokeStyle = rgba(PAL.rimWhite, 0.3);
+  ctx.stroke();
+  // ridge lantern — the HQ's own light, graded by nightAmount like every other station's lantern
+  lightPool(ctx, cx, roofY - roofH - 2 * scale, (7 + 5 * na) * scale, PAL.lantern, 0.14 + 0.46 * na);
+
+  // the station's own icon, big, centred on the platform
+  ctx.save();
+  ctx.font = Math.round(r * 0.62) + 'px sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#fff';
+  ctx.fillText(ic, cx, cy + 2 * scale);
+  ctx.restore();
+
+  // three small labelled sub-zones in a row beneath the platform
+  var zones = [
+    { icon: '🍳', en: 'Kitchen', jp: '厨房' },
+    { icon: '🎣', en: 'Rod Check', jp: '竿点検' },
+    { icon: '💬', en: 'Discuss', jp: '打合せ' }
+  ];
+  var zy = cy + r * 1.05, zir = 9 * scale, zi, zx, zg;
+  for (zi = 0; zi < zones.length; zi++) {
+    zx = cx + (zi - 1) * r * 1.0;
+    contactShadow(ctx, zx, zy + zir * 0.7, zir * 2.2, zir * 0.8, 0.16);
+    zg = ctx.createLinearGradient(0, zy - zir, 0, zy + zir);
+    zg.addColorStop(0, rgba(liftRGB(PAL.washi, -4), 1));
+    zg.addColorStop(1, rgba(liftRGB(PAL.washi, -28), 1));
+    ctx.beginPath(); ctx.arc(zx, zy, zir, 0, Math.PI * 2);
+    ctx.fillStyle = zg; ctx.fill();
+    ctx.lineWidth = 1 * scale; ctx.strokeStyle = rgba(PAL.goldDeep, 0.55); ctx.stroke();
+    rimLightArc(ctx, zx, zy, zir - 1 * scale, 0.3, PAL.rimWhite);
+    ctx.save();
+    ctx.font = Math.round(10 * scale) + 'px sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(zones[zi].icon, zx, zy + 0.5 * scale);
+    ctx.restore();
+    chip(ctx, zx, zy + zir + 3 * scale, (_lang === 'ja' ? zones[zi].jp : zones[zi].en), {
+      font: '600 ' + Math.round(8 * scale) + 'px system-ui,sans-serif',
+      pad: 3 * scale, h: 11 * scale, r: 2 * scale,
+      bg: rgba(PAL.washi, 0.88), border: rgba(PAL.goldDeep, 0.4)
+    });
+  }
+
+  ctx.restore();
+}
+
 function drawStations(ctx, sim, t, view) {
   if (!view || !P || !P.STATIONS) return;
   var terr = view.tintMap || P.stationReadiness(sim);
@@ -1670,6 +1839,7 @@ function drawStations(ctx, sim, t, view) {
   var i, j;
   for (i = 0; i < P.STATIONS.length; i++) {
     var st = P.STATIONS[i];
+    if (st.hidden) continue;   // §map v2: command folded into Hinata, finance hidden
     var p = stationPx(st, view);
     var cx = p.x, cy = p.y;
     var simSt = null;
@@ -1682,53 +1852,62 @@ function drawStations(ctx, sim, t, view) {
     // Keep the halo + night lantern + contact shadow at cy (roads/tint/ground meet the station point); raise
     // the disc block to discCy.
     var discCy = cy - 11 * scale;
+    // Hinata (flag hub===true) gets the big command-centre compound (drawStations_hub) in place of
+    // the normal ~42px icon disc; footR is the generic "disc footprint radius" every halo/shadow/
+    // ring/badge/name below is sized from, so the whole treatment scales up with it unchanged.
+    var isHub = !!st.hub;
+    var footR = isHub ? discR * 2.7 : discR;
 
     // wide, faint ground shadow under the whole disc block, resting on the station's ground point
-    contactShadow(ctx, cx, cy, discR * 2.6, discR * 0.9, 0.2);
+    contactShadow(ctx, cx, cy, footR * 2.6, footR * 0.9, 0.2);
 
     // (c) territory halo — greens/ambers/reds the ground behind the icon (style.css:370-377)
     if (terrDef) {
       ctx.save();
       ctx.globalAlpha = terrDef.op;
-      radialGlow(ctx, cx, cy, discR * 1.3, terrDef.rgb, terrDef.a);
+      radialGlow(ctx, cx, cy, footR * 1.3, terrDef.rgb, terrDef.a);
       ctx.restore();
     }
     // (f) warm night lantern light-pool, graded by nightAmount — a stalled station's red warning
     // always outranks the cozy lantern
     if (!hot && na > 0.02) {
-      lightPool(ctx, cx, cy, discR * 1.7, PAL.lantern, 0.24 * na);
+      lightPool(ctx, cx, cy, footR * 1.7, PAL.lantern, 0.24 * na);
     }
 
     // (b) icon disc — full gold-leaf lacquer bevel (lacquer body + inner shadow + upper-left rim
     // light + gold-leaf rim stroke), territory-tinted when the station has a live tint
     var rimRgb = terrDef ? hexRGB(terrDef.border) : PAL.goldLeaf;
-    bevelDisc(ctx, cx, discCy, discR, PAL.indigo, rimRgb);
+    if (isHub) {
+      drawStations_hub(ctx, cx, discCy, footR, rimRgb, na, st.icon);
+    } else {
+      bevelDisc(ctx, cx, discCy, discR, PAL.indigo, rimRgb);
 
-    // occasional gold-leaf glint catching the rim light — sparingly, staggered per station so they
-    // don't all shimmer in unison; skipped under reduced motion
-    if (!view.rm) {
-      var glintPh = (t * 0.35 + i * 1.7) % 4;
-      if (glintPh < 0.35) {
-        var glintA = Math.sin((glintPh / 0.35) * Math.PI);
-        sparkle(ctx, cx + discR * 0.62, discCy - discR * 0.66, 2.4 * scale, 0.75 * glintA);
+      // occasional gold-leaf glint catching the rim light — sparingly, staggered per station so they
+      // don't all shimmer in unison; skipped under reduced motion
+      if (!view.rm) {
+        var glintPh = (t * 0.35 + i * 1.7) % 4;
+        if (glintPh < 0.35) {
+          var glintA = Math.sin((glintPh / 0.35) * Math.PI);
+          sparkle(ctx, cx + discR * 0.62, discCy - discR * 0.66, 2.4 * scale, 0.75 * glintA);
+        }
       }
-    }
 
-    // icon emoji
-    ctx.save();
-    ctx.font = Math.round(19 * scale) + 'px sans-serif';
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#fff';
-    ctx.fillText(st.icon, cx, discCy + 1 * scale);
-    ctx.restore();
-    // (a) per-id landmark glyph, drawn resting against the disc
-    drawStations_glyph(ctx, st.id, cx, discCy, discR, na);
+      // icon emoji
+      ctx.save();
+      ctx.font = Math.round(19 * scale) + 'px sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#fff';
+      ctx.fillText(st.icon, cx, discCy + 1 * scale);
+      ctx.restore();
+      // (a) per-id landmark glyph, drawn resting against the disc
+      drawStations_glyph(ctx, st.id, cx, discCy, discR, na);
+    }
     // (e) pulsing red stalled ring — only when the station has a live problem AND crew
     if (hot) {
       var puls = view.rm ? 0.8 : (0.8 + 0.2 * Math.cos(t * 2 * Math.PI / 1.1));
       ctx.save();
       ctx.beginPath();
-      ctx.arc(cx, discCy, discR + 4 * scale, 0, Math.PI * 2);
+      ctx.arc(cx, discCy, footR + 4 * scale, 0, Math.PI * 2);
       ctx.strokeStyle = rgba(TERR.red.rgb, 0.35 * puls);
       ctx.lineWidth = 3 * scale;
       ctx.stroke();
@@ -1737,7 +1916,7 @@ function drawStations(ctx, sim, t, view) {
     // (d) crew-count badge, top-right corner of the disc — a mini gold bevel (liftRGB gradient +
     // upper-left rim-light arc) instead of the old flat gold fill
     if (crewCount > 0) {
-      var bx = cx + discR * 0.75, by4 = discCy - discR * 0.9, br = 9 * scale;
+      var bx = cx + footR * 0.75, by4 = discCy - footR * 0.9, br = 9 * scale;
       ctx.save();
       var bg = ctx.createLinearGradient(bx, by4 - br, bx, by4 + br);
       bg.addColorStop(0, rgba(liftRGB(PAL.gold, 40), 1));
@@ -1753,13 +1932,14 @@ function drawStations(ctx, sim, t, view) {
       ctx.fillText(String(crewCount), bx, by4 + 1 * scale);
       ctx.restore();
     }
-    // bilingual name — plain gold text (no box), matching .st-nm (style.css:268) so it never occludes pawns
+    // bilingual name — plain gold text (no box), matching .st-nm (style.css:268) so it never occludes pawns.
+    // Hub gets extra clearance so the name sits below its sub-zone row instead of overlapping it.
     ctx.save();
     ctx.font = '600 ' + Math.round(11 * scale) + 'px sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'top';
     ctx.shadowColor = 'rgba(0,0,0,.55)'; ctx.shadowBlur = 3 * scale;
     ctx.fillStyle = rgba(PAL.gold, 1);
-    ctx.fillText(nm(st.name), cx, discCy + discR + 6 * scale);
+    ctx.fillText(nm(st.name), cx, discCy + footR + (isHub ? 34 * scale : 6 * scale));
     ctx.restore();
   }
 }

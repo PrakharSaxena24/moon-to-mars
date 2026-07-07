@@ -808,7 +808,7 @@
   // =========================================================================
   // RUN
   // =========================================================================
-  var ADJ = [['command', 'port'], ['command', 'clinic'], ['command', 'finance'], ['command', 'lodging'], ['port', 'vessel'], ['lodging', 'mess'], ['mess', 'finance'], ['finance', 'clinic']];
+  var ADJ = [['mess', 'port'], ['mess', 'clinic'], ['mess', 'lodging'], ['port', 'vessel']];   // §map v2: Hinata(mess) is the hub; port->iso is the boat route
 
   // ---- ROAD-FOLLOW MOTION (§21.10): figures walk ALONG the dashed ADJ road graph, not beeline ----
   // Pure READ over ADJ / anim state; never writes engine state. BFS gives a station route; each figure
@@ -887,7 +887,7 @@
   // teleporting, and the map breathes with 13 hosted guests + sea life. Nothing here
   // feeds back into the sim — it is pure presentation over deterministic state.
   // Every mover is positioned via transform:translate3d (composited); never left/top.
-  var DOCK = { x: 0.155, y: 0.52 }, SEA = { x: 0.05, y: 0.93 }, BOATC = { x: 0.01, y: 0.66 }; // quadratic arc through the bay
+  var DOCK = { x: 0.52, y: 0.55 }, SEA = { x: 0.80, y: 0.72 }, BOATC = { x: 0.66, y: 0.60 }; // Nobu-san's arc: port shore -> iso rock (must match stage.js)
   var GULLS = 3, FISH = 3, HUSH_R2 = 0.032;                       // hush radius² around a stalled holder
   var STALL_STATES = { confused: 1, meeting: 1, waiting: 1, tired: 1, onFire: 1, waitInfo: 1, rework: 1 };
   var YUKATA = ['#3d5a6c', '#7c4a5a', '#5b6b45', '#a3823c'];      // guest coat palette (washi-friendly)
@@ -958,6 +958,7 @@
   function buildSitemap(keepActors) {
     var box = $('stations'); box.innerHTML = '';
     P.STATIONS.forEach(function (s) {
+      if (s.hidden) return;   // §map v2: hidden stations (command folded into Hinata, finance off) get no hotspot
       var d = document.createElement('div'); d.className = 'station'; d.id = 'st-' + s.id;
       d.setAttribute('data-st', s.id); d.setAttribute('tabindex', '0'); d.setAttribute('role', 'button');
       d.setAttribute('aria-label', nm(s.name));   // §21.4: canvas hides .st-nm, so the hotspot needs its own accessible name (status appended live in renderSim)

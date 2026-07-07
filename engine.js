@@ -58,14 +58,17 @@
   // ---- the site map: zones where characters gather (spec §8 simulation screen) ----
   // Map geography (2026-07-07): LAND on the left (the buildings), OCEAN on the right; Port sits at the shore
   // (land↔water edge), the iso rock island is out in the right-hand ocean. See WORLD.md §4-§5.
+  // Map geography (2026-07-07): LAND left, OCEAN right. HINATA is the big command-centre compound (planning +
+  // kitchen + rod-check/load + discussion); the old separate Command folds into it (hidden). Finance hidden for
+  // now. Port = the shore; the iso rock is out in the ocean. `hub`/`hidden` are render hints (engine ignores them).
   var STATIONS = [
-    { id: 'command', name: L('Command', '司令部'), icon: '🏛️', x: 0.24, y: 0.18 },  // land — HQ, top-left
-    { id: 'port',    name: L('Port', '港'),         icon: '⚓', x: 0.50, y: 0.55 },  // the shore (land↔ocean edge)
+    { id: 'command', name: L('Command', '司令部'), icon: '🏛️', x: 0.33, y: 0.46, hidden: true },  // folded into Hinata (the command centre)
+    { id: 'port',    name: L('Port', '港'),         icon: '⚓', x: 0.52, y: 0.56 },  // the shore (land↔ocean edge)
     { id: 'vessel',  name: L('Iso rock', '磯'),     icon: '🪨', x: 0.82, y: 0.72 },  // OCEAN — the iso fishing rock
-    { id: 'lodging', name: L('Lodging', '宿'),      icon: '🏨', x: 0.13, y: 0.74 },  // land — lodging, bottom-left
-    { id: 'mess',    name: L('Hinata', 'ひなた'),   icon: '🍽️', x: 0.34, y: 0.72 },  // land — kitchen/dining, near lodging
-    { id: 'finance', name: L('Finance', '会計'),    icon: '🧮', x: 0.34, y: 0.36 },  // land — accounts, mid-left
-    { id: 'clinic',  name: L('Clinic', '診療所'),   icon: '⛑️', x: 0.10, y: 0.44 }   // land — clinic, left
+    { id: 'lodging', name: L('Lodging', '宿'),      icon: '🏨', x: 0.12, y: 0.76 },  // land — lodging, bottom-left
+    { id: 'mess',    name: L('Hinata', 'ひなた'),   icon: '🍽️', x: 0.33, y: 0.46, hub: true },     // land — the big Hinata command-centre compound
+    { id: 'finance', name: L('Finance', '会計'),    icon: '🧮', x: 0.33, y: 0.46, hidden: true },   // hidden for now (folded near the hub)
+    { id: 'clinic',  name: L('Clinic', '診療所'),   icon: '⛑️', x: 0.12, y: 0.22 }   // land — clinic, top-left
   ];
   function station(id) { for (var i = 0; i < STATIONS.length; i++) if (STATIONS[i].id === id) return STATIONS[i]; return STATIONS[0]; }
 
