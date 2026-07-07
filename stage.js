@@ -41,8 +41,9 @@
   var ADJ = [['command', 'port'], ['command', 'clinic'], ['command', 'finance'], ['command', 'lodging'],
              ['port', 'vessel'], ['lodging', 'mess'], ['mess', 'finance'], ['finance', 'clinic']];
 
-  // boat quadratic bay-arc anchors, normalized (app.js:799): pos = qbez(DOCK, BOATC, SEA, param)
-  var DOCK = { x: 0.155, y: 0.52 }, SEA = { x: 0.05, y: 0.93 }, BOATC = { x: 0.01, y: 0.66 };
+  // boat quadratic arc anchors, normalized: pos = qbez(DOCK, BOATC, SEA, param).
+  // NEW GEOGRAPHY: Nobu-san sails from the PORT shore (0.52,0.55) out to the iso rock (0.82,0.72).
+  var DOCK = { x: 0.52, y: 0.55 }, SEA = { x: 0.80, y: 0.72 }, BOATC = { x: 0.66, y: 0.60 };
 
   // ambient life counts + hush radius² in normalized coords (app.js:800)
   var GULLS = 3, FISH = 3, HUSH_R2 = 0.032;
@@ -619,8 +620,20 @@ function drawGround(ctx, sim, t, view) {
   drawGround_contours(ctx, w, h);
 
   // 3. stipple / dot-noise texture, two overlapping ring fields (style.css .sitemap::before)
+  // NEW GEOGRAPHY: both fields biased onto the LEFT land half (the right side is ocean now)
   drawGround_ringField(ctx, w, h, 0.22, 0.30, 90, 0.05 * 0.55);
-  drawGround_ringField(ctx, w, h, 0.74, 0.72, 110, 0.04 * 0.55);
+  drawGround_ringField(ctx, w, h, 0.28, 0.68, 110, 0.04 * 0.55);
+
+  // 3b. NEW GEOGRAPHY: soft beach/shore band along x≈0.52..0.58 — warm sand where the land meets
+  // the ocean; the sea's shallow edge fades to transparent over it so it reads as a lit strand
+  var sandX0 = w * 0.50, sandW = w * 0.10;
+  var sand = ctx.createLinearGradient(sandX0, 0, sandX0 + sandW, 0);
+  sand.addColorStop(0, rgba(PAL.washiWarm, 0));
+  sand.addColorStop(0.45, rgba(PAL.washiWarm, 0.14));
+  sand.addColorStop(0.75, rgba(liftRGB(PAL.gold, 10), 0.1));
+  sand.addColorStop(1, rgba(PAL.washiWarm, 0));
+  ctx.fillStyle = sand;
+  ctx.fillRect(sandX0, 0, sandW, h);
 
   // 4. subtle warm horizon glow, low on the map — an ambient light suggestion (not a lantern), centred
   // just below the visible frame so only its upper arc grazes the shoreline. Graded by nightAmount(): a
@@ -648,17 +661,23 @@ function drawGround(ctx, sim, t, view) {
 
 
   // ---- drawSea ----
-function drawSea_bayPath(ctx, x0, y0, w, h) {
-  // CSS border-radius: 0 52% 34% 0 / 0 46% 30% 0 (h-radii / v-radii, TL TR BR BL)
-  // left corners stay square (off-canvas anyway); right corners bulge into the bay silhouette.
-  var rtx = w * 0.52, rty = h * 0.46, rbx = w * 0.34, rby = h * 0.30;
+// NEW GEOGRAPHY (map redesign, first draft): LAND on the LEFT, OCEAN on the RIGHT. The
+// shoreline is a gently curved edge near x=0.55, passing just seaward of the port station
+// (0.50,0.55) so the port reads as the water's edge.
+function drawSea_traceShore(ctx, w, h) {
+  // trace the shoreline top->bottom into the CURRENT path (no beginPath here) so the ocean
+  // fill, the ink wet-line, the foam glow and the dashed foam all share one curve.
+  ctx.moveTo(w * 0.57, -0.02 * h);
+  ctx.quadraticCurveTo(w * 0.555, 0.25 * h, w * 0.53, 0.52 * h);
+  ctx.quadraticCurveTo(w * 0.512, 0.78 * h, w * 0.575, 1.02 * h);
+}
+
+function drawSea_oceanPath(ctx, w, h) {
+  // closed ocean silhouette: down the shoreline, out past the right edge and back
   ctx.beginPath();
-  ctx.moveTo(x0, y0);
-  ctx.lineTo(x0 + w - rtx, y0);
-  ctx.quadraticCurveTo(x0 + w, y0, x0 + w, y0 + rty);
-  ctx.lineTo(x0 + w, y0 + h - rby);
-  ctx.quadraticCurveTo(x0 + w, y0 + h, x0 + w - rbx, y0 + h);
-  ctx.lineTo(x0, y0 + h);
+  drawSea_traceShore(ctx, w, h);
+  ctx.lineTo(w * 1.05, 1.02 * h);
+  ctx.lineTo(w * 1.05, -0.02 * h);
   ctx.closePath();
 }
 
@@ -690,8 +709,9 @@ function drawSea_waveLine(ctx, x0, bw, baseY, amp, speed, phase, t, rgb, alpha, 
 function drawSea(ctx, sim, t, view) {
   if (!view || !view.w || !view.h) return;
   var w = view.w, h = view.h;
-  // .water: left:-5% top:17% width:33% height:96% of #sitemap (style.css:333) — layout box, NOT scaled
-  var x0 = -0.05 * w, y0 = 0.17 * h, bw = 0.33 * w, bh = 0.96 * h;
+  // NEW GEOGRAPHY ocean layout box: from just left of the shoreline (x=0.50) out past the
+  // right edge, full height — layout box, NOT scaled
+  var x0 = 0.50 * w, y0 = -0.02 * h, bw = 0.57 * w, bh = 1.04 * h;
 
   // graded night factor (dawn/dusk fade instead of a hard isNight() pop); falls back to the binary
   // view.night flag outside minute mode, per the nightAmount() contract.
@@ -700,11 +720,12 @@ function drawSea(ctx, sim, t, view) {
     : (view.night ? 1 : 0);
 
   ctx.save();
-  drawSea_bayPath(ctx, x0, y0, bw, bh);
+  drawSea_oceanPath(ctx, w, h);
   ctx.clip();
 
-  // ---- base angled deep-to-transparent fill (byte-faithful to the shipped bay water) ----
-  var gp = drawSea_gradLine(x0, y0, bw, bh, 100);
+  // ---- base deep-to-shallow fill: deep open ocean at the RIGHT, fading out over the beach
+  // band at the shore (the trench/shelf passes below reuse the same flipped axis) ----
+  var gp = drawSea_gradLine(x0, y0, bw, bh, 260);
   var grad = ctx.createLinearGradient(gp.x1, gp.y1, gp.x2, gp.y2);
   grad.addColorStop(0, rgba(PAL.seaDeep, 1));
   grad.addColorStop(0.46, rgba(PAL.seaMid, 0.85));
@@ -731,16 +752,11 @@ function drawSea(ctx, sim, t, view) {
   ctx.fillStyle = shelf;
   ctx.fillRect(x0, y0, bw, bh);
 
-  // ---- inner shadow along the shore edge + the deep-water edge (byte-faithful; falloff sizes scaled) ----
-  var shoreShadow = ctx.createLinearGradient(x0 + bw - 20 * scale, 0, x0 + bw, 0);
-  shoreShadow.addColorStop(0, rgba(PAL.indigoDeep, 0));
-  shoreShadow.addColorStop(1, rgba(PAL.indigoDeep, 0.5));
-  ctx.fillStyle = shoreShadow;
-  ctx.fillRect(x0, y0, bw, bh);
-
-  var deepShadow = ctx.createLinearGradient(x0, 0, x0 + 32 * scale, 0);
-  deepShadow.addColorStop(0, rgba(PAL.indigoDeep, 0.55));
-  deepShadow.addColorStop(1, rgba(PAL.indigoDeep, 0));
+  // ---- inner shadow along the open-ocean (right) edge; the curved shore side instead gets
+  // an ink wet-line stroked on the shoreline further below ----
+  var deepShadow = ctx.createLinearGradient(x0 + bw - 32 * scale, 0, x0 + bw, 0);
+  deepShadow.addColorStop(0, rgba(PAL.indigoDeep, 0));
+  deepShadow.addColorStop(1, rgba(PAL.indigoDeep, 0.55));
   ctx.fillStyle = deepShadow;
   ctx.fillRect(x0, y0, bw, bh);
 
@@ -752,7 +768,7 @@ function drawSea(ctx, sim, t, view) {
 
   // ---- NEW: moonlit seaGlint accents + a warm dockside lantern reflection (night only) ----
   if (nightK > 0.02) {
-    var mgPos = [[0.16, 0.30], [0.09, 0.55], [0.20, 0.76]];
+    var mgPos = [[0.35, 0.30], [0.58, 0.55], [0.45, 0.78]];   // fractions of the ocean box — open water, clear of the shore
     for (var mi = 0; mi < mgPos.length; mi++) {
       var mgx = x0 + bw * mgPos[mi][0], mgy = y0 + bh * mgPos[mi][1];
       var twinkle = view.rm ? 0.75 : (0.5 + 0.5 * Math.sin(t * 1.3 + mi * 2.1));
@@ -806,29 +822,146 @@ function drawSea(ctx, sim, t, view) {
   }
   ctx.restore();
 
-  ctx.restore(); // drop the bay-shape clip
-
-  // ---- NEW: brighter gold foam glow behind the crisp dashed line, falling off toward open sea ----
-  var foamGlowW = 12 * scale;
-  var foamGlow = ctx.createLinearGradient(x0 + bw - foamGlowW, 0, x0 + bw, 0);
-  foamGlow.addColorStop(0, rgba(PAL.gold, 0));
-  foamGlow.addColorStop(1, rgba(PAL.gold, 0.22));
+  // ---- soft ink wet-line where the water meets the sand (stroked on the shore curve while
+  // the clip still holds, so only the waterside half of the stroke survives) ----
   ctx.save();
-  ctx.fillStyle = foamGlow;
-  ctx.fillRect(x0, y0 + bh * 0.03, bw, bh * 0.93);
+  ctx.beginPath();
+  drawSea_traceShore(ctx, w, h);
+  ctx.strokeStyle = rgba(PAL.indigoDeep, 0.35);
+  ctx.lineWidth = 5 * scale;
+  ctx.stroke();
   ctx.restore();
 
-  // vertical dashed gold foam line at the shore edge (byte-faithful; not clipped to the bay curve, per CSS;
-  // width/dash/edge-offset scaled)
+  ctx.restore(); // drop the ocean-shape clip
+
+  // ---- gold foam hugging the curved shoreline: a soft glow band + the crisp dashed line on
+  // top (the shore/foam is now the LEFT edge of the water, near x=0.55) ----
   ctx.save();
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  drawSea_traceShore(ctx, w, h);
+  ctx.strokeStyle = rgba(PAL.gold, 0.1);
+  ctx.lineWidth = 14 * scale;
+  ctx.stroke();
+  ctx.beginPath();
+  drawSea_traceShore(ctx, w, h);
   ctx.strokeStyle = rgba(PAL.gold, 0.4);
   ctx.lineWidth = 2.5 * scale;
   ctx.setLineDash([9 * scale, 10 * scale]);
-  ctx.beginPath();
-  ctx.moveTo(x0 + bw - 2.25 * scale, y0 + bh * 0.03);
-  ctx.lineTo(x0 + bw - 2.25 * scale, y0 + bh * 0.96);
   ctx.stroke();
   ctx.restore();
+
+  // ---- NEW GEOGRAPHY ocean scenery: the iso rock islet + Kimura-san's jigging boat ----
+  drawSea_isoRock(ctx, t, view, nightK);
+  drawSea_kimura(ctx, t, view, nightK);
+}
+
+// NEW GEOGRAPHY: small rocky islet under the iso/vessel station (0.82,0.72) — a dark lacquer
+// rock silhouette with a gold foam ring lapping it. Pure ocean scenery: drawStations draws the
+// station disc/label on top of it later in the frame.
+function drawSea_isoRock(ctx, t, view, nightK) {
+  var cx = px(0.82, view), cy = py(0.72, view);
+  var rx = 34 * scale, ry = 13 * scale, steps = 18, i, a, wob, qx, qy;
+  ctx.save();
+  // foam ring lapping the rock (dashed, matching the shoreline foam)
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + 2 * scale, rx * 1.25, ry * 1.45, 0, 0, 6.2832);
+  ctx.strokeStyle = rgba(PAL.gold, 0.3);
+  ctx.lineWidth = 2 * scale;
+  ctx.setLineDash([7 * scale, 8 * scale]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  // rock silhouette — irregular ellipse from sin/cos harmonics (deterministic, no RNG)
+  ctx.beginPath();
+  for (i = 0; i <= steps; i++) {
+    a = (i / steps) * 6.2832;
+    wob = 1 + 0.16 * Math.sin(a * 3 + 0.7) + 0.09 * Math.cos(a * 5);
+    qx = cx + Math.cos(a) * rx * wob;
+    qy = cy + Math.sin(a) * ry * wob - (Math.sin(a) < 0 ? 4 * scale : 0); // lift the crown a touch
+    if (i === 0) ctx.moveTo(qx, qy); else ctx.lineTo(qx, qy);
+  }
+  ctx.closePath();
+  var rg = ctx.createLinearGradient(0, cy - ry - 6 * scale, 0, cy + ry);
+  rg.addColorStop(0, '#3a4450');
+  rg.addColorStop(0.55, '#242c35');
+  rg.addColorStop(1, '#12171d');
+  ctx.fillStyle = rg;
+  ctx.fill();
+  ctx.lineWidth = 1 * scale;
+  ctx.strokeStyle = rgba(PAL.ink, 0.4);
+  ctx.stroke();
+  // upper-left key-light lick on the crown; a touch cooler/brighter under moonlight
+  ctx.beginPath();
+  ctx.moveTo(cx - rx * 0.55, cy - ry * 0.5);
+  ctx.quadraticCurveTo(cx - rx * 0.15, cy - ry * 1.35, cx + rx * 0.2, cy - ry * 0.85);
+  ctx.strokeStyle = rgba(PAL.rimWhite, 0.22 + 0.1 * nightK);
+  ctx.lineWidth = 1.3 * scale;
+  ctx.lineCap = 'round';
+  ctx.stroke();
+  ctx.restore();
+}
+
+// NEW GEOGRAPHY: Kimura-san's jigging boat — purely decorative scenery far out in the open
+// ocean at (0.92,0.90). Jigging = mostly stationary: it bobs/rocks in place (sin of t), works
+// a tiny nodding jig rod, and carries a draft label. Not engine-driven; stilled under view.rm.
+function drawSea_kimura(ctx, t, view, nightK) {
+  var cx = px(0.92, view), cy = py(0.90, view);
+  var bobY = view.rm ? 0 : Math.sin(t * 2 * Math.PI / 3.8) * 1.2 * scale;
+  var rot = view.rm ? 0 : Math.sin(t * 2 * Math.PI / 5.1) * (2.5 * Math.PI / 180);
+  contactShadow(ctx, cx, cy + 3 * scale, 22 * scale, 6 * scale, 0.28);
+  ctx.save();
+  ctx.translate(cx, cy + bobY);
+  ctx.rotate(rot);
+  // warm stern lantern at night
+  if (nightK > 0.02) lightPool(ctx, 0, -2 * scale, 8 * scale, PAL.lantern, 0.25 * nightK);
+  // little hull — reuses the skiff hull path at ~70% of Nobu-san's dims
+  drawBoat_hullPath(ctx, -9 * scale, -1.5 * scale, 18 * scale, 5 * scale,
+    1 * scale, 3.5 * scale, 1.5 * scale, 1 * scale);
+  var hg = ctx.createLinearGradient(0, -1.5 * scale, 0, 3.5 * scale);
+  hg.addColorStop(0, '#3d4854');
+  hg.addColorStop(1, '#12171d');
+  ctx.fillStyle = hg;
+  ctx.fill();
+  ctx.strokeStyle = rgba(PAL.goldLeaf, 0.5);
+  ctx.lineWidth = 0.8 * scale;
+  ctx.beginPath();
+  ctx.moveTo(-7.5 * scale, -0.4 * scale);
+  ctx.lineTo(7.5 * scale, -0.4 * scale);
+  ctx.stroke();
+  // Kimura: tiny seated pawn amidships (sea-ink coat, skin head)
+  ctx.fillStyle = 'rgb(' + PAL.seaInk + ')';
+  roundRect(ctx, -2.5 * scale, -8 * scale, 5 * scale, 6.5 * scale, 2 * scale);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(0, -9.5 * scale, 2 * scale, 0, 6.2832);
+  ctx.fillStyle = rgba(PAL.skin, 1);
+  ctx.fill();
+  // jig rod off the bow, nodding on a slow jigging rhythm; line droops to a lure glint
+  var nod = view.rm ? 0 : Math.sin(t * 2 * Math.PI / 1.9) * 0.06;
+  var ang = -0.62 + nod;
+  var rodLen = 11 * scale;
+  var tipX = 2.5 * scale + rodLen * Math.cos(ang);
+  var tipY = -6 * scale + rodLen * Math.sin(ang);
+  ctx.beginPath();
+  ctx.moveTo(2.5 * scale, -6 * scale);
+  ctx.lineTo(tipX, tipY);
+  ctx.strokeStyle = rgba(PAL.goldDeep, 0.85);
+  ctx.lineWidth = 1 * scale;
+  ctx.lineCap = 'round';
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(tipX, tipY);
+  ctx.quadraticCurveTo(tipX + 1.5 * scale, tipY * 0.4, tipX + 0.8 * scale, 1 * scale);
+  ctx.strokeStyle = rgba(PAL.gold, 0.35);
+  ctx.lineWidth = 0.6 * scale;
+  ctx.stroke();
+  if (!view.rm) sparkle(ctx, tipX + 0.8 * scale, 1 * scale, 2 * scale, 0.4 + 0.3 * Math.sin(t * 3.1));
+  ctx.restore();
+  // draft label (scaled chip, world space)
+  chip(ctx, cx, cy + 8 * scale, 'Kimura-san 🎣', {
+    font: '600 ' + Math.round(9 * scale) + 'px system-ui,sans-serif',
+    pad: 3 * scale, h: 12 * scale, r: 2 * scale, alpha: 0.85
+  });
 }
 
 
@@ -890,7 +1023,7 @@ function drawSeaLife(ctx, sim, t, view) {
     delay = gi * 5.5;
     local = t + delay;
     k = local % period; if (k < 0) k += period; k = k / period;
-    xPct = lerp(-8, 108, k);
+    xPct = lerp(50, 112, k);   // NEW GEOGRAPHY: sweep across the right-side ocean, not the land
     gx = w * xPct / 100;
     topPct = 8 + gi * 9;
     yOff = -11 * scale * Math.sin(k * Math.PI);
@@ -919,8 +1052,8 @@ function drawSeaLife(ctx, sim, t, view) {
       segT = (segK - 0.7143) / 0.2857;
       op = lerp(0.6, 0, segT); dy = lerp(-3 * scale, 2 * scale, segT); sc = lerp(0.85, 0.5, segT);
     }
-    fxPct = 3 + fi * 5;
-    fyPct = 55 + fi * 13;
+    fxPct = 62 + fi * 10;   // NEW GEOGRAPHY: splash in the open ocean, right of the shoreline
+    fyPct = 26 + fi * 14;
     fx = w * fxPct / 100;
     fyBase = h * fyPct / 100;
     fy = fyBase + dy;
@@ -1414,6 +1547,12 @@ function drawBoat(ctx, sim, t, view) {
   rimLightArc(ctx, -15 * scale, 1 * scale, 2 * scale, 0.35);
 
   ctx.restore();
+
+  // NEW GEOGRAPHY draft label under Nobu-san's skiff (world space — after the flip/bob restore)
+  chip(ctx, cx, cy + 10 * scale, 'Nobu-san 🛥', {
+    font: '600 ' + Math.round(9 * scale) + 'px system-ui,sans-serif',
+    pad: 3 * scale, h: 12 * scale, r: 2 * scale, alpha: 0.85
+  });
 }
 
 

@@ -56,14 +56,16 @@
   function L(en, jp) { return { en: en, jp: jp }; }
 
   // ---- the site map: zones where characters gather (spec §8 simulation screen) ----
+  // Map geography (2026-07-07): LAND on the left (the buildings), OCEAN on the right; Port sits at the shore
+  // (land↔water edge), the iso rock island is out in the right-hand ocean. See WORLD.md §4-§5.
   var STATIONS = [
-    { id: 'command', name: L('Command', '司令部'), icon: '🏛️', x: 0.50, y: 0.20 },
-    { id: 'port',    name: L('Port', '港'),         icon: '⚓', x: 0.16, y: 0.40 },
-    { id: 'vessel',  name: L('Vessel', '船'),       icon: '🚢', x: 0.16, y: 0.78 },
-    { id: 'lodging', name: L('Lodging', '宿'),      icon: '🏨', x: 0.45, y: 0.78 },
-    { id: 'mess',    name: L('Hinata', 'ひなた'),   icon: '🍽️', x: 0.74, y: 0.78 },
-    { id: 'finance', name: L('Finance', '会計'),    icon: '🧮', x: 0.84, y: 0.40 },
-    { id: 'clinic',  name: L('Clinic', '診療所'),   icon: '⛑️', x: 0.84, y: 0.20 }
+    { id: 'command', name: L('Command', '司令部'), icon: '🏛️', x: 0.24, y: 0.18 },  // land — HQ, top-left
+    { id: 'port',    name: L('Port', '港'),         icon: '⚓', x: 0.50, y: 0.55 },  // the shore (land↔ocean edge)
+    { id: 'vessel',  name: L('Iso rock', '磯'),     icon: '🪨', x: 0.82, y: 0.72 },  // OCEAN — the iso fishing rock
+    { id: 'lodging', name: L('Lodging', '宿'),      icon: '🏨', x: 0.13, y: 0.74 },  // land — lodging, bottom-left
+    { id: 'mess',    name: L('Hinata', 'ひなた'),   icon: '🍽️', x: 0.34, y: 0.72 },  // land — kitchen/dining, near lodging
+    { id: 'finance', name: L('Finance', '会計'),    icon: '🧮', x: 0.34, y: 0.36 },  // land — accounts, mid-left
+    { id: 'clinic',  name: L('Clinic', '診療所'),   icon: '⛑️', x: 0.10, y: 0.44 }   // land — clinic, left
   ];
   function station(id) { for (var i = 0; i < STATIONS.length; i++) if (STATIONS[i].id === id) return STATIONS[i]; return STATIONS[0]; }
 
