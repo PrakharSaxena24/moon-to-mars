@@ -419,5 +419,51 @@ console.log('\n=== §20 REVIEW FIXES — fishday stays timing+arrows-only; coars
   ok(sdAtm.clean === false && sdAtm.score <= 89, 'ops: the re-clamped late handoff breaks clean, capping score <= 89 (' + sdAtm.score + ')');
 })();
 
+console.log('\n=== SEAT ASSIGNMENT — overrides.seats bijection (default = no-op; reassignment is person-agnostic) ===');
+(function () {
+  var ID = { owner: 'p01', pm: 'p02', siteLead: 'p03', budgetLead: 'p04', safetyLead: 'p05', logi: 'p06', comms: 'p07', specialist: 'p08' };
+  var order = ['owner', 'pm', 'siteLead', 'budgetLead', 'safetyLead', 'logi', 'comms', 'specialist'];
+  function part(pl, id) { return pl.participants.filter(function (p) { return p.id === id; })[0]; }
+  // (a) identity seats == no overrides, byte-for-byte (the CRITICAL default-reproduces-today invariant)
+  ok(JSON.stringify(P.mergePlan({ seed: 1, overrides: {} })) === JSON.stringify(P.mergePlan({ seed: 1, overrides: { seats: ID } })),
+    'identity overrides.seats deep-equals the default merged plan (byte-identical)');
+  // a malformed (non-bijection) overrides.seats is ignored -> the default seating stands
+  ok(JSON.stringify(P.mergePlan({ seed: 1, overrides: { seats: { owner: 'p01', pm: 'p01', siteLead: 'p03', budgetLead: 'p04', safetyLead: 'p05', logi: 'p06', comms: 'p07', specialist: 'p08' } } })) === JSON.stringify(P.mergePlan({ seed: 1, overrides: {} })),
+    'malformed (double-booked) overrides.seats is ignored -> default merged plan');
+  // (b) swap logi <-> specialist propagates holder + roleId + assignedIds together
+  var swap = {}; order.forEach(function (r) { swap[r] = ID[r]; }); swap.logi = 'p08'; swap.specialist = 'p06';
+  var pls = P.mergePlan({ seed: 1, overrides: { seats: swap } });
+  ok(pls.roles.logi.holder === 'p08' && pls.roles.specialist.holder === 'p06', 'swap: role holders move (logi=p08, specialist=p06)');
+  ok(part(pls, 'p08').roleId === 'logi' && part(pls, 'p06').roleId === 'specialist', 'swap: participant.roleId follows the seat');
+  var st = pls.tasks.filter(function (t) { return t.day === 'fishday' && t.ownerRoleId === 'specialist' && t.assignedIds.length; })[0];
+  ok(st && st.assignedIds.indexOf('p06') >= 0 && st.assignedIds.indexOf('p08') < 0, 'swap: specialist fishday task assignedIds -> p06 (not p08)');
+  ok(pls.roles.logi.deputyId === 'p06', 'swap: logi deputyId (default p08) follows the seat -> p06');
+  ok(pls.roles.chef.deputyId === 'p10', 'swap: chef deputyId (p10) untouched — outside the 8-seat domain');
+  // (c) a full cyclic derangement keeps the coarse-day misassigned check empty (the likeliest silent regression)
+  var pids = order.map(function (r) { return ID[r]; }), der = {};
+  order.forEach(function (r, i) { der[r] = pids[(i + 1) % 8]; });
+  ['arrival', 'ops', 'return'].forEach(function (seg) {
+    var ds = P.daySchedule(P.mergePlan({ seed: 1, overrides: { seats: der } }), seg);
+    ok(ds.misassigned.length === 0, 'derangement: daySchedule(' + seg + ').misassigned is empty (' + ds.misassigned.length + ')');
+  });
+  // (d) the win is person-agnostic: all-fixes fishday + full classic run score identically under a derangement
+  var fdDef = P.fishdaySchedule(P.mergePlan(P.applyAllFixes(base)));
+  var derCfg = P.applyAllFixes(base); derCfg.overrides.seats = der;
+  var fdDer = P.fishdaySchedule(P.mergePlan(derCfg));
+  ok(fdDef.idleTotal === 0 && fdDef.efficiency === 100, 'all-fixes fishday is a clean win by default (idle 0, eff 100)');
+  ok(fdDer.idleTotal === fdDef.idleTotal && fdDer.efficiency === fdDef.efficiency && fdDer.dinnerMin === fdDef.dinnerMin,
+    'derangement: fishday idle/eff/dinner identical to default (person-agnostic)');
+  var dS = scoreOf(derCfg), aS = scoreOf(P.applyAllFixes(base));
+  ok(dS.grade === aS.grade && dS.score === aS.score && JSON.stringify(dS.categories) === JSON.stringify(aS.categories),
+    'derangement: classic-run grade/score/categories identical to all-fixes default (aggregate person-agnostic; per-person individuals[] legitimately differ)');
+  // (e) a player's explicit coarse-day deck placement (authored in current-holder pids) is EXEMPT from the seat
+  // remap — no double-shift, no phantom MISASSIGNED (the reseat + Task-Deck interaction bug the review caught)
+  var sw2 = {}; order.forEach(function (r) { sw2[r] = ID[r]; }); sw2.owner = 'p02'; sw2.pm = 'p01';
+  var plP = P.mergePlan({ seed: 1, overrides: { seats: sw2, days: { arrival: { placement: { hd_a_ferrycheck: { assignedIds: ['p01'] } } } } } });
+  var ftk = plP.days.arrival.tasks.filter(function (t) { return t.id === 'hd_a_ferrycheck'; })[0];
+  ok(ftk && ftk.assignedIds.length === 1 && ftk.assignedIds[0] === 'p01', 'reseat + placement: player-placed coarse task keeps its current-holder pid (no double-remap)');
+  ok(P.daySchedule(plP, 'arrival').misassigned.length === 0, 'reseat + placement: no phantom MISASSIGNED');
+})();
+
 console.log('\n' + (fail === 0 ? 'ALL ' + pass + ' CHECKS PASSED ✓' : pass + ' passed, ' + fail + ' FAILED ✗'));
 process.exit(fail === 0 ? 0 : 1);

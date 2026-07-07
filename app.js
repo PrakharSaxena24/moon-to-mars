@@ -34,6 +34,16 @@
     if (fixId === 'grantAuth') delete mcOv.lines.bl_meals;
     if (fixId === 'fixReserve') { mcOv.reserve = null; if (mcOv.resources.res_cash) delete mcOv.resources.res_cash; }
   }
+  // Org chart seat assignment: overrides.seats = {roleId: pid}, a bijection over the 8 co_aibos
+  // organizer seats (p01-p08). Identity = the template's default holders, so an untouched org
+  // chart adds NOTHING to cfg.overrides (byte-identical-default invariant, mirrors mcOv/dayOv).
+  var orgOv = { owner: 'p01', pm: 'p02', siteLead: 'p03', budgetLead: 'p04', safetyLead: 'p05', logi: 'p06', comms: 'p07', specialist: 'p08' };
+  function isDefaultSeats() {
+    var def = { owner: 'p01', pm: 'p02', siteLead: 'p03', budgetLead: 'p04', safetyLead: 'p05', logi: 'p06', comms: 'p07', specialist: 'p08' };
+    for (var r in def) if (orgOv[r] !== def[r]) return false;
+    return true;
+  }
+  function orgSeatReset() { orgOv = { owner: 'p01', pm: 'p02', siteLead: 'p03', budgetLead: 'p04', safetyLead: 'p05', logi: 'p06', comms: 'p07', specialist: 'p08' }; }
   // §20 authorable-days editor state — ONE deck→arrange→connect override store for all four
   // day tabs. Fishday's sub-object keeps the LEGACY timing/staffing/handoffs channels (so its
   // verify/E2E anchors stay byte-identical); arrival/ops/return use the unified placement/handoffs
@@ -75,6 +85,7 @@
       if (hasP) { od.placement = od.placement || {}; for (k in ov.placement) od.placement[k] = ov.placement[k]; }
       if (hasH) { od.handoffs = od.handoffs || {}; for (k in ov.handoffs) od.handoffs[k] = ov.handoffs[k]; }
     });
+    if (!isDefaultSeats()) { o.seats = {}; for (k in orgOv) o.seats[k] = orgOv[k]; }
     return cfg;
   }
   function currentPlan() { return P.mergePlan(buildCfg()); }
@@ -147,6 +158,11 @@
     function cell(ic, lbl, val, wide) { return '<div class="cv-cell' + (wide ? ' wide' : '') + '"><span class="cv-ic">' + ic + '</span><span class="cv-lbl">' + lbl + '</span><span class="cv-val">' + val + '</span></div>'; }
   }
 
+  // options for the org-chart seat <select>s: the 8 co_aibos organizers only (chefs/guests excluded)
+  function personOpts(selPid) {
+    var people = currentPlan().participants.filter(function (p) { return p.company === 'co_aibos'; });
+    return people.map(function (p) { return '<option value="' + p.id + '"' + (p.id === selPid ? ' selected' : '') + '>' + nm(p.name) + '</option>'; }).join('');
+  }
   function buildOrg() {
     var plan = currentPlan(), box = $('org'); box.innerHTML = '';
     var order = ['owner', 'pm', 'siteLead', 'budgetLead', 'safetyLead', 'logi', 'comms', 'specialist', 'chef'];
@@ -157,8 +173,11 @@
       var dep = r && r.deputyId ? byId(plan.participants, r.deputyId) : null;
       var chip = document.createElement('div'); chip.className = 'role-chip' + (unset ? ' unset' : '');
       chip.style.borderColor = unset ? 'var(--wait)' : 'transparent';
-      chip.innerHTML = '<span class="rc-ic" style="background:' + rr.color + '">' + rr.icon + '</span>' +
-        '<span class="rc-body"><b>' + nm(rr.name) + '</b><small>' + (holder ? nm(holder.name) : '—') + (dep ? ' · ⇄ ' + nm(dep.name) : '') + '</small></span>';
+      var isSeat = orgOv.hasOwnProperty(rid);
+      var body = isSeat
+        ? ('<b>' + nm(rr.name) + '</b><select class="org-sel mc-sel" data-role="' + rid + '" aria-label="' + nm(rr.name) + '">' + personOpts(orgOv[rid]) + '</select>' + (dep ? '<small>⇄ ' + nm(dep.name) + '</small>' : ''))
+        : ('<b>' + nm(rr.name) + '</b><small>' + (holder ? nm(holder.name) : '—') + (dep ? ' · ⇄ ' + nm(dep.name) : '') + '</small>');
+      chip.innerHTML = '<span class="rc-ic" style="background:' + rr.color + '">' + rr.icon + '</span><span class="rc-body">' + body + '</span>';
       box.appendChild(chip);
     });
   }
@@ -1784,8 +1803,18 @@
         updatePlanUI();
       }
     });
+    $('org').addEventListener('change', function (e) {
+      var s = e.target.closest('.org-sel'); if (!s) return;
+      var rid = s.dataset.role, newPid = s.value, oldPid = orgOv[rid];
+      if (newPid === oldPid) return;
+      var r2 = null;
+      for (var rk in orgOv) { if (orgOv[rk] === newPid) { r2 = rk; break; } }
+      if (r2) orgOv[r2] = oldPid;   // swap: the seat that used to hold newPid now gets rid's old holder
+      orgOv[rid] = newPid;
+      updatePlanUI();
+    });
     $('btn-auto').addEventListener('click', function () { for (var k in fixed) fixed[k] = true; fdReset(); mcReset(); paintSetup(); });
-    $('btn-clear').addEventListener('click', function () { for (var k in fixed) fixed[k] = false; fdReset(); mcReset(); paintSetup(); });
+    $('btn-clear').addEventListener('click', function () { for (var k in fixed) fixed[k] = false; fdReset(); mcReset(); orgSeatReset(); paintSetup(); });
     $('launch').addEventListener('click', launch);
 
     // day editor: deck chips + drag blocks / draw & edit arrows, on every day tab (§20)
@@ -1929,7 +1958,7 @@
 
   // the Morning-authored plan survives a Live detour: snapshot on the way in, restore on the way back
   function snapshotMorning() {
-    morningSnap = JSON.parse(JSON.stringify({ fixed: fixed, mcOv: mcOv, dayOv: dayOv, daySel: daySel }));
+    morningSnap = JSON.parse(JSON.stringify({ fixed: fixed, mcOv: mcOv, dayOv: dayOv, daySel: daySel, orgOv: orgOv }));
   }
   function restoreMorning() {
     if (!morningSnap) return;
@@ -1937,6 +1966,7 @@
     mcOv = JSON.parse(JSON.stringify(morningSnap.mcOv));
     dayOv = JSON.parse(JSON.stringify(morningSnap.dayOv));
     daySel = morningSnap.daySel;
+    orgOv = JSON.parse(JSON.stringify(morningSnap.orgOv));
     placingChip = null;
   }
   function enterMode(m) {

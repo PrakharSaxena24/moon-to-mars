@@ -116,9 +116,11 @@ these 8 seats; the 3 chefs fill the 3 cook seats. (`teamLead` is retired; angler
 > **Design intent (2026-07-07): the PLAYER assigns the seats/duties — who does what is a gameplay choice, not
 > fixed.** So this person→seat table is only the **default starting roster** shipped in the engine; the 8 AIBOS
 > members (incl. the angler / boat / owner seats) are a **pool the player re-assigns during planning**.
-> *Not yet built as a role-reassignment mechanic — the engine still bakes a fixed `roleId` per person; the
-> per-day Task Deck already assigns tasks to people. See §8.* Japanese labels: kanji for JP surnames + katakana
-> for Western names (秋山 confident; ナオ/カイト are placeholders — give kanji if wanted).
+> **BUILT 2026-07-07** — the Setup "Org & roles" panel now has a per-seat dropdown ("pick who sits in each
+> seat"; swap-on-pick keeps it a bijection). It writes `overrides.seats`; `mergePlan` remaps holders +
+> `participant.roleId` + every task's `assignedIds` + deputies to the chosen people (identity = no-op; verified
+> person-agnostic — 15 anchors in `verify.js`, 170/170). Chefs are out of scope. Japanese labels: kanji for JP
+> surnames + katakana for Western names (秋山 confident; ナオ/カイト are placeholders — give kanji if wanted).
 
 The **13 guests** are anonymous ambient figures in the engine (`GUESTS = 13`, no individual names), so they
 aren't renamed — the named guests/members in §3 are world reference for a later build pass.
@@ -126,10 +128,10 @@ aren't renamed — the named guests/members in §3 are world reference for a lat
 ---
 
 ## 8. Backlog / open questions
-1. **Player-assigned seats (design intent, §7):** the player assigns which AIBOS member fills each seat/duty
-   (angler, boat, owner, …). The per-day **Task Deck already assigns tasks** to people; making the base **role
-   types** player-swappable (so e.g. the player picks the angler + who gets the shellfish allergy) is a build
-   item for the rework pass. *Build now, or keep as intent?* The §7 binding is just the default starting roster.
+1. ✅ **Player-assigned seats — DONE (built 2026-07-07, §7).** The Setup Org panel lets the player pick who
+   holds each of the 8 seats; the engine remaps duties/tasks/holders/deputies + `participant.roleId` accordingly,
+   person-agnostic and default-preserving (verify 170/170). *(Deferred: a person can't yet be given TWO seats
+   or left seat-less — it's a strict 8↔8 bijection; and chef seats aren't player-assigned.)*
 2. **Name kanji:** kanji for the AIBOS surnames + AEGIS members + chefs (ナオ/カイト are placeholders); confirm
    角谷 = "Kadou", 渡邊 = "Watanabe".
 3. Anyone missing, or any relationship detail to add.

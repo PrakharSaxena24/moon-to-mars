@@ -526,10 +526,22 @@
   function lineById(plan, id) { return byId(plan.budget.lines, id); }
   function loadOf(plan, pid) { var n = 0; for (var i = 0; i < plan.tasks.length; i++) if (plan.tasks[i].assignedIds.indexOf(pid) >= 0) n++; return n; }
 
+  // remap each task's assignedIds pids through a substitution map (used by the §seats pass in mergePlan)
+  function remapAssignees(tasks, sub) {
+    for (var i = 0; i < tasks.length; i++) {
+      var a = tasks[i].assignedIds;
+      if (a && a.length) tasks[i].assignedIds = a.map(function (pid) { return sub[pid] !== undefined ? sub[pid] : pid; });
+    }
+  }
+
   // ---- merge the player's overrides onto the gappy TEMPLATE ----
   function mergePlan(cfg) {
     var plan = makeTemplate(), o = (cfg && cfg.overrides) || {};
     var k;
+    // capture the template's DEFAULT seat holders (before any override mutates them) for the §seats remap below
+    var SEAT_ROLES = ['owner', 'pm', 'siteLead', 'budgetLead', 'safetyLead', 'logi', 'comms', 'specialist'];
+    var SEAT_DEFAULT_HOLDER = {}, SEAT_DEFAULT_PIDS = {};
+    for (var sdi = 0; sdi < SEAT_ROLES.length; sdi++) { var _sh = plan.roles[SEAT_ROLES[sdi]].holder; SEAT_DEFAULT_HOLDER[SEAT_ROLES[sdi]] = _sh; SEAT_DEFAULT_PIDS[_sh] = 1; }
     if (o.roles) for (k in o.roles) if (plan.roles[k]) for (var rk in o.roles[k]) plan.roles[k][rk] = o.roles[k][rk];
     if (o.staffing) for (k in o.staffing) { var t = byId(plan.tasks, k); if (t) t.assignedIds = o.staffing[k].slice(); }
     if (o.info) for (k in o.info) { var c = byId(plan.infoCards, k); if (c) for (var ck in o.info[k]) c[ck] = o.info[k][ck]; }
@@ -564,6 +576,39 @@
         if (od.handoffs[dh] === null) { if (eh) dd.handoffs.splice(dd.handoffs.indexOf(eh), 1); }
         else if (eh) { for (var ek in od.handoffs[dh]) eh[ek] = clone(od.handoffs[dh][ek]); }
         else { var ndh = clone(od.handoffs[dh]); ndh.id = dh; dd.handoffs.push(ndh); }
+      }
+    }
+    // ---- player SEAT assignment: overrides.seats = {roleId: pid}, a bijection over the 8 organizer seats.
+    // Runs LAST (after roles/staffing/days) so it also relabels applyFix's canonical default-holder pids.
+    // IDENTITY holders => pure no-op (verify stays byte-identical). Remaps every default-organizer pid in
+    // assignedIds + deputyId to the CURRENT seat holder and re-derives each organizer's participant.roleId from
+    // the seating; chefs/guests untouched. Contract: every ORGANIZER pid (p01-p08) in a task's assignedIds —
+    // template AND applyFix staffing alike — follows its seat; but a player's explicit per-day deck PLACEMENT is
+    // already authored in current-holder pids (it read the merged plan), so those tasks are EXEMPT from the remap.
+    // A malformed overrides.seats (not a bijection over p01-p08) is ignored — the default seating stands.
+    if (o.seats) for (k in o.seats) if (plan.roles[k]) plan.roles[k].holder = o.seats[k];
+    var seatRemap = {}, seatOfPid = {}, seatsChanged = false, seatOk = true, sri, sr, curH;
+    for (sri = 0; sri < SEAT_ROLES.length; sri++) {
+      sr = SEAT_ROLES[sri]; curH = plan.roles[sr].holder;
+      if (!SEAT_DEFAULT_PIDS[curH] || seatOfPid[curH]) seatOk = false;   // not a known organizer pid, or double-booked
+      seatOfPid[curH] = sr;
+      seatRemap[SEAT_DEFAULT_HOLDER[sr]] = curH;
+      if (SEAT_DEFAULT_HOLDER[sr] !== curH) seatsChanged = true;
+    }
+    if (!seatOk) {   // defensive: ignore a non-bijection, restore the default holders
+      for (sri = 0; sri < SEAT_ROLES.length; sri++) plan.roles[SEAT_ROLES[sri]].holder = SEAT_DEFAULT_HOLDER[SEAT_ROLES[sri]];
+      seatsChanged = false;
+    }
+    if (seatsChanged) {
+      for (sri = 0; sri < plan.participants.length; sri++) { var sp = plan.participants[sri]; if (seatOfPid[sp.id]) sp.roleId = seatOfPid[sp.id]; }
+      for (k in plan.roles) { var sd = plan.roles[k].deputyId; if (sd && seatRemap[sd] !== undefined) plan.roles[k].deputyId = seatRemap[sd]; }
+      remapAssignees(plan.tasks, seatRemap);
+      // coarse-day tasks: remap only the template-seeded assignees, NOT ones the player explicitly placed
+      // (those already carry current-holder pids from the merged plan — remapping them would double-shift).
+      if (plan.days) for (var sseg in plan.days) {
+        var dseg = plan.days[sseg]; if (!dseg || !dseg.tasks) continue;
+        var placedIds = (o.days && o.days[sseg] && o.days[sseg].placement) || {};
+        remapAssignees(dseg.tasks.filter(function (t) { return !(placedIds[t.id] && placedIds[t.id].assignedIds); }), seatRemap);
       }
     }
     return plan;
