@@ -958,3 +958,30 @@ Effort estimate (from §21.10): ~1.5–2 sessions.
 - **Motion wins (adopted into Tier 2):** road-follow instead of beelines · accel/settle easing + per-person speed +
   crowd separation · 4-way facing + idle fidgets · richer environmental life.
 - Live samples of each tier (animated) + an effort table were pitched earlier as an artifact (`graphics-tiers-v1`).
+
+### 21.11 As-built (SHIPPED 2026-07-07 · canvas is the default)
+Built via multi-agent orchestration (Fable art-foundation + many Sonnet draw layers + Opus motion/review). The
+Canvas 2D stage (`stage.js`, `window.PRS_STAGE` = `initStage`/`resizeStage`/`scene`) is now the **default** run
+stage; **`?dom`** forces the legacy DOM stage, **`?canvas`** no longer needed. Shipped:
+- **Render:** `scene(ctx, sim, t, view)` — 11 layers (ground/sea/gulls+fish/roads/sky/guests/boat/stations/
+  figures/motes/cascade) in richer washi (contact shadows, lantern light-pools, gold-leaf beveled discs, rim
+  light, paper texture), DPR-correct, `view.scale` sizing (canvas only; DOM layout unchanged).
+- **Motion (§21.3/§21.10):** road-follow along the `ADJ` graph (BFS route + waypoints) + accel/settle easing +
+  per-person speed + facing (`advanceWalker`/`routeWaypoints`/`figTargets` in app.js).
+- **Live bridge (§21.4):** `stageSpotPid`/`stageTint`/`stageGapState` (set in `paintGapFocus`/`paintBlast`,
+  cleared in `clearGapFocus`/`clearStationTints`, reset in `animReset`) feed the gold spotlight + gap/blast tints
+  + 迷い/手待ち/手戻り taxonomy onto the canvas; `drawFigures`/`drawStations` honor them.
+- **a11y:** `#stations` are art-less transparent hotspots (click/keyboard → `openProblemPanel` byte-identical);
+  `aria-label` = station name + live problem status; offscreen `#stage-roster` (aria-live) mirrors the 11
+  duty-holders' name/role/state (+ gap taxonomy during a freeze).
+- **Layout/UI (§21.5/§21.6):** wider running stage (`.wrap` 1500, `#sitemap` 74vh) + collapsible dashboard
+  drawer (`#btn-drawer` → `.runwrap.drawer-closed` → `refitStage`) + guests toggle (`#btn-guests`, guests hidden
+  by default, hidden in `?dom`) + 7 new i18n keys (EN/JA parity **288/288**).
+- **Verified:** `node verify.js` **155/155** (engine untouched) · runtime smoke 7/7 · headless render confirmed
+  (canvas default + `?dom` fallback) · ctx save/restore balanced (53/53) · Opus 3-lens review, all findings fixed.
+- **NOT done (still open):** §21.8a dead-code retirement (`dayLayout`/`derivedHandoffs` still present → verify is
+  155, not the planned 139) · §21.8b animate coarse-day runs (engine work) · ephemeral Playwright E2E (not run
+  this pass; covered by verify + smoke + headless screenshots) · deferred perf nits (offscreen-cache the static
+  ground; stop building the hidden DOM stage in canvas mode).
+- **Commits (main):** spec `669eb04` · P1 `ec2aee8` · `?canvas` preview `74ae0ab` · bigger stage `572ad8a` · art
+  pass `91fd042` · canvas-default + Live bridge + UI `c39cea1` · review fixes `0a2a1a6`.
