@@ -790,6 +790,77 @@
   // =========================================================================
   var ADJ = [['command', 'port'], ['command', 'clinic'], ['command', 'finance'], ['command', 'lodging'], ['port', 'vessel'], ['lodging', 'mess'], ['mess', 'finance'], ['finance', 'clinic']];
 
+  // ---- ROAD-FOLLOW MOTION (§21.10): figures walk ALONG the dashed ADJ road graph, not beeline ----
+  // Pure READ over ADJ / anim state; never writes engine state. BFS gives a station route; each figure
+  // follows waypoint-to-waypoint, easing from rest and settling on arrival, with a deterministic per-person
+  // speed. The FINAL leg targets the fanned point (f.tx/f.ty) so figures at the SAME station still fan out.
+  var FAN_COL = 23, FAN_ROW = 24, FEET_BASE = 36;              // base fan spacing / feet offset (× stageScale)
+  function stageScaleNow() {                                   // bigger stage -> bigger pawns/fan (capped ~1.7)
+    var w = (anim && anim.w) || 1000, h = (anim && anim.h) || 560;
+    return Math.max(1, Math.min(Math.min(w / 1000, h / 560), 1.7));
+  }
+  var ADJ_MAP = null;
+  function adjMap() {                                          // undirected adjacency built once from ADJ
+    if (ADJ_MAP) return ADJ_MAP;
+    var m = {}, i;
+    function add(a, b) { if (!m[a]) m[a] = []; m[a].push(b); }
+    for (i = 0; i < ADJ.length; i++) { add(ADJ[i][0], ADJ[i][1]); add(ADJ[i][1], ADJ[i][0]); }
+    ADJ_MAP = m; return m;
+  }
+  function stationPath(from, to) {                            // BFS shortest station path [from .. to]
+    if (from === to) return [from];
+    var m = adjMap(), q = [from], prev = {}, i, cur, nb, n, c, path;
+    prev[from] = from;
+    while (q.length) {
+      cur = q.shift(); nb = m[cur] || [];
+      for (i = 0; i < nb.length; i++) {
+        n = nb[i];
+        if (!prev.hasOwnProperty(n)) {
+          prev[n] = cur;
+          if (n === to) { path = [to]; c = to; while (c !== from) { c = prev[c]; path.unshift(c); } return path; }
+          q.push(n);
+        }
+      }
+    }
+    return [from, to];                                        // disconnected fallback -> single straight leg
+  }
+  function routeWaypoints(f, fromId, toId) {                  // store pass-through station centres (final leg = fanned tx/ty)
+    var path = stationPath(fromId, toId), W = anim.w, H = anim.h, feet = FEET_BASE * stageScaleNow(), wp = [], i, st;
+    for (i = 1; i < path.length - 1; i++) { st = P.station(path[i]); wp.push({ x: st.x * W, y: st.y * H + feet }); }
+    f.wp = wp; f.wpi = 0;
+  }
+  function figSpeedMul(pid) {                                 // deterministic slight per-person speed (~0.85..1.17)
+    var h = 2166136261, i;
+    pid = pid || '';
+    for (i = 0; i < pid.length; i++) { h ^= pid.charCodeAt(i); h = (h * 16777619) >>> 0; }
+    return 0.85 + (h % 1000) / 1000 * 0.32;
+  }
+  function advanceWalker(f, dt, baseWalk, rm) {               // one figure's step: waypoint-follow + accel-from-rest + settle
+    if (rm) { f.cx = f.tx; f.cy = f.ty; f.wpi = f.wp ? f.wp.length : 0; f.walking = false; f.spd = 0; return; }
+    if (!f.wp) { f.wp = []; f.wpi = 0; }
+    if (f.spdMul === undefined) f.spdMul = figSpeedMul(f.pid);
+    var lastLeg = f.wpi >= f.wp.length;
+    var tx = lastLeg ? f.tx : f.wp[f.wpi].x, ty = lastLeg ? f.ty : f.wp[f.wpi].y;
+    var dx = tx - f.cx, dy = ty - f.cy, dist = Math.sqrt(dx * dx + dy * dy), guard = 0;
+    while (!lastLeg && dist < 4 && guard++ < 8) {             // pop through any waypoints already reached
+      f.wpi++; lastLeg = f.wpi >= f.wp.length;
+      tx = lastLeg ? f.tx : f.wp[f.wpi].x; ty = lastLeg ? f.ty : f.wp[f.wpi].y;
+      dx = tx - f.cx; dy = ty - f.cy; dist = Math.sqrt(dx * dx + dy * dy);
+    }
+    if (lastLeg && dist <= 0.35) { f.cx = tx; f.cy = ty; f.walking = false; f.spd = 0; return; }
+    var maxV = baseWalk * f.spdMul;
+    f.spd = (f.spd || 0) + maxV * 3.2 * dt;                   // accelerate from rest (reaches max in ~0.31s)
+    if (f.spd > maxV) f.spd = maxV;
+    var v = f.spd;
+    if (lastLeg) { var settle = 5 * dist; if (settle < v) v = settle; }  // ease out onto the fanned point only
+    var stp = v * dt;
+    if (stp >= dist) { f.cx = tx; f.cy = ty; if (!lastLeg) f.wpi++; }     // reached this leg's target this frame
+    else { f.cx += dx / dist * stp; f.cy += dy / dist * stp; }
+    var moving = lastLeg ? (dist > 2.5) : true;
+    f.walking = moving;
+    if (moving && Math.abs(dx) > 3) f.faceL = dx < 0;         // keep facing flip; stable when nearly vertical
+  }
+
   // ---- Layer 0 "Living Harbor": rAF motion for figures, guests, boat, cascade ----
   // The engine still OWNS every position (which station a unit belongs to, where the
   // boat is); the renderer only interpolates the journey so people WALK instead of
@@ -1024,12 +1095,13 @@
   function figTargets(s) {
     var pos = {}, bucket = {}; s.stations.forEach(function (st) { bucket[st.id] = []; });
     s.participants.forEach(function (p) { bucket[p.station].push(p); });
-    var W = anim.w, H = anim.h;
+    var W = anim.w, H = anim.h, sc = USE_CANVAS ? stageScaleNow() : 1;   // only scale the fan when the (scaled) canvas is active
+    var colGap = FAN_COL * sc, rowGap = FAN_ROW * sc, feet = FEET_BASE * sc;   // scale fan+feet so bigger pawns don't overlap
     s.stations.forEach(function (st) {
       var n = bucket[st.id].length;
       bucket[st.id].forEach(function (p, i) {
         var col = i % 4, row = Math.floor(i / 4), rowN = Math.min(4, n - row * 4);
-        pos[p.id] = { x: st.x * W + (col - (rowN - 1) / 2) * 23, y: st.y * H + 36 + row * 24 };
+        pos[p.id] = { x: st.x * W + (col - (rowN - 1) / 2) * colGap, y: st.y * H + feet + row * rowGap };
       });
     });
     return pos;
@@ -1045,22 +1117,17 @@
     var rm = RM.matches, phase = ts / 2600;
     var kAmb = 1 - Math.exp(-2.2 * dt);                       // frame-rate independent easing
     var WALK = 92 * Math.max(1, speedMult);                   // px/s — a brisk harbor walk, scaled with game speed
-    // duty-holders walk at constant speed toward the targets renderSim set, easing in on arrival
+    // duty-holders FOLLOW the ADJ roads to the targets renderSim set: accelerate from rest, settle on arrival,
+    // per-person speed variation; the canvas reads f.cx/f.cy/f.walking/f.faceL, the DOM stage mirrors via setXY.
     for (var pid in anim.fig) {
-      var f = anim.fig[pid]; if (!f.el) continue;
-      var dx = f.tx - f.cx, dy = f.ty - f.cy, dist = Math.sqrt(dx * dx + dy * dy);
-      if (rm) { f.cx = f.tx; f.cy = f.ty; f.el.classList.remove('walking'); f.walking = false; }
-      else if (dist > 0.35) {
-        var v = Math.min(WALK, 5 * dist);
-        var stp = Math.min(dist, v * dt);
-        f.cx += dx / dist * stp; f.cy += dy / dist * stp;
-        var moving = dist > 2.5;
-        f.el.classList.toggle('walking', moving);
-        f.walking = moving;
-        if (moving && Math.abs(dx) > 3) { f.el.classList.toggle('faceL', dx < 0); f.faceL = dx < 0; }
-      } else { f.el.classList.remove('walking'); f.walking = false; }
-      f.el._cx = f.cx; f.el._cy = f.cy;
-      setXY(f.el, f.cx, f.cy);
+      var f = anim.fig[pid];
+      advanceWalker(f, dt, WALK, rm);
+      if (f.el) {
+        f.el.classList.toggle('walking', !!f.walking);
+        f.el.classList.toggle('faceL', !!f.faceL);
+        f.el._cx = f.cx; f.el._cy = f.cy;
+        setXY(f.el, f.cx, f.cy);
+      }
     }
     if (sim) {
       // guests wander (engine-seeded, sampled ~15Hz — the easing below smooths between samples);
@@ -1114,7 +1181,7 @@
     // Tier 2: paint the canvas scene from the same interpolated caches the DOM stage uses (read-only)
     if (USE_CANVAS && stageCtx && sim && window.PRS_STAGE) {
       PRS_STAGE.scene(stageCtx, sim, ts / 1000, {
-        w: anim.w, h: anim.h, lang: L, rm: RM.matches,
+        w: anim.w, h: anim.h, scale: stageScaleNow(), lang: L, rm: RM.matches,
         night: sim.mode === 'minute' && (sim.clockMin < 330 || sim.clockMin >= 1110),
         speedMult: speedMult, guestsVisible: guestsVisible,
         hoverPid: null, spotlightPid: null, tintMap: null,
@@ -1244,13 +1311,16 @@
         el.innerHTML = '<div class="fig"><span class="sh"></span><div class="pw"><span class="lg l"></span><span class="lg r"></span><span class="tr"></span><span class="hd"></span><span class="hat"></span></div></div><div class="nm"></div><div class="bub"></div>';
         $('figs').appendChild(el);
         var st0 = P.station(p.station);
+        var feet0 = FEET_BASE * (USE_CANVAS ? stageScaleNow() : 1);
         f = anim.fig[p.id] = { el: el, bub: el.querySelector('.bub'), nmEl: el.querySelector('.nm'),
-          cx: st0.x * anim.w, cy: st0.y * anim.h + 36, tx: st0.x * anim.w, ty: st0.y * anim.h + 36, st: '', lang: '' };
+          cx: st0.x * anim.w, cy: st0.y * anim.h + feet0, tx: st0.x * anim.w, ty: st0.y * anim.h + feet0, st: '', lang: '',
+          pid: p.id, spdMul: figSpeedMul(p.id), spd: 0, wp: [], wpi: 0, stn: p.station };
         el._cx = f.cx; el._cy = f.cy;
         setXY(el, f.cx, f.cy);
       }
       if (f.lang !== L) { f.nmEl.innerHTML = '<i>' + P.role(p.roleId).icon + '</i>' + nm(p.name); f.lang = L; }
       var t = pos[p.id]; if (t) { f.tx = t.x; f.ty = t.y; }
+      if (f.stn !== p.station) { routeWaypoints(f, f.stn, p.station); f.stn = p.station; }   // engine moved this figure: recompute the road route
       // the rAF loop owns walking/faceL; the live spotlight owns spot — preserve them across state writes
       var keep = (f.el.className.indexOf('walking') >= 0 ? ' walking' : '') +
                  (f.el.className.indexOf('faceL') >= 0 ? ' faceL' : '') +
