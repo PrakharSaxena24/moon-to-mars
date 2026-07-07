@@ -72,7 +72,7 @@ Two boats operate: **Nobu-san's ship** and **Kimura-san's ship.** Not everyone f
 ---
 
 ## 5. Meals & Hinata (the base)
-- The chefs cook at a place called **Hinata (ひなた)** — `[TBD: exact spelling]`.
+- The chefs cook at a place called **Hinata (ひなた)** (hiragana).
 - **All guests eat at Hinata, morning and night**; **AIBOS members serve them** there.
 - **AIBOS members stay very close to Hinata — ~15 seconds' walk away.**
 - **Lunch:** everyone **carries a packed lunch**, prepared in the morning by the **chefs with help from AIBOS members.**
@@ -113,20 +113,25 @@ these 8 seats; the 3 chefs fill the 3 cook seats. (`teamLead` is retired; angler
 | p10 | chef 🍳 (French) | **Nao** (ナオ) |
 | p11 | chef 🍳 (French) | **Kaito** (カイト) |
 
-> **⚠️ The p01–p08 seat mapping is a DEFAULT** — the 8 AIBOS members in the order given, onto the seats in
-> role order. **Confirm or tell me to swap any seat** (especially which seat **Prakhar** should hold, and who
-> takes the **angler / shellfish-allergy** seat). One word swaps any pair. Japanese labels are katakana for the
-> Western names + likely kanji for Japanese surnames (秋山 confident; ナオ/カイト are placeholders — give kanji if wanted).
+> **Design intent (2026-07-07): the PLAYER assigns the seats/duties — who does what is a gameplay choice, not
+> fixed.** So this person→seat table is only the **default starting roster** shipped in the engine; the 8 AIBOS
+> members (incl. the angler / boat / owner seats) are a **pool the player re-assigns during planning**.
+> *Not yet built as a role-reassignment mechanic — the engine still bakes a fixed `roleId` per person; the
+> per-day Task Deck already assigns tasks to people. See §8.* Japanese labels: kanji for JP surnames + katakana
+> for Western names (秋山 confident; ナオ/カイト are placeholders — give kanji if wanted).
 
 The **13 guests** are anonymous ambient figures in the engine (`GUESTS = 13`, no individual names), so they
 aren't renamed — the named guests/members in §3 are world reference for a later build pass.
 
 ---
 
-## 8. Open questions (owner to confirm)
-1. **Confirm the DEFAULT p01–p08 seat mapping** (§7) — swap any seat? Which seat should **Prakhar** hold; who
-   is the **angler** (shellfish allergy)? *(Chefs are set: Akiyama head / Nao & Kaito French.)*
-2. **Name readings / kanji:** kanji for the AIBOS members' surnames + the AEGIS members + chefs (ナオ/カイト
-   placeholders); confirm 角谷 = "Kadou", 渡邊 = "Watanabe".
-3. **Hinata** spelling (ひなた / 日向 / …).
-4. Anyone missing, or any relationship detail to add.
+## 8. Backlog / open questions
+1. **Player-assigned seats (design intent, §7):** the player assigns which AIBOS member fills each seat/duty
+   (angler, boat, owner, …). The per-day **Task Deck already assigns tasks** to people; making the base **role
+   types** player-swappable (so e.g. the player picks the angler + who gets the shellfish allergy) is a build
+   item for the rework pass. *Build now, or keep as intent?* The §7 binding is just the default starting roster.
+2. **Name kanji:** kanji for the AIBOS surnames + AEGIS members + chefs (ナオ/カイト are placeholders); confirm
+   角谷 = "Kadou", 渡邊 = "Watanabe".
+3. Anyone missing, or any relationship detail to add.
+
+*(Resolved: Hinata = ひなた · Sadou = Kadou (角谷) · Nagatani+Kadou are external · Akiyama = AEGIS.)*
