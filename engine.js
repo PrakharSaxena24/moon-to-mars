@@ -61,7 +61,7 @@
     { id: 'port',    name: L('Port', '港'),         icon: '⚓', x: 0.16, y: 0.40 },
     { id: 'vessel',  name: L('Vessel', '船'),       icon: '🚢', x: 0.16, y: 0.78 },
     { id: 'lodging', name: L('Lodging', '宿'),      icon: '🏨', x: 0.45, y: 0.78 },
-    { id: 'mess',    name: L('Mess hall', '食堂'),  icon: '🍽️', x: 0.74, y: 0.78 },
+    { id: 'mess',    name: L('Hinata', 'ひなた'),   icon: '🍽️', x: 0.74, y: 0.78 },
     { id: 'finance', name: L('Finance', '会計'),    icon: '🧮', x: 0.84, y: 0.40 },
     { id: 'clinic',  name: L('Clinic', '診療所'),   icon: '⛑️', x: 0.84, y: 0.20 }
   ];
@@ -239,7 +239,7 @@
         { id: 'p01', name: L('Matsumoto', '松本'), company: 'co_aibos', roleId: 'owner',      skill: { lead: 5 },                stamina: 4, constraints: {} },
         { id: 'p02', name: L('Inaba', '稲葉'),       company: 'co_aibos', roleId: 'pm',         skill: { plan: 5, coord: 5 },      stamina: 4, constraints: {} },
         { id: 'p03', name: L('Nishinaga', '西永'),    company: 'co_aibos', roleId: 'siteLead',   skill: { field: 5, fishing: 4 },   stamina: 5, constraints: {} },
-        { id: 'p04', name: L('Prakhar', 'プラカール'),      company: 'co_aibos', roleId: 'budgetLead', skill: { finance: 5 },             stamina: 3, constraints: {} },
+        { id: 'p04', name: L('Prakhar', 'プラカル'),      company: 'co_aibos', roleId: 'budgetLead', skill: { finance: 5 },             stamina: 3, constraints: {} },
         { id: 'p05', name: L('Martin', 'マーティン'),    company: 'co_aibos', roleId: 'safetyLead', skill: { fishing: 5, firstAid: 4 },stamina: 5, constraints: {} },
         { id: 'p06', name: L('Kevin', 'ケビン'), company: 'co_aibos', roleId: 'logi',       skill: { logistics: 4, drive: 3 }, stamina: 4, constraints: {} },
         { id: 'p07', name: L('Andrew', 'アンドリュー'),  company: 'co_aibos', roleId: 'comms',      skill: { record: 4 },              stamina: 3, constraints: {} },
