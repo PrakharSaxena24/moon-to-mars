@@ -236,17 +236,17 @@
       // The 11 duty-holders who RUN the event: 8 AIBOS organizers + 3 contracted chefs.
       // The other 13 are group-company guests being hosted — they fish/eat/rest, they don't work.
       participants: [
-        { id: 'p01', name: L('Tanaka Kenji', '田中 健司'), company: 'co_aibos', roleId: 'owner',      skill: { lead: 5 },                stamina: 4, constraints: {} },
-        { id: 'p02', name: L('Sato Aoi', '佐藤 葵'),       company: 'co_aibos', roleId: 'pm',         skill: { plan: 5, coord: 5 },      stamina: 4, constraints: {} },
-        { id: 'p03', name: L('Suzuki Riku', '鈴木 陸'),    company: 'co_aibos', roleId: 'siteLead',   skill: { field: 5, fishing: 4 },   stamina: 5, constraints: {} },
-        { id: 'p04', name: L('Ito Mei', '伊藤 芽衣'),      company: 'co_aibos', roleId: 'budgetLead', skill: { finance: 5 },             stamina: 3, constraints: {} },
-        { id: 'p05', name: L('Yamamoto Go', '山本 剛'),    company: 'co_aibos', roleId: 'safetyLead', skill: { fishing: 5, firstAid: 4 },stamina: 5, constraints: {} },
-        { id: 'p06', name: L('Nakamura Yui', '中村 結衣'), company: 'co_aibos', roleId: 'logi',       skill: { logistics: 4, drive: 3 }, stamina: 4, constraints: {} },
-        { id: 'p07', name: L('Kobayashi Jun', '小林 純'),  company: 'co_aibos', roleId: 'comms',      skill: { record: 4 },              stamina: 3, constraints: {} },
-        { id: 'p08', name: L('Kato Hana', '加藤 花'),      company: 'co_aibos', roleId: 'specialist', skill: { fishing: 5, coord: 4 },   stamina: 4, constraints: { allergy: 'shellfish' } },
-        { id: 'p09', name: L('Mori Taku', '森 拓'),        company: 'co_chef',  roleId: 'chef',       skill: { cook: 5 },                stamina: 4, constraints: {} },
-        { id: 'p10', name: L('Hayashi Ken', '林 健'),      company: 'co_chef',  roleId: 'chef',       skill: { cook: 4 },                stamina: 4, constraints: {} },
-        { id: 'p11', name: L('Ono Rin', '小野 凛'),        company: 'co_chef',  roleId: 'chef',       skill: { cook: 4, buy: 3 },        stamina: 3, constraints: {} }
+        { id: 'p01', name: L('Matsumoto', '松本'), company: 'co_aibos', roleId: 'owner',      skill: { lead: 5 },                stamina: 4, constraints: {} },
+        { id: 'p02', name: L('Inaba', '稲葉'),       company: 'co_aibos', roleId: 'pm',         skill: { plan: 5, coord: 5 },      stamina: 4, constraints: {} },
+        { id: 'p03', name: L('Nishinaga', '西永'),    company: 'co_aibos', roleId: 'siteLead',   skill: { field: 5, fishing: 4 },   stamina: 5, constraints: {} },
+        { id: 'p04', name: L('Prakhar', 'プラカール'),      company: 'co_aibos', roleId: 'budgetLead', skill: { finance: 5 },             stamina: 3, constraints: {} },
+        { id: 'p05', name: L('Martin', 'マーティン'),    company: 'co_aibos', roleId: 'safetyLead', skill: { fishing: 5, firstAid: 4 },stamina: 5, constraints: {} },
+        { id: 'p06', name: L('Kevin', 'ケビン'), company: 'co_aibos', roleId: 'logi',       skill: { logistics: 4, drive: 3 }, stamina: 4, constraints: {} },
+        { id: 'p07', name: L('Andrew', 'アンドリュー'),  company: 'co_aibos', roleId: 'comms',      skill: { record: 4 },              stamina: 3, constraints: {} },
+        { id: 'p08', name: L('Ambrose', 'アンブローズ'),      company: 'co_aibos', roleId: 'specialist', skill: { fishing: 5, coord: 4 },   stamina: 4, constraints: { allergy: 'shellfish' } },
+        { id: 'p09', name: L('Akiyama', '秋山'),        company: 'co_chef',  roleId: 'chef',       skill: { cook: 5 },                stamina: 4, constraints: {} },
+        { id: 'p10', name: L('Nao', 'ナオ'),      company: 'co_chef',  roleId: 'chef',       skill: { cook: 4 },                stamina: 4, constraints: {} },
+        { id: 'p11', name: L('Kaito', 'カイト'),        company: 'co_chef',  roleId: 'chef',       skill: { cook: 4, buy: 3 },        stamina: 3, constraints: {} }
       ],
 
       // role instances. The 8 staff fill all 8 roles. GAPs are missing AUTHORITY / DEPUTY /

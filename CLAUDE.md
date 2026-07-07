@@ -62,6 +62,11 @@ Every stall is **computed from plan data, never random** (an explainable rule en
 ---
 
 ## 4. Setting & roster — the 24 (ロスター)
+> **Names/story moved to `WORLD.md` (2026-07-07).** The 11 named people were renamed to the real AEGIS/AIBOS
+> roster — see **WORLD.md §7** for the live names (Matsumoto/Inaba/…/Prakhar for the 8 seats; Akiyama/Nao/Kaito
+> chefs) and WORLD.md §1–§6 for the world (AEGIS sponsor, external guests Nagatani+Kadou, two ships, Hinata).
+> The person names in the table below are the **original template** — role *structure* is what matters here.
+
 **8 organizer seats** map onto the existing role types; **`teamLead` 🚩 is retired from this template** (its
 guest-catering work moves to the 3 chefs; its lodging work folds into `logi` 📦). This frees a seat for the
 **angler = `specialist` 🎣**, and adds one **new role type `chef` 🍳**.

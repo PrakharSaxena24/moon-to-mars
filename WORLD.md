@@ -97,32 +97,36 @@ these 8 seats; the 3 chefs fill the 3 cook seats. (`teamLead` is retired; angler
 
 ---
 
-## 7. Rename mapping — real people → engine seats
-The engine currently names the 11 (engine.js:239–249). Renaming to the real roster (no role rework yet):
+## 7. Rename mapping — real people → engine seats (APPLIED 2026-07-07, engine.js:239–249)
 
-| Engine id | Role | Current name | → Real person |
-|---|---|---|---|
-| p01 | owner 👑 | Tanaka Kenji | `[TBD — which AIBOS member?]` |
-| p02 | pm 📋 | Sato Aoi | `[TBD]` |
-| p03 | siteLead 🧭 (boat) | Suzuki Riku | `[TBD]` |
-| p04 | budgetLead 🧮 | Ito Mei | `[TBD]` |
-| p05 | safetyLead ⛑️ | Yamamoto Go | `[TBD]` |
-| p06 | logi 📦 | Nakamura Yui | `[TBD]` |
-| p07 | comms 🎧 | Kobayashi Jun | `[TBD]` |
-| p08 | specialist 🎣 (angler, shellfish allergy) | Kato Hana | `[TBD]` |
-| p09 | chef 🍳 (head) | Mori Taku | **Nao** *(proposed — French pro)* |
-| p10 | chef 🍳 (sous) | Hayashi Ken | **Kaito** *(proposed — French pro)* |
-| p11 | chef 🍳 | Ono Rin | **Akiyama** *(proposed — AEGIS worker)* |
+| Engine id | Role | Real person (applied) |
+|---|---|---|
+| p01 | owner 👑 | **Matsumoto** (松本) |
+| p02 | pm 📋 | **Inaba** (稲葉) |
+| p03 | siteLead 🧭 (boat) | **Nishinaga** (西永) |
+| p04 | budgetLead 🧮 | **Prakhar** (プラカール) |
+| p05 | safetyLead ⛑️ | **Martin** (マーティン) |
+| p06 | logi 📦 | **Kevin** (ケビン) |
+| p07 | comms 🎧 | **Andrew** (アンドリュー) |
+| p08 | specialist 🎣 (angler · shellfish allergy) | **Ambrose** (アンブローズ) |
+| p09 | chef 🍳 (head · Japanese food) | **Akiyama** (秋山) |
+| p10 | chef 🍳 (French) | **Nao** (ナオ) |
+| p11 | chef 🍳 (French) | **Kaito** (カイト) |
+
+> **⚠️ The p01–p08 seat mapping is a DEFAULT** — the 8 AIBOS members in the order given, onto the seats in
+> role order. **Confirm or tell me to swap any seat** (especially which seat **Prakhar** should hold, and who
+> takes the **angler / shellfish-allergy** seat). One word swaps any pair. Japanese labels are katakana for the
+> Western names + likely kanji for Japanese surnames (秋山 confident; ナオ/カイト are placeholders — give kanji if wanted).
 
 The **13 guests** are anonymous ambient figures in the engine (`GUESTS = 13`, no individual names), so they
-aren't renamed here — the named guests/members in §3 are world reference for a later build pass.
+aren't renamed — the named guests/members in §3 are world reference for a later build pass.
 
 ---
 
 ## 8. Open questions (owner to confirm)
-1. **AIBOS → seat mapping** (§7 p01–p08): which of the 8 fills each role? Which seat is **Prakhar**?
-2. **Chef assignment** (§7 p09–p11): confirm Nao = head / Kaito = sous / Akiyama = third (or reorder)?
-3. **Name readings / kanji:** 角谷 = "Kadou"? 渡邊 = "Watanabe"? kanji for the AIBOS members, chefs, and the
-   AEGIS members (for the bilingual `{en, jp}` labels)?
-4. **Hinata** spelling (ひなた / 日向 / …).
-5. Anyone missing, or any relationship detail to add.
+1. **Confirm the DEFAULT p01–p08 seat mapping** (§7) — swap any seat? Which seat should **Prakhar** hold; who
+   is the **angler** (shellfish allergy)? *(Chefs are set: Akiyama head / Nao & Kaito French.)*
+2. **Name readings / kanji:** kanji for the AIBOS members' surnames + the AEGIS members + chefs (ナオ/カイト
+   placeholders); confirm 角谷 = "Kadou", 渡邊 = "Watanabe".
+3. **Hinata** spelling (ひなた / 日向 / …).
+4. Anyone missing, or any relationship detail to add.
