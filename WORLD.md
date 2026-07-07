@@ -120,7 +120,7 @@ these 8 seats; the 3 chefs fill the 3 cook seats. (`teamLead` is retired; angler
 > seat"; swap-on-pick keeps it a bijection). It writes `overrides.seats`; `mergePlan` remaps holders +
 > `participant.roleId` + every task's `assignedIds` + deputies to the chosen people (identity = no-op; verified
 > person-agnostic — 15 anchors in `verify.js`, 170/170). Chefs are out of scope. Japanese labels: kanji for JP
-> surnames + katakana for Western names (秋山 confident; ナオ/カイト are placeholders — give kanji if wanted).
+> surnames + katakana for Western names (秋山 confident; **ナオ/カイト stay katakana — final, by owner's call**).
 
 The **13 guests** are anonymous ambient figures in the engine (`GUESTS = 13`, no individual names), so they
 aren't renamed — the named guests/members in §3 are world reference for a later build pass.
@@ -132,8 +132,8 @@ aren't renamed — the named guests/members in §3 are world reference for a lat
    holds each of the 8 seats; the engine remaps duties/tasks/holders/deputies + `participant.roleId` accordingly,
    person-agnostic and default-preserving (verify 170/170). *(Deferred: a person can't yet be given TWO seats
    or left seat-less — it's a strict 8↔8 bijection; and chef seats aren't player-assigned.)*
-2. **Name kanji:** kanji for the AIBOS surnames + AEGIS members + chefs (ナオ/カイト are placeholders); confirm
-   角谷 = "Kadou", 渡邊 = "Watanabe".
+2. **Name kanji (optional):** kanji for the AIBOS surnames + AEGIS members if wanted; confirm 角谷 = "Kadou",
+   渡邊 = "Watanabe". *(Nao/Kaito stay ナオ/カイト katakana — decided.)*
 3. Anyone missing, or any relationship detail to add.
 
 *(Resolved: Hinata = ひなた · Sadou = Kadou (角谷) · Nagatani+Kadou are external · Akiyama = AEGIS.)*
