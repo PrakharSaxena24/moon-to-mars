@@ -80,7 +80,7 @@ Two boats operate: **Nobu-san's ship** and **Kimura-san's ship.** Not everyone f
 ### Hinata's three interactive sections (the map hotspots on the big Hinata compound)
 Hinata folds in the command/finance/clinic roles and shows three clickable sections that stand for the daily prep flow:
 - **🍱 Food** — the **kitchen**: the chefs (Akiyama · Nao · Kaito) cook and serve meals morning and night, and make the packed lunches each morning.
-- **🎣 Fishing rod** — the **supply & assignment point**: all the fishing gear is prepared here and it's **decided who carries what**; the **food, drinks, medicine** and the rest of the kit are **packed here** too, ready to move out.
+- **🎣 Fishing/Gear** — the **supply & assignment point**: all the fishing gear is prepared here and it's **decided who carries what**; the **food, drinks, medicine** and the rest of the kit are **packed here** too, ready to move out.
 - **🚤 Transport** — **loading & haul-out**: everything is loaded onto the **small trucks** and carried down to the **port, where the boats wait** (Nobu-san → the iso rock; Kimura-san → the jigging grounds).
 
 ---

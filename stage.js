@@ -1762,7 +1762,7 @@ var HUB_FOOT_MULT = 3.6;
 // nm() reads entity {en,jp} pairs elsewhere in this file (_lang==='ja' ? jp : en).
 var HUB_SECTIONS = [
   { id: 'food',      icon: '🍱', en: 'Food',        jp: '食事' },
-  { id: 'rod',       icon: '🎣', en: 'Fishing rod',  jp: '釣竿' },
+  { id: 'rod',       icon: '🎣', en: 'Fishing/Gear', jp: '釣り・装備' },
   { id: 'transport', icon: '🚤', en: 'Transport',    jp: '移動' }
 ];
 

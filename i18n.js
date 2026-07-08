@@ -243,7 +243,7 @@
       fixGapLbl: 'gap', fixGapLblN: 'gaps', gapChip: 'gap',
       detailDecoy: 'Running clean — no gap here.',
       sec_food_t: '🍱 Food', sec_food_b: 'The kitchen at Hinata — the chefs (Akiyama · Nao · Kaito) cook here; meals are served morning and night, and the packed lunches are made each morning with help from the AIBOS team.',
-      sec_rod_t: '🎣 Fishing rod', sec_rod_b: 'The supply & assignment point — all the fishing gear is prepared here and it’s decided who carries what. The food, drinks, medicine and the rest of the kit are packed here too, ready to move out.',
+      sec_rod_t: '🎣 Fishing/Gear', sec_rod_b: 'The supply & assignment point — all the fishing gear is prepared here and it’s decided who carries what. The food, drinks, medicine and the rest of the kit are packed here too, ready to move out.',
       sec_transport_t: '🚤 Transport', sec_transport_b: 'Loading & haul-out — everything is loaded onto the small trucks and carried down to the port, where the boats wait (Nobu-san → the iso rock; Kimura-san → the jigging grounds).',
 
       // --- rules ---
@@ -500,7 +500,7 @@
       fixGapLbl: '件', fixGapLblN: '件', gapChip: '要修正',
       detailDecoy: '順調——ここにギャップはありません。',
       sec_food_t: '🍱 食事', sec_food_b: 'ひなたの厨房——料理長（秋山・ナオ・カイト）がここで調理。朝夕に食事を提供し、昼のお弁当はAIBOSメンバーの手伝いで毎朝用意します。',
-      sec_rod_t: '🎣 釣竿', sec_rod_b: '装備・分担の拠点——釣り道具をここで準備し、誰が何を持つかを決める。食料・飲み物・薬などの荷物もここで荷造りし、出発の準備を整える。',
+      sec_rod_t: '🎣 釣り・装備', sec_rod_b: '装備・分担の拠点——釣り道具をここで準備し、誰が何を持つかを決める。食料・飲み物・薬などの荷物もここで荷造りし、出発の準備を整える。',
       sec_transport_t: '🚤 移動', sec_transport_b: '積み込み・搬送——すべてを小型トラックに積み込み、船が待つ港まで運ぶ（のぶさん→磯、きむらさん→沖のジギング）。',
 
       // --- rules ---
