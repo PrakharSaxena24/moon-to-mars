@@ -30,10 +30,30 @@
           <button id="lang-en" class="on" data-lang="en">English</button>
           <button id="lang-ja" data-lang="ja">日本語</button>
         </div>
+        <button class="btn sm ghost" id="cast-open" data-i18n="btnCast"></button>
         <button class="btn sm ghost" id="rules-open" data-i18n="rulesBtn"></button>
       </div>
     </div>
   </div>
+
+  <!-- ============ INTRO / CAST (onboarding) ============ -->
+  <section id="intro" class="hidden">
+    <div class="introwrap">
+      <div class="intro-hero">
+        <div class="intro-kicker" data-i18n="introKicker"></div>
+        <h1 data-i18n="title"></h1>
+        <p class="intro-lead" data-i18n="introLead"></p>
+        <p class="intro-how" id="intro-how"></p>
+        <div class="intro-cta">
+          <button class="btn primary lg" id="intro-start" data-i18n="introStart"></button>
+          <button class="btn ghost" id="intro-how-btn" data-i18n="introHowBtn"></button>
+        </div>
+      </div>
+      <div class="intro-thesis" data-i18n="introThesis"></div>
+      <h2 class="intro-meet" data-i18n="introMeet"></h2>
+      <div id="intro-cast"></div>
+    </div>
+  </section>
 
   <!-- ============ SETUP ============ -->
   <section id="setup">

@@ -724,3 +724,59 @@ body.canvas-stage .station .st-ic,
 body.canvas-stage .station .st-nm,
 body.canvas-stage .station .st-ring{visibility:hidden;}
 body.canvas-stage .sitemap::after{display:none;} /* vignette is drawn on the canvas */
+
+/* ============================================================================
+   INTRO / CAST — graphic onboarding screen (title, loop, playable cast).
+   Cast pawns reuse the in-game .astro .fig art, scaled up inside .ipawn.
+   ============================================================================ */
+#intro{padding:0 0 60px;}
+.introwrap{max-width:1140px;margin:0 auto;padding:0 20px;}
+.intro-hero{position:relative;margin:6px 0 22px;padding:34px 34px 30px;border-radius:var(--r-lg);
+  background:linear-gradient(155deg,var(--indigo) 0%,var(--indigo-deep) 100%);
+  border:1px solid var(--indigo-line);box-shadow:var(--shadow2);overflow:hidden;}
+.intro-hero::before{content:"";position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(120% 90% at 88% -10%,rgba(227,196,107,.16),transparent 55%);}
+.intro-hero::after{content:"祭";position:absolute;right:-8px;bottom:-26px;font-family:var(--serif);
+  font-size:190px;line-height:1;color:rgba(227,196,107,.07);pointer-events:none;}
+.intro-kicker{font-size:12px;letter-spacing:.28em;text-transform:uppercase;color:var(--accent-light);font-weight:700;margin-bottom:8px;}
+.intro-hero h1{font-family:var(--serif);font-size:44px;line-height:1.05;color:#f6efdc;margin:0 0 12px;font-weight:700;}
+.intro-lead{max-width:720px;color:#e7ddc6;font-size:16px;line-height:1.55;margin:0 0 10px;}
+.intro-how{max-width:760px;color:#cdbfa2;font-size:15px;line-height:1.6;margin:0 0 20px;}
+.intro-how b{color:var(--accent-light);font-weight:700;}
+.intro-cta{display:flex;gap:12px;align-items:center;flex-wrap:wrap;}
+.btn.lg{height:48px;padding:0 26px;font-size:16px;}
+.intro-hero .btn.ghost{color:#e7ddc6;border-color:rgba(227,196,107,.35);}
+.intro-hero .btn.ghost:hover{background:rgba(227,196,107,.12);}
+.intro-thesis{max-width:960px;margin:0 auto 26px;padding:14px 20px;font-family:var(--serif);font-style:italic;
+  font-size:16px;line-height:1.6;color:var(--ink2);background:var(--bg2);
+  border-left:4px solid var(--accent);border-radius:0 var(--r-md) var(--r-md) 0;}
+.intro-meet{font-family:var(--serif);font-size:24px;color:var(--ink);margin:0 0 4px;text-align:center;}
+.cast-group{margin:18px 0 8px;}
+.cast-h{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:16px 0 12px;
+  padding-bottom:8px;border-bottom:1px solid var(--line);}
+.cast-h b{font-size:16px;color:var(--accent-dark);font-weight:700;letter-spacing:.02em;}
+.cast-h span{font-size:13px;color:var(--ink3);}
+.castgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(158px,1fr));gap:12px;}
+.castcard{position:relative;background:var(--bg1);border:1px solid var(--line);border-top:3px solid var(--rc,var(--accent));
+  border-radius:var(--r-md);padding:12px 12px 12px;box-shadow:var(--shadow);text-align:center;overflow:hidden;
+  transition:transform .15s ease,box-shadow .15s ease;}
+.castcard:hover{transform:translateY(-2px);box-shadow:0 6px 16px rgba(36,29,21,.18);}
+.ipawn{position:relative;width:100%;height:80px;margin:0 0 6px;}
+.ipawn .astro{position:absolute;left:50%;top:auto;bottom:6px;width:0;height:0;}   /* top:auto beats base .astro{top:0} so bottom anchors the feet */
+.ipawn .astro .fig{transform:translateX(-50%) scale(2.15);transform-origin:bottom center;}
+.cc-name{font-weight:700;font-size:15px;color:var(--ink);line-height:1.15;}
+.cc-name .cc-alt{display:block;font-weight:500;font-size:11.5px;color:var(--ink3);margin-top:1px;}
+.cc-role{margin:5px 0 6px;font-size:12px;color:var(--rc,var(--ink2));font-weight:600;}
+.cc-role i{font-style:normal;margin-right:4px;}
+.cc-duty{font-size:12px;line-height:1.4;color:var(--ink2);}
+.guestcard{display:flex;align-items:center;gap:16px;margin:20px 0 0;padding:14px 18px;
+  background:var(--bg2);border:1px dashed var(--line2);border-radius:var(--r-md);}
+.guestcard .gc-ic{font-size:34px;flex:0 0 auto;}
+.guestcard .gc-txt b{font-size:15px;color:var(--ink);}
+.guestcard .gc-txt p{margin:2px 0 0;font-size:13px;color:var(--ink2);line-height:1.45;}
+@media(max-width:720px){
+  .intro-hero{padding:24px 20px;}
+  .intro-hero h1{font-size:32px;}
+  .castgrid{grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:9px;}
+}
+@media(prefers-reduced-motion:reduce){ .castcard{transition:none;} .castcard:hover{transform:none;} }

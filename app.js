@@ -113,6 +113,7 @@
     $('lang-en').classList.toggle('on', L === 'en'); $('lang-ja').classList.toggle('on', L === 'ja');
     updateRunButtons();   // keep the pause/guests/drawer imperative labels (and aria-labels) in sync with the language
     paintSetup(); buildRules(); buildLegend();
+    if (!$('intro').classList.contains('hidden')) renderIntro();   // intro-how (HTML) + cast grid re-render in the new language
     // mid-run: rebuild station labels but keep every walker where it stands (no teleport)
     if (!$('run').classList.contains('hidden') && sim && anim) { buildSitemap(true); renderSim(sim); }
     if (appMode === 'live' && liveState && !$('run').classList.contains('hidden')) {
@@ -1803,6 +1804,9 @@
       if (m === 'live' && $('run').classList.contains('hidden')) enterMode('live');
       else if (m === 'morning' && $('setup').classList.contains('hidden')) enterMode('morning');
     });
+    $('cast-open').addEventListener('click', showIntro);
+    $('intro-start').addEventListener('click', startFromIntro);
+    $('intro-how-btn').addEventListener('click', function () { modalOpening('rules-modal'); $('rules-modal').classList.add('show'); $('rules-close').focus(); });
     $('rules-open').addEventListener('click', function () { modalOpening('rules-modal'); $('rules-modal').classList.add('show'); $('rules-close').focus(); });
     $('rules-close').addEventListener('click', function () { $('rules-modal').classList.remove('show'); modalClosed(); });
     $('rules-modal').addEventListener('click', function (e) { if (e.target === $('rules-modal')) { $('rules-modal').classList.remove('show'); modalClosed(); } });
@@ -2015,9 +2019,53 @@
     orgOv = JSON.parse(JSON.stringify(morningSnap.orgOv));
     placingChip = null;
   }
+  // =========================================================================
+  // INTRO / CAST — a graphic onboarding screen: the premise, the loop, and the
+  // playable cast (11 duty-holders) drawn as the same role-coloured pawns the
+  // game uses, with names (EN+JP) + role + one-line duty. Shown on first load;
+  // reopenable from the header "Cast" button; skipped once "Start" is pressed.
+  // =========================================================================
+  function introSeen() { try { return localStorage.getItem('prs_intro_seen') === '1'; } catch (e) { return false; } }
+  function markIntroSeen() { try { localStorage.setItem('prs_intro_seen', '1'); } catch (e) {} }
+  function castCard(p) {
+    var r = P.role(p.roleId), t = T(), primary = nm(p.name), alt = (L === 'ja') ? p.name.en : p.name.jp;
+    return '<div class="castcard" style="--rc:' + r.color + '">' +
+      '<div class="ipawn"><div class="astro" style="--rc:' + r.color + '"><div class="fig"><span class="sh"></span>' +
+        '<div class="pw"><span class="lg l"></span><span class="lg r"></span><span class="tr"></span><span class="hd"></span><span class="hat"></span></div></div></div></div>' +
+      '<div class="cc-name">' + primary + (alt && alt !== primary ? '<span class="cc-alt">' + alt + '</span>' : '') + '</div>' +
+      '<div class="cc-role"><i>' + r.icon + '</i>' + nm(r.name) + '</div>' +
+      '<div class="cc-duty">' + (t['duty_' + p.roleId] || '') + '</div>' +
+    '</div>';
+  }
+  function renderIntro() {
+    var how = $('intro-how'); if (how) how.innerHTML = T().introHow;    // has <b> markup -> innerHTML, not data-i18n
+    var box = $('intro-cast'); if (!box) return;
+    var t = T(), parts = P.mergePlan({ seed: 1, overrides: {} }).participants;
+    var aibos = parts.filter(function (p) { return p.company !== 'co_chef'; });
+    var chefs = parts.filter(function (p) { return p.company === 'co_chef'; });
+    box.innerHTML =
+      '<div class="cast-group"><div class="cast-h"><b>' + t.introCastAibos + '</b><span>' + t.introCastAibosSub + '</span></div>' +
+        '<div class="castgrid">' + aibos.map(castCard).join('') + '</div></div>' +
+      '<div class="cast-group"><div class="cast-h"><b>' + t.introCastChefs + '</b><span>' + t.introCastChefsSub + '</span></div>' +
+        '<div class="castgrid">' + chefs.map(castCard).join('') + '</div></div>' +
+      '<div class="guestcard"><div class="gc-ic" aria-hidden="true">👥</div><div class="gc-txt"><b>' + t.introGuestsT + '</b><p>' + t.introGuestsB + '</p></div></div>';
+  }
+  function showIntro() {
+    if (timer) { clearInterval(timer); timer = null; }
+    stopAnim(); closeModals(); document.body.classList.remove('running');
+    ['setup', 'run', 'report'].forEach(function (s) { $(s).classList.add('hidden'); });
+    $('live-dock').classList.add('hidden');
+    renderIntro();
+    $('intro').classList.remove('hidden');
+    if (window.scrollTo) window.scrollTo(0, 0);
+    var s = $('intro-start'); if (s) s.focus();
+  }
+  function startFromIntro() { markIntroSeen(); $('intro').classList.add('hidden'); enterMode('live'); }
+
   function enterMode(m) {
     var was = appMode;
     appMode = m;
+    var iel = $('intro'); if (iel) iel.classList.add('hidden');   // leaving the intro whenever a real mode is entered
     $('mode-live').classList.toggle('on', m === 'live');
     $('mode-morning').classList.toggle('on', m === 'morning');
     if (timer) { clearInterval(timer); timer = null; }
@@ -2270,5 +2318,7 @@
   }
 
   // ---- init ----
-  bind(); applyLang(); enterMode('live');
+  bind(); applyLang();
+  // first-time players land on the graphic cast intro; returning players (localStorage) go straight in.
+  if (introSeen()) enterMode('live'); else showIntro();
 })();

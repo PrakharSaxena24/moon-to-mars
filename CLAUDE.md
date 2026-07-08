@@ -1023,3 +1023,21 @@ behaviour is behind an opt-in 3rd arg, so `verify.js`'s ≤2-arg `createSim` nev
   Arrival day mid-run: correct "Day 1 · Arrival · 05:00" clock, 11 duty-holders animating, Efficiency 100% / idle
   0 live, the "Ferry time known only to the PM" gap as a live warning, Performance cleared, **zero JS errors**.
 - **Deferred (cosmetic):** a real Arrival/Return boat arc; coarse info-motes from `handoffsForSeg`.
+
+## 22. Graphic onboarding — the cast/intro screen (SHIPPED 2026-07-08)
+Owner: *"a nice graphic introduction with characters and their names, so it's easier to onboard and play."*
+Built a full-screen `#intro` welcome screen shown on first load.
+- **Content:** an indigo hero (kicker · title · one-line premise · the play loop `plan → Run → watch stalls → fix → 100`
+  with `Start ▶` / `How it works`), the core-thesis pull-quote, then **"Meet the crew"** — the 11 playable
+  duty-holders as cards grouped **AIBOS · 8 organizers** and **3 chefs**, plus a **+13 guests** note. Each card = a
+  role-coloured pawn (the SAME in-game `.astro .fig` art, scaled up inside `.ipawn`), name (EN + JP), role icon +
+  name, and a one-line duty. Fully bilingual (EN/JP), re-renders on language switch.
+- **Flow:** first load → intro (`localStorage 'prs_intro_seen'` gates it; returning players go straight to Live);
+  `Start ▶` → `markIntroSeen()` + `enterMode('live')`; a header **👥 Cast** button reopens it anytime; `enterMode`
+  hides `#intro` whenever a real mode is entered.
+- **Code:** `#intro` section + header Cast button (`index.html`); `showIntro`/`renderIntro`/`castCard`/
+  `startFromIntro`/`introSeen`/`markIntroSeen` (`app.js`, cast built from `mergePlan().participants` + `P.role`);
+  intro/`duty_<role>`/`btnCast` keys EN+JP (`i18n.js`); hero + cast-grid + `.ipawn` pawn-reuse CSS (`style.css`).
+- **Verified:** `node verify.js` still **196/196** (engine untouched); headless-Chrome screenshots of the intro in
+  EN and JP (full role-coloured pawns, correct names/roles/duties, clean layout); a DOM check that `Start ▶`
+  transitions intro→`#run` (`body.running`) with **zero JS errors**.
