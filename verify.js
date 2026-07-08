@@ -465,5 +465,40 @@ console.log('\n=== SEAT ASSIGNMENT — overrides.seats bijection (default = no-o
   ok(P.daySchedule(plP, 'arrival').misassigned.length === 0, 'reseat + placement: no phantom MISASSIGNED');
 })();
 
+// ============================================================================
+// COARSE-DAY ANIMATION — opt-in minute-sim for arrival/ops/return (§21.12)
+// The 3rd-arg {animate:true} flips a coarse day onto the minute clock so it plays
+// (people move, pause-on-stall) like the fishday. The 2-arg createSim (used
+// everywhere else in this file) MUST stay the classic day clock, byte-for-byte —
+// that is the whole verify-safety of the change, so it is asserted per segment.
+// ============================================================================
+console.log('\n=== COARSE-DAY ANIMATION — opt-in minute-sim (§21.12) ===');
+(function () {
+  ['arrival', 'ops', 'return'].forEach(function (seg) {
+    var anim = P.createSim(base, seg, { animate: true });
+    ok(anim.mode === 'minute', 'coarse ' + seg + ': {animate:true} => minute-clock sim');
+    ok(P.createSim(base, seg).mode !== 'minute', 'coarse ' + seg + ': 2-arg createSim stays the classic day clock (verify-safe gate)');
+    ok(anim.tasks.length > 0 && anim.tasks.every(function (t) { return anim.sched.byTask[t.id]; }),
+      'coarse ' + seg + ': every animated task is scheduled (sim.tasks <-> sched.byTask lock-step)');
+    ok(anim.clockMin === anim.winStart && anim.winEnd > anim.winStart, 'coarse ' + seg + ': clock starts at the segment window start');
+    // seeded (gappy) day: someone stalls on a gap -> pauses on a cp_stall at least once
+    var g = 0, stalls = 0;
+    while (!anim.finished && g < 400) { P.tick(anim); if (anim.paused) { if (anim.checkpoint.id === 'cp_stall') stalls++; P.resume(anim); } g++; }
+    ok(anim.finished, 'coarse ' + seg + ': runs to a finish');
+    ok(stalls > 0, 'coarse ' + seg + ' (seeded gaps): pauses on a cp_stall at least once');
+    // auto-arranged arrows -> no handoff stall -> zero pauses, 100% efficiency
+    var cfg = P.applyDayFix(base, seg), clean = P.createSim(cfg, seg, { animate: true }), g2 = 0, p2 = 0;
+    while (!clean.finished && g2 < 400) { P.tick(clean); if (clean.paused) { p2++; P.resume(clean); } g2++; }
+    ok(p2 === 0, 'coarse ' + seg + ' (auto-arranged arrows): no stall pause');
+    ok(P.scoreDay(P.mergePlan(cfg), seg).efficiency === 100, 'coarse ' + seg + ' (auto-arranged): scoreDay efficiency 100%');
+  });
+  ok(P.createSim(base, 'fishday').mode === 'minute', 'fishday is still a minute-sim without opts (coarse gate leaves it alone)');
+  // intervene on a coarse animated sim re-solves via daySchedule + logs the hand-feed
+  var isim = P.createSim(base, 'arrival', { animate: true }), gi = 0;
+  while (!isim.paused && !isim.finished && gi < 400) { P.tick(isim); gi++; }
+  var hf = isim.handFed || 0; P.intervene(isim, 'ic_ferry', 'pm');
+  ok((isim.handFed || 0) === hf + 1 && isim.sched && isim.sched.byTask, 'coarse arrival: intervene re-solves the schedule + increments handFed');
+})();
+
 console.log('\n' + (fail === 0 ? 'ALL ' + pass + ' CHECKS PASSED ✓' : pass + ' passed, ' + fail + ' FAILED ✗'));
 process.exit(fail === 0 ? 0 : 1);

@@ -1227,11 +1227,15 @@
   // ===========================================================================
   // createSim / tick — the animated rehearsal over the 10-day clock.
   // ===========================================================================
-  function createSim(cfg, segment) {
+  function createSim(cfg, segment, opts) {
     cfg = cfg || { seed: 1, overrides: {} };
     var plan = mergePlan(cfg);
     var sIdx = segIndex(segment);  // -1 = whole trip; otherwise rehearse just this day
-    var minute = segment === 'fishday';                                        // fine clock (§8)
+    // §21.8b: fishday is always minute-clock; a coarse day (arrival/ops/return) animates on the minute clock
+    // ONLY when the caller opts in (opts.animate) — verify.js's 2-arg createSim never does, so the classic
+    // day-clock / daySummary anchors + the fishdaySchedule façade stay untouched.
+    var coarseMin = AUTHORABLE.indexOf(segment) >= 0 && segment !== 'fishday' && !!(opts && opts.animate);
+    var minute = segment === 'fishday' || coarseMin;                           // fine clock (§8)
     var problems = (sIdx < 0) ? detect(plan) : gapsForSegment(plan, segment);  // only the chosen day's gaps animate
     // on the minute clock, handoffTiming animates through the cascade (late starts,
     // ⏳ pile-ups) rather than hard-stalling its tasks like a classic gap would
@@ -1240,14 +1244,28 @@
     stallProbs.forEach(function (p) { p.taskIds.forEach(function (tid) { if (!probByTask[tid]) probByTask[tid] = p; }); });
     var blocked = blockedTasks(plan, stallProbs);
 
-    var tasks = plan.tasks.map(function (t) {
-      var ti = phaseSegIndex(t.phase);
-      var scope = (sIdx < 0) ? 'in' : (ti < sIdx ? 'pre' : (ti > sIdx ? 'post' : 'in')); // earlier days assumed done; later days hidden
-      return { id: t.id, name: t.name, station: t.station, phase: t.phase, ownerRoleId: t.ownerRoleId,
-        assignedIds: t.assignedIds.slice(), startDay: t.startDay, dur: t.dur, deps: t.deps.slice(), scope: scope,
-        day: t.day || null, startMin: t.startMin, durMin: t.durMin,
-        progress: scope === 'pre' ? 1 : 0, state: scope === 'pre' ? 'done' : 'pending', stalled: false, problem: probByTask[t.id] || null, blocked: !!blocked[t.id] };
-    });
+    var tasks;
+    if (coarseMin) {
+      // animate the AUTHORED coarse day (plan.days[seg]) on the minute clock — HD tasks have no phase, so
+      // build them directly with scope 'in'; states are driven each tick from sim.sched (daySchedule).
+      // Only PLACED tasks (assigned to someone) schedule — mirror daySchedule's isPlaced filter so
+      // sim.tasks and sim.sched.byTask stay in lock-step (an unscheduled task has no byTask entry).
+      tasks = tasksForSeg(plan, segment).filter(function (t) { return t.assignedIds && t.assignedIds.length > 0; }).map(function (t) {
+        return { id: t.id, name: t.name, station: t.station, phase: null, ownerRoleId: t.ownerRoleId,
+          assignedIds: (t.assignedIds || []).slice(), startDay: null, dur: null, deps: (t.deps || []).slice(), scope: 'in',
+          day: t.day || segment, startMin: t.startMin, durMin: t.durMin,
+          progress: 0, state: 'pending', stalled: false, problem: null, blocked: false };
+      });
+    } else {
+      tasks = plan.tasks.map(function (t) {
+        var ti = phaseSegIndex(t.phase);
+        var scope = (sIdx < 0) ? 'in' : (ti < sIdx ? 'pre' : (ti > sIdx ? 'post' : 'in')); // earlier days assumed done; later days hidden
+        return { id: t.id, name: t.name, station: t.station, phase: t.phase, ownerRoleId: t.ownerRoleId,
+          assignedIds: t.assignedIds.slice(), startDay: t.startDay, dur: t.dur, deps: t.deps.slice(), scope: scope,
+          day: t.day || null, startMin: t.startMin, durMin: t.durMin,
+          progress: scope === 'pre' ? 1 : 0, state: scope === 'pre' ? 'done' : 'pending', stalled: false, problem: probByTask[t.id] || null, blocked: !!blocked[t.id] };
+      });
+    }
     var participants = plan.participants.map(function (p) {
       return { id: p.id, name: p.name, roleId: p.roleId, company: p.company, constraints: p.constraints,
         station: 'lodging', x: station('lodging').x, y: station('lodging').y, state: 'idle', fatigue: 0, taskId: null };
@@ -1272,9 +1290,10 @@
       events: [], bannerOn: false, bannerEverFired: false
     };
     if (minute) {
-      sim.mode = 'minute'; sim.clockMin = DAY_START_MIN; sim.day = 2; sim.clock = 2;
-      sim.sched = fishdaySchedule(plan);
-      sim.injections = []; sim.handFed = 0; sim.paused = false; sim.checkpoint = null; sim.cpDone = {};
+      var win = DAY_WINDOWS[segment] || [DAY_START_MIN, DAY_END_MIN];
+      sim.mode = 'minute'; sim.clockMin = win[0]; sim.winStart = win[0]; sim.winEnd = win[1]; sim.day = 2; sim.clock = 2;
+      sim.sched = (segment === 'fishday') ? fishdaySchedule(plan) : daySchedule(plan, segment);
+      sim.injections = []; sim.handFed = 0; sim.paused = false; sim.checkpoint = null; sim.cpDone = {}; sim.stallSeen = {};
     }
     return sim;
   }
@@ -1284,8 +1303,8 @@
   // ---- minute-clock tick (fishday, §8): replay the cascade; pause at checkpoints ----
   function tickMinute(sim) {
     if (sim.finished || sim.paused) return sim;
-    sim.tick++; sim.clockMin = Math.min(DAY_END_MIN, sim.clockMin + MIN_DT);
-    sim.clock = 2 + (sim.clockMin - DAY_START_MIN) / 1440; sim.day = sim.clock;
+    sim.tick++; sim.clockMin = Math.min((sim.winEnd || DAY_END_MIN), sim.clockMin + MIN_DT);
+    sim.clock = 2 + (sim.clockMin - (sim.winStart || DAY_START_MIN)) / 1440; sim.day = sim.clock;
     var i, t, p, now = sim.clockMin;
 
     for (i = 0; i < sim.tasks.length; i++) {
@@ -1339,14 +1358,29 @@
     var spent = 0, nIn = 0; for (i = 0; i < sim.tasks.length; i++) { t = sim.tasks[i]; if (t.scope !== 'in') continue; nIn++; if (t.state === 'done') spent += 1; }
     sim.budget.spent = Math.round(sim.budget.total * 0.62 * (spent / Math.max(1, nIn)));
 
-    if (now >= DAY_END_MIN) {
+    var END = sim.winEnd || DAY_END_MIN;
+    if (now >= END) {
       sim.paused = false; sim.checkpoint = null;
-      sim.finished = (gapsForSegment(sim.plan, 'fishday').length === 0) ? 'done' : 'incomplete';
+      sim.finished = (gapsForSegment(sim.plan, sim.segment).length === 0) ? 'done' : 'incomplete';
       return sim;
     }
-    for (i = 0; i < CHECKPOINTS.length; i++) {                 // 関所: pause for inspect / intervene
-      var cp = CHECKPOINTS[i];
-      if (!sim.cpDone[cp.id] && now >= cp.min) { sim.cpDone[cp.id] = 1; sim.paused = true; sim.checkpoint = { id: cp.id, min: cp.min, name: cp.name }; break; }
+    if (sim.segment === 'fishday') {
+      for (i = 0; i < CHECKPOINTS.length; i++) {                 // 関所: pause for inspect / intervene
+        var cp = CHECKPOINTS[i];
+        if (!sim.cpDone[cp.id] && now >= cp.min) { sim.cpDone[cp.id] = 1; sim.paused = true; sim.checkpoint = { id: cp.id, min: cp.min, name: cp.name }; break; }
+      }
+    } else {
+      // §21.8b coarse pause-on-stall: pause the moment someone FIRST stalls on a gap (手待ち／手戻り),
+      // once per task (stallSeen), so the player can inspect + intervene + resume. The plan's gap still
+      // stands, so scoreDay marks the day down — pauses ⇒ a lower score, as designed.
+      for (i = 0; i < sim.tasks.length; i++) {
+        var tstall = sim.tasks[i];
+        if (tstall.scope === 'in' && (tstall.state === 'waitinfo' || tstall.state === 'rework') && !sim.stallSeen[tstall.id]) {
+          sim.stallSeen[tstall.id] = 1; sim.paused = true;
+          sim.checkpoint = { id: 'cp_stall', min: now, name: L('Stall — someone is blocked', '停止——手待ち／手戻り発生') };
+          break;
+        }
+      }
     }
     return sim;
   }
@@ -1356,7 +1390,7 @@
   function intervene(sim, cardId, toRoleId) {
     if (sim.mode !== 'minute') return sim;
     sim.injections.push({ cardId: cardId, toRoleId: toRoleId, min: sim.clockMin });
-    sim.sched = fishdaySchedule(sim.plan, sim.injections);
+    sim.sched = (sim.segment === 'fishday') ? fishdaySchedule(sim.plan, sim.injections) : daySchedule(sim.plan, sim.segment, sim.injections);
     sim.handFed = (sim.handFed || 0) + 1;
     return sim;
   }

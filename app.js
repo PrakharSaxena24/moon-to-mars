@@ -1048,7 +1048,9 @@
   function buildMotes(s) {
     var box = $('motes'); if (box) box.innerHTML = '';
     anim.motes = [];
-    if (!box || !s || s.mode !== 'minute') return;
+    // info motes fly the fishday's plan.handoffs — a coarse day's arrows live in plan.days[seg]; drawing
+    // the fishday arrows over an arrival/ops/return animation would be wrong-context, so gate to fishday
+    if (!box || !s || s.mode !== 'minute' || s.segment !== 'fishday') return;
     var plan = s.plan, pairs = {};
     plan.handoffs.forEach(function (h) {
       var to = byId(plan.tasks, h.toTaskId), from = byId(plan.tasks, h.fromTaskId);
@@ -1109,11 +1111,11 @@
 
   function launch() {
     stopAnim(); clearFinishTimer();                       // never stack a second rAF loop or a stale report reveal
-    // §20 Phase 5: a coarse authored day (arrival/ops/return) never animates — Run goes straight
-    // to a report scored by the authored plan.days arrangement (P.scoreDay). Fishday + whole-trip
-    // ('all') are unchanged: they still play the day/minute-clock animation.
-    if (P.AUTHORABLE.indexOf(daySel) >= 0 && daySel !== 'fishday') { runDayReport(); return; }
-    sim = P.createSim({ seed: (Math.floor(Math.random() * 1e9) >>> 0) || 1, overrides: buildCfg().overrides }, daySel);
+    // §21.8b: every authored day now ANIMATES on the minute clock — the coarse days (arrival/ops/return)
+    // opt into the minute-sim via {animate:true} so people walk + comment + PAUSE-on-stall like the fishday.
+    // The run ends in a rule-based P.scoreDay report (finish()); the plan gaps that caused the pauses are
+    // exactly what mark the day down. Whole-trip ('all') is not authorable → stays the classic day clock.
+    sim = P.createSim({ seed: (Math.floor(Math.random() * 1e9) >>> 0) || 1, overrides: buildCfg().overrides }, daySel, { animate: true });
     paused = false; livePausedForFix = false; document.body.classList.add('running');
     closeModals();
     $('live-dock').classList.add('hidden');               // a morning run never shows the live dock
@@ -1122,23 +1124,14 @@
     $('figs').innerHTML = ''; $('banner').classList.remove('show');
     var ff = $('fanfare'); if (ff) ff.classList.remove('show');
     animReset(); updateRunButtons(); buildSitemap();
-    anim.cascade = (sim.mode === 'minute') ? P.cascadeTrace(sim.plan) : { hops: [], has: false };
+    // the cascade comet traces the fishday fault chain (港→船→食堂); it's fishday-specific, so a coarse
+    // animated day shows no comet (its stalls surface as ⏳ pauses + the scoreDay markdown instead)
+    anim.cascade = (sim.mode === 'minute' && sim.segment === 'fishday') ? P.cascadeTrace(sim.plan) : { hops: [], has: false };
     anim.cascade.has = anim.cascade.hasFault;
     buildMotes(sim);
     renderSim(sim); startAnim();
     runFn = step;
     if (timer) clearInterval(timer); timer = setInterval(step, tickMs());
-  }
-  // §20 Phase 5: coarse-day Run — no sim, no animation. Score the authored plan.days arrangement
-  // directly and jump to the report (reusing the same #report DOM the animated paths render into).
-  function runDayReport() {
-    if (timer) { clearInterval(timer); timer = null; }
-    sim = null; paused = false; livePausedForFix = false; document.body.classList.remove('running');
-    closeModals();
-    $('setup').classList.add('hidden'); $('run').classList.add('hidden'); $('live-dock').classList.add('hidden'); $('report').classList.remove('hidden');
-    var seg = daySel, sc = P.scoreDay(currentPlan(), seg);
-    lastResult = { trip: null, day: sc, segment: seg, coarse: true };
-    renderReport(lastResult);
   }
   function restartTimer() { if (timer) { clearInterval(timer); timer = setInterval(runFn || step, tickMs()); } }
   function step() {
@@ -1415,7 +1408,7 @@
     var ban = $('banner'); if (s.bannerOn && appMode !== 'live') { ban.textContent = T().bannerText; ban.classList.add('show'); } else ban.classList.remove('show');
     $('sitemap').classList.toggle('blocked', !!s.bannerOn);
     $('nowtag').textContent = s.mode === 'minute'
-      ? T().fdDayLine(hhmm(s.clockMin))
+      ? (s.segment === 'fishday' ? T().fdDayLine(hhmm(s.clockMin)) : dayLabel(s.segment) + ' · ' + hhmm(s.clockMin))
       : T().dayLine(Math.min(P.DAYS, Math.ceil(s.day)), P.DAYS) + (s.phaseLabel ? ' · ' + nm(s.phaseLabel) : '');
     updateSky(s);
     scheduleMotes(s);
@@ -1445,7 +1438,8 @@
   // minute-mode pressure: a live countdown to the 18:00 dinner + the fanfare payoff
   function updatePressure(s) {
     var tag = $('dinnertag'); if (!tag) return;
-    if (s.mode !== 'minute') { tag.classList.add('hidden'); return; }
+    // the 18:00 dinner countdown + fanfare are fishday-specific — a coarse animated day has no dinner deadline
+    if (s.mode !== 'minute' || s.segment !== 'fishday') { tag.classList.add('hidden'); return; }
     tag.classList.remove('hidden');
     var t = T(), DINNER = 1080, now = s.clockMin, dm = s.sched ? s.sched.dinnerMin : null;
     var willLate = dm != null && dm > DINNER;
@@ -1465,8 +1459,11 @@
   }
 
   function renderDashboard(s) {
-    var sc = P.score(s), t = T();
-    $('dash-day').textContent = s.mode === 'minute' ? t.fdDayLine(hhmm(s.clockMin)) : T().dayLine(Math.min(P.DAYS, Math.ceil(s.day)), P.DAYS);
+    // §21.8b: a coarse animated day reads its live grade + efficiency from the rule-based scoreDay over
+    // the merged plan.days[seg] (same source as the report), not the classic score() (which grades the frame).
+    var coarseMin = s.mode === 'minute' && s.segment !== 'fishday';
+    var sc = coarseMin ? P.scoreDay(s.plan, s.segment) : P.score(s), t = T();
+    $('dash-day').textContent = s.mode === 'minute' ? (s.segment === 'fishday' ? t.fdDayLine(hhmm(s.clockMin)) : dayLabel(s.segment) + ' · ' + hhmm(s.clockMin)) : T().dayLine(Math.min(P.DAYS, Math.ceil(s.day)), P.DAYS);
     $('dash-phase').textContent = s.phaseLabel ? nm(s.phaseLabel) : '';
     // fishday: Efficiency % beside the grade (§9) + idle/rework minutes
     $('dash-fd').classList.toggle('hidden', s.mode !== 'minute');
@@ -1500,14 +1497,17 @@
         return '<div class="warn sev-' + p.severity + '" data-station="' + p.station + '" tabindex="0" role="button"><span class="warn-ic">' + (p.severity === 'high' ? '⛔' : '⚠️') + '</span>' + t['p_' + p.id + '_title'] + '</div>';
       }).join('');
     }
-    // team performance (6 values)
+    // team performance (6 values) — classic score() only; a coarse day is graded by scoreDay, which
+    // has no per-team performance block, so clear the bars rather than crash on the missing field.
     var team = sc.team;
-    var rows = [['action', 'perf-good'], ['decision', 'perf-good'], ['coop', 'perf-good'], ['contribution', 'perf-good'], ['load', 'perf-stress'], ['fatigue', 'perf-stress']];
-    var lblK = { action: 'ivAction', decision: 'ivDecision', coop: 'ivCoop', contribution: 'ivContribution', load: 'ivLoad', fatigue: 'ivFatigue' };
-    $('dash-perf').innerHTML = rows.map(function (r) {
-      var v = team[r[0]];
-      return '<div class="perfbar"><div class="pf-top"><span>' + t[lblK[r[0]]] + '</span><b>' + v + '</b></div><div class="pf-bar ' + r[1] + '"><i style="width:' + v + '%"></i></div></div>';
-    }).join('');
+    if (team) {
+      var rows = [['action', 'perf-good'], ['decision', 'perf-good'], ['coop', 'perf-good'], ['contribution', 'perf-good'], ['load', 'perf-stress'], ['fatigue', 'perf-stress']];
+      var lblK = { action: 'ivAction', decision: 'ivDecision', coop: 'ivCoop', contribution: 'ivContribution', load: 'ivLoad', fatigue: 'ivFatigue' };
+      $('dash-perf').innerHTML = rows.map(function (r) {
+        var v = team[r[0]];
+        return '<div class="perfbar"><div class="pf-top"><span>' + t[lblK[r[0]]] + '</span><b>' + v + '</b></div><div class="pf-bar ' + r[1] + '"><i style="width:' + v + '%"></i></div></div>';
+      }).join('');
+    } else { $('dash-perf').innerHTML = ''; }
   }
 
   function buildLegend() {
@@ -1566,8 +1566,10 @@
         return '<span class="ins-card wait">⏳ ' + nm(c ? c.name : w.cardId).split('：')[0].split(':')[0] + ' → ' + (w.missing ? t.inspMissing : hhmm(w.until)) +
           ' <button class="btn sm primary ins-send" data-card="' + w.cardId + '" data-role="' + p.roleId + '">' + t.sendNow + '</button></span>';
       }).join('');
-      var cur = mi.currentTaskId ? nm(byId(sim.plan.tasks, mi.currentTaskId).name) : '—';
-      var nxt = mi.nextTaskId ? nm(byId(sim.plan.tasks, mi.nextTaskId).name) + (mi.nextAtMin != null ? ' (' + hhmm(mi.nextAtMin) + ')' : '') : '—';
+      // look up in sim.tasks (the live segment's task list) — coarse-day ids (hd_*) live there, not in plan.tasks
+      var ctk = mi.currentTaskId ? byId(sim.tasks, mi.currentTaskId) : null, ntk = mi.nextTaskId ? byId(sim.tasks, mi.nextTaskId) : null;
+      var cur = ctk ? nm(ctk.name) : '—';
+      var nxt = ntk ? nm(ntk.name) + (mi.nextAtMin != null ? ' (' + hhmm(mi.nextAtMin) + ')' : '') : '—';
       return '<div class="insp-row"><span class="ins-ic2" style="background:' + rr.color + '">' + rr.icon + '</span>' +
         '<div class="ins-main"><b>' + nm(p.name) + '</b><span class="ins-state">' + (BUB[p.state] || '') + ' ' + (t[STATE_KEY[p.state]] || p.state) + '</span>' +
         '<div class="ins-line">' + t.inspNowDoing + ': ' + cur + ' · ' + t.inspNext + ': ' + nxt + '</div>' +
@@ -1629,7 +1631,14 @@
   // =========================================================================
   function finish() {
     clearInterval(timer); timer = null;
-    lastResult = { trip: P.score(sim), day: (sim.segment !== 'all' ? P.daySummary(sim) : null), segment: sim.segment };
+    // §21.8b: a coarse animated day (arrival/ops/return) is graded by the rule-based P.scoreDay over the
+    // authored plan.days[seg] arrangement — NOT the classic score()/daySummary, which read the 10-day frame's
+    // plan.tasks. The plan gaps that stalled the run are exactly what scoreDay marks the day down for.
+    if (sim.mode === 'minute' && sim.segment !== 'fishday') {
+      lastResult = { trip: null, day: P.scoreDay(sim.plan, sim.segment), segment: sim.segment, coarse: true };
+    } else {
+      lastResult = { trip: P.score(sim), day: (sim.segment !== 'all' ? P.daySummary(sim) : null), segment: sim.segment };
+    }
     var simAt = sim;
     clearFinishTimer();
     finishTimer = setTimeout(function () {

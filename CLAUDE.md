@@ -919,15 +919,13 @@ Flat `STR{en,ja}` namespace; state-toggle labels follow the `pauseBtn`/`resumeBt
   `ROLE_ORDER`). Delete the `verify.js` §19 grid block (252–280, 16 checks → **155 − 16 = 139**). **Keep**
   `DAY_WINDOWS` (live via `segWin`, app.js:287) and `DAY_HOUR_START/END` (referenced by the coarse-day windows in
   `DAY_WINDOWS`, engine.js:50–51). Zero behaviour change; do it last (delete the checks with the functions).
-- **(b) Animate authored coarse-day runs — STAYS DEFERRED (needs an engine change).** Recon finding: the *data*
-  exists (`daySchedule(plan,seg)` is a full deterministic timeline over the shared `STATIONS`), but a coarse day
-  produces **no sim** today — `launch()` diverts to a static `scoreDay` report (app.js:972), because the minute-sim
-  is hard-wired to fishday: `createSim` gate `segment==='fishday'` (engine.js:1184), and `tickMinute`/`boatState`/
-  `buildMotes` are bound to `fishdaySchedule` / `plan.tasks` / `plan.handoffs(day==='fishday')`. Animating coarse
-  days = **generalizing the engine minute-sim** (§20.3 planned, unbuilt) + open content decisions (does a coarse
-  day show the fishday-specific efficiency/dinner/关所 HUD? does Arrival/Return get a real boat arc? coarse motes
-  from `handoffsForSeg`). That is engine work with its own verify anchors — **out of Tier 2's zero-engine-risk
-  scope.** Track as a separate follow-on after Tier 2 ships.
+- **(b) Animate authored coarse-day runs — ✅ SHIPPED 2026-07-08 (§21.12).** Was deferred from Tier 2 as engine
+  work; built as the planned follow-on. The coarse days (arrival/ops/return) now animate on the minute clock and
+  **pause-on-stall** just like the fishday, ending in the rule-based `scoreDay` report. See **§21.12** for the
+  as-built. The open content decisions were resolved: coarse days show the Efficiency/Idle HUD (from `scoreDay`,
+  not classic `score()`), the dinner-countdown/fanfare and info-motes/cascade-comet stay **fishday-only** (a coarse
+  day has no 18:00 dinner and its arrows live in `plan.days[seg]`), and the boat idles at dock (a real Arrival/Return
+  boat arc remains deferred — cosmetic).
 
 ### 21.9 Phase plan (agent tier · acceptance = `node verify.js` green + ephemeral E2E green each phase)
 0. ✅ Spec (this §21) + 6-surface grounded recon — Opus.
@@ -984,9 +982,44 @@ stage; **`?dom`** forces the legacy DOM stage, **`?canvas`** no longer needed. S
   by default, hidden in `?dom`) + 7 new i18n keys (EN/JA parity **288/288**).
 - **Verified:** `node verify.js` **155/155** (engine untouched) · runtime smoke 7/7 · headless render confirmed
   (canvas default + `?dom` fallback) · ctx save/restore balanced (53/53) · Opus 3-lens review, all findings fixed.
-- **NOT done (still open):** §21.8a dead-code retirement (`dayLayout`/`derivedHandoffs` still present → verify is
-  155, not the planned 139) · §21.8b animate coarse-day runs (engine work) · ephemeral Playwright E2E (not run
-  this pass; covered by verify + smoke + headless screenshots) · deferred perf nits (offscreen-cache the static
-  ground; stop building the hidden DOM stage in canvas mode).
+- **NOT done (still open):** §21.8a dead-code retirement (`dayLayout`/`derivedHandoffs` still present) · ephemeral
+  Playwright E2E (not run this pass; covered by verify + smoke + headless screenshots) · deferred perf nits
+  (offscreen-cache the static ground; stop building the hidden DOM stage in canvas mode). *(§21.8b — animate
+  coarse-day runs — is now DONE, see §21.12.)*
 - **Commits (main):** spec `669eb04` · P1 `ec2aee8` · `?canvas` preview `74ae0ab` · bigger stage `572ad8a` · art
   pass `91fd042` · canvas-default + Live bridge + UI `c39cea1` · review fixes `0a2a1a6`.
+
+## 21.12 Coarse-day animation + pause-on-stall (SHIPPED 2026-07-08 — the deferred §21.8b, built)
+Owner's direction: *"after Run, the simulation should run and I can see people moving with comments etc, and if
+something is wrong the sim stops"* — applied to the **coarse authored days** (Arrival / Ops / Return), which until
+now jumped straight to a static `scoreDay` report. Owner also chose (AskUserQuestion): **animate the coarse days
+too (full fix)** + **pause-and-stall, then let pauses reduce the score.** Built to be **verify-safe**: the minute
+behaviour is behind an opt-in 3rd arg, so `verify.js`'s ≤2-arg `createSim` never flips → **170/170 unchanged**.
+
+- **Engine (`engine.js`), all gated so fishday stays byte-identical:**
+  - `createSim(cfg, segment, opts)` — new `opts.animate`. `coarseMin = AUTHORABLE.has(seg) && seg!=='fishday' &&
+    opts.animate`; `minute = fishday || coarseMin`. For a coarse-minute sim, `sim.tasks` is built from
+    `tasksForSeg(plan,seg)` **filtered to placed tasks** (mirrors `daySchedule`'s `isPlaced`, so `sim.tasks` and
+    `sim.sched.byTask` stay in lock-step); window from `DAY_WINDOWS[seg]` (`sim.winStart`/`sim.winEnd`);
+    `sim.sched = daySchedule(plan, seg)`; `sim.stallSeen = {}`.
+  - `tickMinute` — clock cap + day-fraction generalized to `sim.winEnd`/`sim.winStart`; finish flag reads
+    `gapsForSegment(sim.plan, sim.segment)`; the `CHECKPOINTS` (関所) loop is now **fishday-only**, with a coarse
+    `else` branch: **pause-on-stall** — the first time an in-scope task enters `waitinfo`/`rework` it pauses once
+    (rising-edge via `sim.stallSeen`) with a `cp_stall` checkpoint so the player can inspect → intervene → resume.
+  - `intervene` — re-solves with `daySchedule(sim.plan, sim.segment, injections)` (fishday still via the façade).
+- **App (`app.js`):** `launch()` drops the coarse→`runDayReport` divert and passes `{animate:true}` (whole-trip
+  `'all'` is not authorable → still the classic day clock); `runDayReport` deleted (dead). `finish()` grades a
+  coarse animated day with **`P.scoreDay(sim.plan, seg)`** (the plan gaps that stalled the run are exactly what
+  mark it down — so pauses ⇒ lower score, as asked), not classic `score()`/`daySummary`. `renderDashboard` sources
+  the live grade/efficiency from `scoreDay` for coarse (and **guards `sc.team`** — scoreDay has no per-team block).
+  `openInspector` looks tasks up in `sim.tasks` (coarse `hd_*` ids aren't in `plan.tasks`). `nowtag`/`dash-day`
+  use `dayLabel(seg)` for coarse (not the fishday "Day 3" line). `updatePressure` (dinner countdown/fanfare),
+  `buildMotes` and the cascade comet are all **gated to `segment==='fishday'`** (a coarse day has no dinner, and
+  its arrows live in `plan.days[seg]`). The boat idles at dock (`boatState` returns dock for a coarse sim).
+- **Verified:** `node verify.js` **196/196** — the prior 170 (engine 2-arg path + fishday façade untouched) **+ a
+  new committed 26-check coarse-animate block**: per-seg `{animate:true}`⇒minute + `2-arg stays classic` (the
+  verify-safe gate), `sim.tasks`↔`byTask` lock-step, seeded days pause on `cp_stall`, auto-arranged days run with
+  **0 pauses** at 100% efficiency, `intervene` re-solves + increments `handFed`, fishday untouched · headless-Chrome screenshot of the
+  Arrival day mid-run: correct "Day 1 · Arrival · 05:00" clock, 11 duty-holders animating, Efficiency 100% / idle
+  0 live, the "Ferry time known only to the PM" gap as a live warning, Performance cleared, **zero JS errors**.
+- **Deferred (cosmetic):** a real Arrival/Return boat arc; coarse info-motes from `handoffsForSeg`.
