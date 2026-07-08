@@ -1046,7 +1046,7 @@ function drawSea_kimura(ctx, t, view, nightK) {
   if (!view.rm) sparkle(ctx, tipX + 0.8 * scale, 1 * scale, 2 * scale, 0.4 + 0.3 * Math.sin(t * 3.1));
   ctx.restore();
   // draft label (scaled chip, world space)
-  chip(ctx, cx, cy + 8 * scale, 'Kimura-san 🎣', {
+  chip(ctx, cx, cy + 8 * scale, (_lang === 'ja' ? 'きむらさん 🎣' : 'Kimura-san 🎣'), {
     font: '600 ' + Math.round(9 * scale) + 'px system-ui,sans-serif',
     pad: 3 * scale, h: 12 * scale, r: 2 * scale, alpha: 0.85
   });
@@ -1637,7 +1637,7 @@ function drawBoat(ctx, sim, t, view) {
   ctx.restore();
 
   // NEW GEOGRAPHY draft label under Nobu-san's skiff (world space — after the flip/bob restore)
-  chip(ctx, cx, cy + 10 * scale, 'Nobu-san 🛥', {
+  chip(ctx, cx, cy + 10 * scale, (_lang === 'ja' ? 'のぶさん 🛥' : 'Nobu-san 🛥'), {
     font: '600 ' + Math.round(9 * scale) + 'px system-ui,sans-serif',
     pad: 3 * scale, h: 12 * scale, r: 2 * scale, alpha: 0.85
   });
