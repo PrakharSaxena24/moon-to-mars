@@ -482,6 +482,36 @@ button{font-family:inherit;}
 .fix-apply{flex-shrink:0;white-space:nowrap;}
 .fix-clean{font-size:13.5px;color:var(--build-dark);background:rgba(91,107,69,.1);border:1px solid rgba(91,107,69,.35);border-radius:var(--r-md);padding:12px;text-align:center;}
 
+/* ============ SCORE LEDGER (§Phase3b) — bucket -> dimension -> atom rows ============ */
+.ledger{display:flex;flex-direction:column;gap:12px;max-height:600px;overflow-y:auto;overflow-x:auto;padding-right:2px;}
+.lg-bucket{border:1px solid var(--line2);border-radius:var(--r-md);background:var(--bg1);overflow:hidden;}
+.lg-bhead{display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:9px 13px;background:var(--bg2);
+  font-family:var(--serif);font-size:14px;font-weight:700;color:var(--ink);border-bottom:1px solid var(--line);position:sticky;top:0;}
+.lg-bhead b{font-family:var(--serif);font-size:15px;white-space:nowrap;}
+.lg-dim{padding:7px 13px 11px;}
+.lg-dim + .lg-dim{border-top:1px dashed var(--line);}
+.lg-dhead{display:flex;justify-content:space-between;gap:10px;font-size:11px;font-weight:700;letter-spacing:.5px;
+  text-transform:uppercase;color:var(--ink3);padding:6px 0 6px;}
+.lg-rows{display:flex;flex-direction:column;gap:5px;min-width:0;}
+.lg-row{display:grid;grid-template-columns:1fr auto minmax(0,1.5fr) auto;gap:10px;align-items:center;
+  border:1px solid var(--line);border-radius:var(--r-sm);padding:6px 10px;font-size:12.5px;background:var(--bg1);
+  min-width:0;transition:filter .15s ease;}
+.lg-row:hover{filter:brightness(1.04);}
+.lg-row.full{border-color:rgba(91,107,69,.35);background:rgba(91,107,69,.07);}
+.lg-row.partial{border-color:rgba(193,122,31,.42);background:rgba(193,122,31,.08);}
+.lg-row.zero{border-color:rgba(161,61,47,.42);background:rgba(161,61,47,.08);}
+.lg-name{font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.lg-reason{color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.lg-pts{font-variant-numeric:tabular-nums;font-weight:700;text-align:right;white-space:nowrap;}
+.lg-row.full .lg-pts{color:var(--build-dark);}
+.lg-row.partial .lg-pts{color:var(--idle-dark);}
+.lg-row.zero .lg-pts{color:var(--wait-dark);}
+.lg-chip{font-size:10px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;padding:2px 8px;
+  border-radius:999px;white-space:nowrap;text-align:center;}
+.lg-chip.full{background:rgba(91,107,69,.18);color:var(--build-dark);}
+.lg-chip.partial{background:rgba(193,122,31,.2);color:var(--idle-dark);}
+.lg-chip.zero{background:rgba(161,61,47,.18);color:var(--wait-dark);}
+
 .indivwrap{overflow-x:auto;}
 .indiv{width:100%;border-collapse:collapse;font-size:12.5px;}
 .indiv th{text-align:right;color:var(--ink3);font-size:11px;font-weight:700;padding:6px 8px;border-bottom:1px solid var(--line2);white-space:nowrap;}
@@ -687,6 +717,11 @@ button{font-family:inherit;}
   .controls{flex-direction:column;}
   .toprow{flex-wrap:wrap;}
   .toprow .row2{flex-wrap:wrap;}
+  .ledger{max-height:420px;}
+  .lg-row{grid-template-columns:1fr auto;grid-template-areas:"name chip" "reason reason" "pts pts";row-gap:4px;}
+  .lg-name{grid-area:name;} .lg-chip{grid-area:chip;justify-self:end;}
+  .lg-reason{grid-area:reason;white-space:normal;}
+  .lg-pts{grid-area:pts;}
 }
 @media(prefers-reduced-motion:reduce){
   /* every decorative animation off; JS-driven motion is separately gated on the same media query */
@@ -695,6 +730,7 @@ button{font-family:inherit;}
   .fd-socket.miss,.fd-slot,.r-badge.show,.guest .g-body,.gull,.splash,.water::after,
   .boat .bcore,.boat.sailing .bcore,.path,.dinnertag.late,#fd-projected.bump,
   .btn.glow,.ld-panel.on,.bigreadout.gold{animation:none !important;}
+  .lg-row{transition:none !important;} .lg-row:hover{filter:none;}
   /* hand-off arrival cue stays visible without motion: a static ring while the class is held */
   .station.ping .st-ic{animation:none !important;box-shadow:0 0 0 5px rgba(227,196,107,.5), 0 4px 10px rgba(0,0,0,.4) !important;}
   .station.ping-red .st-ic{animation:none !important;box-shadow:0 0 0 5px rgba(217,83,79,.55), 0 4px 10px rgba(0,0,0,.4) !important;}

@@ -1464,14 +1464,20 @@
     // the merged plan.days[seg] (same source as the report), not the classic score() (which grades the frame).
     var coarseMin = s.mode === 'minute' && s.segment !== 'fishday';
     var sc = coarseMin ? P.scoreDay(s.plan, s.segment) : P.score(s), t = T();
+    // §Phase3a — SWITCH: non-Live (Morning) runs read the readiness/efficiency headline off the
+    // whole-trip ledger (scoreTrip/tripEfficiency) instead of the legacy per-segment scorers above.
+    // Live keeps its legacy source untouched (Phase 4 retunes Live).
+    var trip = appMode !== 'live' ? P.scoreTrip(s.plan) : null;
+    var tripEff = appMode !== 'live' ? P.tripEfficiency(s.plan) : null;
     $('dash-day').textContent = s.mode === 'minute' ? (s.segment === 'fishday' ? t.fdDayLine(hhmm(s.clockMin)) : dayLabel(s.segment) + ' · ' + hhmm(s.clockMin)) : T().dayLine(Math.min(P.DAYS, Math.ceil(s.day)), P.DAYS);
     $('dash-phase').textContent = s.phaseLabel ? nm(s.phaseLabel) : '';
     // fishday: Efficiency % beside the grade (§9) + idle/rework minutes
     $('dash-fd').classList.toggle('hidden', s.mode !== 'minute');
     if (s.mode === 'minute') {
-      tweenNum($('dash-eff'), sc.efficiency, '%');
-      $('dash-eff-bar').style.width = sc.efficiency + '%';
-      $('dash-eff-bar').className = sc.efficiency >= 98 ? 'ok' : (sc.efficiency >= 90 ? 'mid' : 'bad');
+      var effVal = tripEff != null ? tripEff : sc.efficiency;
+      tweenNum($('dash-eff'), effVal, '%');
+      $('dash-eff-bar').style.width = effVal + '%';
+      $('dash-eff-bar').className = effVal >= 98 ? 'ok' : (effVal >= 90 ? 'mid' : 'bad');
       // idle accrued SO FAR (climbs live as the clock passes each waiting task's start)
       var idleSoFar = 0;
       if (s.sched) s.tasks.forEach(function (tk) {
@@ -1482,9 +1488,11 @@
       var ib = $('dash-idle-bar');
       if (ib) { var iw = Math.min(100, idleSoFar / 2.2); ib.style.width = iw + '%'; ib.className = idleSoFar <= 0 ? 'ok' : (iw > 40 ? 'bad' : 'mid'); }
     }
-    tweenNum($('dash-ready'), sc.score, '%');
-    $('dash-ready-bar').style.width = sc.score + '%';
-    $('dash-ready-bar').className = sc.score >= 75 ? 'ok' : (sc.score >= 60 ? 'mid' : 'bad');
+    var readyVal = trip ? trip.total : sc.score;
+    tweenNum($('dash-ready'), readyVal, '%');
+    $('dash-ready-bar').style.width = readyVal + '%';
+    $('dash-ready-bar').className = readyVal >= 75 ? 'ok' : (readyVal >= 60 ? 'mid' : 'bad');
+    $('dash-ready').style.color = trip ? GRADE_COLOR[trip.grade] : '';
     var bpct = Math.round(s.budget.spent / s.budget.total * 100);
     $('dash-budget-txt').textContent = '¥' + nf(s.budget.spent) + ' / ¥' + nf(s.budget.total);
     $('dash-budget-bar').style.width = bpct + '%';
@@ -1653,21 +1661,142 @@
   var CAT_KEY = { objective: 'catObjective', schedule: 'catSchedule', roles: 'catRoles', info: 'catInfo', budget: 'catBudget', safety: 'catSafety', quality: 'catQuality', health: 'catHealth' };
   var GRADE_COLOR = { A: 'var(--build)', B: 'var(--leader)', C: 'var(--idle)', D: 'var(--wait)' };
 
+  // =========================================================================
+  // §Phase3b — SCORE LEDGER: the whole-trip 100 (P.scoreTrip) rendered as a
+  // list where every point is a named, reasoned row, grouped bucket -> dimension
+  // -> atom. Reads only trip.atoms/byBucket (engine.js §13.2/§13.3); never writes.
+  // =========================================================================
+  var LEDGER_BUCKETS = ['frame', 'arrival', 'ops', 'fishday', 'return'];
+  var LEDGER_DIMS = ['info', 'exec', 'safety', 'quality', 'money', 'people'];
+  var LEDGER_TITLE = { en: 'Score Ledger — every point, named', ja: '採点台帳 — すべての得点に理由' };
+  // a coarse/fishday single-day report shows that bucket + the trip-wide 'frame' bucket
+  // (frame atoms are standing authorities, not tied to one day); 'all' shows all five.
+  function ledgerBucketsFor(segment) {
+    if (segment === 'all') return LEDGER_BUCKETS;
+    return segment === 'frame' ? ['frame'] : ['frame', segment];
+  }
+  // only 4 gate atoms (money/evac authority checks with no card or task) carry neither a
+  // cardId nor a taskId nor a truthy detectorId — humanize the atom id as a last resort so
+  // every row still names something (strip the bucket_/dimension_ prefixes it was built with).
+  function ledgerHumanizeId(id, bucket) {
+    var s = id || '';
+    var bp = bucket + '_'; if (s.indexOf(bp) === 0) s = s.slice(bp.length);
+    for (var i = 0; i < LEDGER_DIMS.length; i++) { var dp = LEDGER_DIMS[i] + '_'; if (s.indexOf(dp) === 0) { s = s.slice(dp.length); break; } }
+    s = s.replace(/_/g, ' ');
+    return s ? s.charAt(0).toUpperCase() + s.slice(1) : id;
+  }
+  // explicit bilingual labels for the gate atoms whose itemRef carries no card/task and no
+  // (truthy) detectorId — otherwise ledgerHumanizeId would surface a raw-id hack ("Transport
+  // auth", "Evac plan"). The two frame abort gates share one detector label ("Safety authority
+  // (sea / night)"), so name them apart here too (sea vs night) — worded off the same budget-line
+  // / risk data they are priced against, so the ledger reads like the rest of the UI.
+  var LEDGER_ITEM_NM = {
+    frame_abort_sea: { en: 'Rough-sea abort authority', jp: '時化時の中止権限' },
+    frame_abort_night: { en: 'Night-sea abort authority', jp: '夜間の中止権限' },
+    arrival_money_transport_auth: { en: 'Transport budget sign-off', jp: '交通費の承認' },
+    ops_money_onsite_auth: { en: 'On-site budget sign-off', jp: '現地費の承認' },
+    ops_money_tackle_auth: { en: 'Gear / tackle budget sign-off', jp: '道具費の承認' },
+    return_safety_evac_plan: { en: 'Typhoon evacuation plan', jp: '台風時の避難計画' }
+  };
+  // resolve a bilingual display name for one atom's itemRef, off the SAME arrays the atom
+  // was priced against: socket/gate-with-card -> the info card; lane/gate-with-task/decoy ->
+  // the task(s) via P.tasksForSeg(plan,bucket) (fishday included — tasksForSeg dispatches);
+  // gate-with-detector -> the existing problem-panel label (e_<id>_label).
+  function ledgerItemName(plan, atom) {
+    var ref = atom.itemRef, bucket = atom.bucket, roleName, tasks, tids, names, i, tk, card;
+    if (LEDGER_ITEM_NM[atom.id]) return nm(LEDGER_ITEM_NM[atom.id]);
+    if (!ref) return ledgerHumanizeId(atom.id, bucket);
+    if (ref.cardId) {
+      card = byId(plan.infoCards, ref.cardId);
+      roleName = ref.roleId ? nm(P.role(ref.roleId).name) : '';
+      return (card ? nm(card.name) : ref.cardId) + (roleName ? ' → ' + roleName : '');
+    }
+    if (ref.taskId) {
+      tids = Array.isArray(ref.taskId) ? ref.taskId : [ref.taskId];
+      tasks = bucket === 'frame' ? [] : P.tasksForSeg(plan, bucket);
+      names = [];
+      for (i = 0; i < tids.length; i++) { tk = byId(tasks, tids[i]); names.push(tk ? nm(tk.name) : tids[i]); }
+      roleName = ref.roleId ? nm(P.role(ref.roleId).name) : '';
+      return (roleName ? roleName + ': ' : '') + names.join(' · ');
+    }
+    if (ref.detectorId) return T()['e_' + ref.detectorId + '_label'] || ref.detectorId;
+    return ledgerHumanizeId(atom.id, bucket);
+  }
+  // status -> {sst_*} chip label; 'present-but-late' (a riskable socket drawn but late, 1/3
+  // partial credit) has no dedicated chip key, so it reads as the existing 'late' chip.
+  var LEDGER_STATUS_KEY = { ok: 'ok', missing: 'missing', late: 'late', broken: 'broken', overlap: 'overlap', compressed: 'compressed', decoy: 'decoy', 'present-but-late': 'late' };
+  function ledgerChip(status) { return T()['sst_' + (LEDGER_STATUS_KEY[status] || 'missing')] || status; }
+  // reasonKey is almost always a plain scr_* string; a couple may be function-valued (take
+  // reasonParams) per the ledger contract, so honor both.
+  function ledgerReason(atom) {
+    var v = T()[atom.reasonKey];
+    if (typeof v === 'function') return v(atom.reasonParams || {});
+    return v || atom.reasonKey;
+  }
+  // earned/max -> full (calm/green) | partial (amber) | zero (stands out/red). A decoy row
+  // (maxPts 0) is 'full' when clean (not placed) and 'zero' only when its penalty actually bit.
+  function ledgerTier(atom) {
+    if (atom.maxPts > 0) return atom.earned >= atom.maxPts ? 'full' : (atom.earned > 0 ? 'partial' : 'zero');
+    return atom.earned < 0 ? 'zero' : 'full';
+  }
+  function renderLedger(trip, segment) {
+    var plan = currentPlan(), buckets = ledgerBucketsFor(segment), i, a;
+    var titleEl = $('ledger-title'); if (titleEl) titleEl.textContent = LEDGER_TITLE[L] || LEDGER_TITLE.en;
+    // hide the legacy 8-cat scorecard now that the ledger is the primary breakdown (code kept,
+    // just hidden — nothing else that reads/writes #scorecard's innerHTML is touched).
+    var scCard = $('scorecard') && $('scorecard').closest('.card'); if (scCard) scCard.classList.add('hidden');
+    var byBucketDim = {};
+    for (i = 0; i < trip.atoms.length; i++) {
+      a = trip.atoms[i]; if (buckets.indexOf(a.bucket) < 0) continue;
+      byBucketDim[a.bucket] = byBucketDim[a.bucket] || {};
+      (byBucketDim[a.bucket][a.dimension] = byBucketDim[a.bucket][a.dimension] || []).push(a);
+    }
+    $('ledger').innerHTML = buckets.map(function (bk) {
+      var bStat = trip.byBucket[bk], dims = byBucketDim[bk] || {};
+      var dimHtml = LEDGER_DIMS.filter(function (d) { return dims[d] && dims[d].length; }).map(function (d) {
+        var group = dims[d], dEarned = 0, dMax = 0, j;
+        for (j = 0; j < group.length; j++) { dMax += group[j].maxPts; dEarned += group[j].earned; }
+        var rows = group.map(function (atom) {
+          var tier = ledgerTier(atom), pts = atom.maxPts > 0 ? (atom.earned + '/' + atom.maxPts) : String(atom.earned);
+          return '<div class="lg-row ' + tier + '">' +
+            '<span class="lg-name">' + ledgerItemName(plan, atom) + '</span>' +
+            '<span class="lg-chip ' + tier + '">' + ledgerChip(atom.status) + '</span>' +
+            '<span class="lg-reason">' + ledgerReason(atom) + '</span>' +
+            '<span class="lg-pts">' + pts + '</span></div>';
+        }).join('');
+        return '<div class="lg-dim"><div class="lg-dhead"><span>' + T()['sd_' + d] + '</span><b>' + dEarned + ' / ' + dMax + '</b></div>' +
+          '<div class="lg-rows">' + rows + '</div></div>';
+      }).join('');
+      return '<div class="lg-bucket"><div class="lg-bhead"><span>' + T()['sb_' + bk] + '</span><b>' + bStat.earned + ' / ' + bStat.maxPts + '</b></div>' + dimHtml + '</div>';
+    }).join('');
+  }
+
   function renderReport(res) {
     // the individuals table has no coarse-day (scoreDay) analogue — hide its card for a coarse
     // report, and restore it for the animated fishday/whole-trip paths (idempotent either way).
     var indivCard = $('individuals').closest('.card');
     if (res.coarse) { if (indivCard) indivCard.classList.add('hidden'); renderDayReport(res); return; }
     if (indivCard) indivCard.classList.remove('hidden');
-    var t = T(), sc = res.trip, day = res.day, head = day || sc;
-    $('r-grade').textContent = head.grade; $('r-grade').style.color = GRADE_COLOR[head.grade];
+    var t = T(), sc = res.trip, day = res.day;
+    // §Phase3a — SWITCH: the headline grade/score/verdict now comes from the whole-trip ledger
+    // (scoreTrip) — one currency across the trip. A single-day (fishday) run sees that day's SLICE
+    // of the trip 100 (the day-slice line below); a whole-trip ('all') run sees the full total.
+    // The scorecard/fix-pack/individuals panels below stay on the legacy per-run scorers (sc/day) —
+    // the itemized-ledger swap for those is a later phase.
+    var trip = P.scoreTrip(currentPlan());
+    $('r-grade').textContent = trip.grade; $('r-grade').style.color = GRADE_COLOR[trip.grade];
+    var perfect = trip.gate.clean && trip.grade === 'A';
+    var badge = $('r-badge'); badge.textContent = perfect ? (day ? t.badgeDayClean : t.badgePerfect) : ''; badge.classList.toggle('show', perfect);
+    if (trip.gate.withheldA) {
+      $('r-verdict').textContent = t.gradeGateB(trip.total);
+    } else if (day) {
+      $('r-verdict').textContent = day.clean ? t.rDayScoreOk(dayLabel(res.segment), trip.total) : t.rDayScoreGaps(dayLabel(res.segment), trip.total, day.gaps);
+    } else {
+      $('r-verdict').textContent = trip.total + ' / 100 — ' + (sc.reason === 'done' ? t.rDone : t.rIncomplete);
+    }
     if (day) {
-      $('r-verdict').textContent = day.clean ? t.rDayDone(dayLabel(res.segment)) : t.rDayGaps(dayLabel(res.segment));
-      var perfectD = day.clean && day.grade === 'A';
-      var bd = $('r-badge'); bd.textContent = perfectD ? t.badgeDayClean : ''; bd.classList.toggle('show', perfectD);
       $('r-conds').innerHTML = '<span class="cond ' + (day.clean ? 'met' : 'unmet') + '">' + (day.clean ? '✓' : '✗') + ' ' + t.dayTasksLine(day.tasksDone, day.tasksTotal) + '</span>';
       if (res.segment === 'fishday') {
-        var perfectFd = sc.efficiency === 100 && sc.idleMin === 0;
         $('r-conds').innerHTML +=
           '<span class="cond ' + (sc.efficiency === 100 ? 'met' : 'unmet') + '">' + t.rcEff(sc.efficiency) + '</span>' +
           '<span class="cond ' + (sc.idleMin === 0 ? 'met' : 'unmet') + '">' + t.rcIdle(sc.idleMin) + '</span>' +
@@ -1676,10 +1805,10 @@
           (sc.dinnerMin != null ? '<span class="cond ' + (sc.dinnerMin <= 1080 ? 'met' : 'unmet') + '">' + t.rcDinner(hhmm(sc.dinnerMin)) + '</span>' : '') +
           (sc.handFed ? '<span class="cond unmet">' + t.handFedNote(sc.handFed) + '</span>' : '');
       }
+      // §Phase3a — the day-slice line: this segment's earned/max share of the whole-trip 100.
+      var b = trip.byBucket[res.segment];
+      if (b) $('r-conds').innerHTML += '<span class="cond">' + t.daySliceLine(b.earned, b.maxPts, dayLabel(res.segment)) + '</span>';
     } else {
-      $('r-verdict').textContent = sc.reason === 'done' ? t.rDone : t.rIncomplete;
-      var perfect = sc.clean && sc.grade === 'A';
-      var badge = $('r-badge'); badge.textContent = perfect ? t.badgePerfect : ''; badge.classList.toggle('show', perfect);
       $('r-conds').innerHTML = sc.conditions.map(function (c) {
         return '<span class="cond ' + (c.met ? 'met' : 'unmet') + '">' + (c.met ? '✓' : '✗') + ' ' + nm(c.text) + '</span>';
       }).join('');
@@ -1706,6 +1835,7 @@
         td(iv.action) + td(iv.decision) + td(iv.load, true) + td(iv.fatigue, true) + td(iv.coop) + td(iv.contribution) + '</tr>';
     }).join('');
     $('individuals').innerHTML = th + rows;
+    renderLedger(trip, res.segment);
   }
 
   // §20 Phase 5: coarse-day (arrival/ops/return) report — scored straight off the authored
@@ -1714,11 +1844,22 @@
   function renderDayReport(res) {
     var t = T(), seg = res.segment, sc = res.day, plan = currentPlan();
     var hints = P.dayReadiness(plan, seg);
-    $('r-grade').textContent = sc.grade; $('r-grade').style.color = GRADE_COLOR[sc.grade];
-    $('r-verdict').textContent = sc.clean ? t.rDayScoreOk(dayLabel(seg), sc.score) : t.rDayScoreGaps(dayLabel(seg), sc.score, hints.length);
-    var perfectD = sc.clean && sc.grade === 'A';
+    // §Phase3a — SWITCH: headline grade/score/verdict from the whole-trip ledger (scoreTrip); this
+    // day's own 8-category scorecard + fix-list below still read the legacy sc (P.scoreDay)/hints —
+    // that swap is a later phase.
+    var trip = P.scoreTrip(plan);
+    $('r-grade').textContent = trip.grade; $('r-grade').style.color = GRADE_COLOR[trip.grade];
+    if (trip.gate.withheldA) {
+      $('r-verdict').textContent = t.gradeGateB(trip.total);
+    } else {
+      $('r-verdict').textContent = sc.clean ? t.rDayScoreOk(dayLabel(seg), trip.total) : t.rDayScoreGaps(dayLabel(seg), trip.total, hints.length);
+    }
+    var perfectD = trip.gate.clean && trip.grade === 'A';
     var bd = $('r-badge'); bd.textContent = perfectD ? t.badgeDayClean : ''; bd.classList.toggle('show', perfectD);
+    // the day-slice line: this segment's earned/max share of the whole-trip 100
+    var b = trip.byBucket[seg];
     $('r-conds').innerHTML =
+      (b ? '<span class="cond">' + t.daySliceLine(b.earned, b.maxPts, dayLabel(seg)) + '</span>' : '') +
       '<span class="cond ' + (sc.efficiency === 100 ? 'met' : 'unmet') + '">' + t.rcEff(sc.efficiency) + '</span>' +
       '<span class="cond ' + (sc.idleMin === 0 ? 'met' : 'unmet') + '">' + t.rcIdle(sc.idleMin) + '</span>' +
       '<span class="cond ' + (sc.reworkMin === 0 ? 'met' : 'unmet') + '">' + t.rcRework(sc.reworkMin) + '</span>' +
@@ -1750,6 +1891,7 @@
       return '<div class="fix-row" data-type="' + h.type + '"><div class="fix-main"><div class="fix-body">' + hintTxt(h) + '</div></div></div>';
     }).join('') + '<button class="btn primary" id="btn-day-autofix">' + t.autoArrangeBtn + '</button>';
     $('individuals').innerHTML = '';
+    renderLedger(trip, seg);
   }
 
   // "Auto-arrange the arrows ▶" — the coarse-day analogue of the fishday fix-pack: heal this
