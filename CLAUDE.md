@@ -300,7 +300,15 @@ by day-window + `deps` and pulls stalled characters to a gap station) — it doe
 
 ---
 
-## 9. Scoring — Efficiency + the 8 categories (採点)
+## 9. Scoring — Efficiency + the 8 categories (採点) ⟶ headline score SUPERSEDED by §23
+> **Superseded 2026-07-09 by §23:** the headline "Score / Grade" below is no longer the internal
+> `score()`'s 8-category total — it's `window.PRS.scoreTrip(plan)`, a whole-trip 100 authored as ~90
+> integer-priced named atoms (see the blueprint spec `docs/superpowers/specs/2026-07-09-scoring-blueprint-design.md`).
+> `score()` and its 8 categories are **retained internally** (still feed `individuals`/`team`/`conditions`
+> + the classic fix-pack to `renderReport`) but their total/grade are no longer shown as the headline. The
+> worked example in §9.1 below is the **pre-refactor** ledger; kept for history. Efficiency (this section's
+> other headline) is unchanged in spirit, now computed by `tripEfficiency(plan)` — see §23.
+
 **Two headline numbers, side by side** (they may diverge — a plan can waste 4% of time yet be un-shippable
 because the abort authority is unassigned):
 
@@ -683,7 +691,12 @@ deck→arrange→connect editor. §19's `dayLayout`/`derivedHandoffs` + read-onl
 - Untouched: plan.tasks, plan.handoffs, all 30 FD tasks + canonical/gappy arrows, CHANNELS, CHECKPOINTS,
   the 8 detectors, applyFix/applyAllFixes, score(), CAT_MAX, Layer-0 helpers, budgetReadiness, intervene.
 
-### 20.4 Scoring formula (deterministic; R = required tasks, ds = daySchedule(plan,seg))
+### 20.4 Scoring formula (deterministic; R = required tasks, ds = daySchedule(plan,seg)) ⟶ SUPERSEDED by §23
+> **Superseded 2026-07-09 by §23:** `scoreDay` is no longer a fresh 0–100 per day — it's re-denominated to
+> report the day's **slice of the trip 100** (e.g. "Fishing Day: 33 of its 41 trip points"), reading off the
+> same `scoreTrip` atom ledger. The formula below is the **pre-refactor** per-day 8-category model; kept for
+> history (`score()`'s 8 categories, described here, remain the internal provider — see §9's note and §23).
+
 `objective = 20×(|R|−|unplacedRequired|)/|R|` · `schedule = 15×(1−min(1,(idle+overbook)/avail)) −2×decoysPlaced
 −(fatigue?2) −(seg==='return'&&returnLogi?2)` · `roles = 15 −3×|misassigned| −classic-roles` · `info = 15
 −5×|missing| −3×|late|` · `budget = 10 −(budgetAuth?6)−(reserve?4)` · `safety = 10 −(safety?10)−3×safety-decoys`
@@ -1041,3 +1054,57 @@ Built a full-screen `#intro` welcome screen shown on first load.
 - **Verified:** `node verify.js` still **196/196** (engine untouched); headless-Chrome screenshots of the intro in
   EN and JP (full role-coloured pawns, correct names/roles/duties, clean layout); a DOM check that `Start ▶`
   transitions intro→`#run` (`body.running`) with **zero JS errors**.
+
+---
+
+## 23. Whole-trip scoring — the scoreTrip ledger (SHIPPED 2026-07-09)
+Owner direction: make the 100 a **whole-trip receipt** — every point one named, checkable thing the player
+did or didn't do — with the temporal-information axis (the arrows) as the heaviest, honest lever. Fully
+specified in the blueprint spec `docs/superpowers/specs/2026-07-09-scoring-blueprint-design.md` (read §0/§3/§13
+for the authoritative model); this is the as-built summary. Supersedes the headline numbers in §9 and the
+per-day formula in §20.4 (both marked above; `score()`/`scoreDay` are retained as internal machinery, not dead).
+
+- **The model.** `window.PRS.scoreTrip(plan)` prices the **whole 10-day trip** as ~90 named, integer-priced
+  atoms summing to **exactly 100** — no fractional points, no top-down re-normalization. Every atom is one of:
+  a required task placed & staffed on the right role (**Execution**), an info-card→consuming-task socket
+  delivered on time (**Information** — priced on the socket, not the drawn wire, so redundant arrows can't
+  inflate the score), a gate owned (go/no-go, abort/budget authority, allergy, health-check — **Safety/
+  Money/Quality**), or a decoy debit if a decoy task got placed. Atoms group into **5 buckets** (Trip Frame ·
+  Arrival · Ops · Fishing Day · Return) × **6 dimensions** (Information 34 / Execution 25 / Safety 20 /
+  Quality 10 / Money 10 / People 1) — both axes sum to 100. **Fishing Day (41 pts, 54% information) is the
+  heaviest bucket** and Information is the heaviest dimension, because the thesis says clocked information
+  is the heart, not by arbitrary weight.
+- **Two headlines stay distinct.** `scoreTrip` = *is the plan sound?* (causes — plan decisions). The
+  companion `tripEfficiency(plan)` = *does it waste anyone's time?* (effects — minute-weighted Σproductive/
+  Σavailable over the 4 modeled days). A late info-socket bills **both**: the Score row (information has a
+  clock) and Efficiency (the idle it caused) — one fault, two numbers, never two rows in one number.
+- **Grade gate replaces the old cap.** The pre-refactor "!clean caps total at 89" is gone. Now: **A requires
+  total ≥ 90 AND clean** (zero known gaps); a plan that scores high but has a surviving gap shows its **true**
+  sum with a withheld A — `"97 · B — an A requires zero known gaps."` A number no longer lies to hide a cap.
+- **The seed was re-tuned** so the climax still lands under the new honest pricing: **9 of the 14 fishday
+  information arrows are withheld** and **Arrival is half-cleared**, so the gappy seed scores **54/D**; the
+  true canonical (all classic fixes + `applyDayFix`×3, drawing every arrow) scores **100/A/clean**; and
+  **drawing the information arrows is still the single biggest jump (+18)** — bigger than any classic fix or
+  authoring Arrival — the intended teaching payoff, preserved.
+- **The report** now renders an itemized **Score Ledger — every point, named**: grouped bucket → dimension →
+  atom, each row = item name + status chip + reason (迷い "never specified" / 手待ち "arrived late" / on time)
+  + earned/max. `scoreDay` is retained but **re-denominated** to a day-slice of the trip 100 ("Fishing Day: 33
+  of its 41 trip points") rather than a fresh 0–100. `score()`/`scoreDay`'s 8-category totals stay internal-only
+  — they still feed `individuals`/`team`/`conditions` + the classic fix-pack to `renderReport`, just not the
+  headline.
+- **Built in 3 phases (P1–P3), each Opus-QA-gated:** P1 landed `scoreTrip`/`tripEfficiency` structurally
+  alongside the legacy scorers (Σ maxPts = 100 asserted from day one, atoms scoring 0 until content existed) —
+  commit `b82fbf7`. P2 made the free-point atoms real (hospital-info routing, night abort-criterion, allergy
+  gate, portions check, crew health-check) and re-tuned the seed — commit `214d716`. P3 switched the
+  report/dashboard to read `scoreTrip` + the itemized ledger as the headline — commit `1063c3d`. Opus QA
+  caught and fixed a fishday-misassignment false-credit bug along the way, confirmed migrated reference-plan
+  pins were still correct, and reconciled the rendered ledger to `scoreTrip`'s sum exactly.
+- **Verified:** `node verify.js` **236/236** — structural (Σ maxPts = 100 exactly, `byBucket`/`byDimension`
+  totals match the §3.3 table, determinism, purity vs `score()`/plan mutation) + numeric (gappy 54/D, canonical
+  100/A/clean, monotone fix ladder, arrow-draw = largest single jump, both beating every other fix). Not yet
+  pushed to GitHub.
+- **Deferred / known:** Live mode's gap pacing (`nextLiveGap`) was retuned for ~10 arrow gaps under the new
+  seed but may want convergence-grouping (pre-departure info / catch relay) in a later pass; the coarse
+  "Auto-arrange the arrows" button (`applyDayFix`) drops its placement patch on a gappy day, capping that
+  path ~92 — pre-existing behavior, not a regression, future pass; allergy/portions/health-check gates are
+  defensive atoms (rarely fail on a well-formed plan) by design, not a gap in the model.
