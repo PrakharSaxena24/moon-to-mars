@@ -36,6 +36,15 @@
   var IDLE_CAP = 60;             // idle charged to a task whose needed arrow was never drawn
   var CHANNELS = { faceToFace: 0, radio: 1, phone: 2, chat: 10, board: 30 }; // send latency, minutes
 
+  // §13.1/refinement-1: species -> allergen CATEGORY map, so the allergy gate checks a real
+  // category intersection (ic_food.allergens holds category tokens like 'shellfish') instead
+  // of a literal species/category string match. skipjack/mackerel are 'fish' (never intersects
+  // a 'shellfish' allergen); shrimp/crab/prawn/lobster are 'shellfish' (correctly FAILS).
+  var SPECIES_CATEGORIES = {
+    skipjack: ['fish'], mackerel: ['fish'], tuna: ['fish'], sabaFish: ['fish'],
+    shrimp: ['shellfish'], crab: ['shellfish'], prawn: ['shellfish'], lobster: ['shellfish']
+  };
+
   // ---- coarse-day (arrival/ops/return) READ-ONLY hour-Gantt tunables (SPEC v2 §ENGINE) ----
   var DAY_HOUR_START = 300;      // 05:00 — coarse-day grid window opens
   var DAY_HOUR_END = 1140;       // 19:00 — coarse-day grid window closes (14h window)
@@ -168,12 +177,21 @@
         'Catch logged · ETA dockside 14:00 on schedule', '釣果記録・帰港予定14:00 定刻')
     ];
   }
+  // §7/§13.4 P2 seed re-tune: withhold MOST of the 14 canonical arrows — today's ~12/14
+  // pre-drawn made the arrows a footnote; the gappy seed should make "draw the information
+  // arrows" the core puzzle (the single biggest lever toward 100, §7). Ships only 4 pre-drawn
+  // on-time examples (KEPT_ONTIME) + 1 pre-drawn but LATE arrow (h_tackle, the classic
+  // 迷い-vs-手待ち contrast) — the other 9 of 14 are never drawn until the player (or
+  // fixHandoffs/canonHandoffs) draws them.
+  var GAPPY_KEPT_ONTIME = { h_food: 1, h_headcount: 1, h_catch_chef: 1, h_target: 1 };
+  var GAPPY_LATE = { h_tackle: { trigger: { type: 'atMinute', value: 360 }, channel: 'chat' } }; // 06:00 on chat -> 06:10, 40 min late
   function gappyHandoffs() {
     var out = [];
     canonHandoffs().forEach(function (h) {
-      if (h.id === 'h_menu_angler' || h.id === 'h_menu_boat') return;                    // GAP H1: never drawn
-      if (h.id === 'h_tackle') { h.trigger = { type: 'atMinute', value: 360 }; h.channel = 'chat'; } // GAP H2: 06:00 on chat -> 06:10, 40 min late
-      out.push(h);
+      if (GAPPY_LATE[h.id]) { for (var k in GAPPY_LATE[h.id]) h[k] = GAPPY_LATE[h.id][k]; out.push(h); return; }
+      if (GAPPY_KEPT_ONTIME[h.id]) { out.push(h); return; }
+      // withheld: never drawn (迷い) — the other 9 canonical arrows, incl. 3 of the 4
+      // wrong-fish-riskable sockets (h_menu_angler, h_menu_boat, h_ground_angler)
     });
     return out;
   }
@@ -214,8 +232,40 @@
         baseStartMin: (typeof o.baseStartMin === 'number') ? o.baseStartMin : startMin, // promised time; see FD's comment above
         deps: o.deps || [], difficulty: o.diff || 2, neededResources: o.res || [], neededInfo: o.info || [],
         produces: o.produces || [], assumeOn: o.assumeOn || [],
-        required: o.required === false ? false : true, guestFacing: !!o.guestFacing };
+        required: o.required === false ? false : true, guestFacing: !!o.guestFacing,
+        safetyFlag: !!o.safetyFlag }; // §13.1: decoy debit is safety-flavored (-3) when true, else -2
     }
+    // §7/§13.4 P2 seed re-tune — Arrival ships PRE-CLEARED (empty board) as the tutorial: the
+    // required tasks below are authored with their full canonical placement (assignedIds/
+    // startMin/durMin), captured into arrivalCanonPlacement, then blanked to assignedIds:[] so
+    // the SHIPPED template hands the player an empty board. canonDay('arrival')/applyDayFix use
+    // arrivalCanonPlacement to restore the placements (not just the handoffs) so the canonical
+    // Arrival still reaches its full 15/15 (§13.4 acceptance).
+    var arrivalReqTasks = [
+      HD('hd_a_ferrycheck',   'Confirm ferry departure & manifest', '船便出港時刻・乗船名簿確認',       'port',    'pm',         ['p02'], 300, 60,  { produces: ['ic_ferry'] }),
+      HD('hd_a_board',        'Ferry boarding & assemble',          '乗船確認・集合',                   'port',    'logi',       ['p06'], 360, 60,  { deps: ['hd_a_ferrycheck'], info: ['ic_ferry'] }),
+      HD('hd_a_cross',        'Sea crossing & seasickness watch',   '渡航・船酔い対応',                 'vessel',  'siteLead',   ['p03'], 420, 180, { deps: ['hd_a_board'], diff: 3 }),
+      HD('hd_a_checkin',      'Check-in & room assignment',         '受付・部屋割り',                   'lodging', 'logi',       ['p06'], 600, 60,  { deps: ['hd_a_cross'], produces: ['ic_rooms'] }),
+      HD('hd_a_foodsource',   'Food source & allergy check',        '食材調達・アレルギー確認',         'finance', 'budgetLead', ['p04'], 660, 60,  { produces: ['ic_food'] }),
+      HD('hd_a_intake',       'Supply & gear intake (drinks, tackle, food, ice)', '物資・釣具搬入（飲料・釣具・食材・氷）', 'lodging', 'logi', ['p06'], 660, 60, { deps: ['hd_a_checkin'], produces: ['ic_tackle'], res: ['storage'] }),
+      HD('hd_a_safety',       'Safety briefing',                    '安全説明会',                       'clinic',  'safetyLead', ['p05'], 660, 60,  { diff: 3 }),
+      HD('hd_a_gearstow',     'Gear stow',                          '道具収納',                         'port',    'specialist', ['p08'], 720, 60,  { deps: ['hd_a_intake'], info: ['ic_tackle'] }),
+      HD('hd_a_dinnerprep',   'First-night meal prep',              '初日夕食仕込み',                   'mess',    'chef',       ['p09', 'p10'], 720, 120, { deps: ['hd_a_intake'], info: ['ic_food'], res: ['food'], diff: 3 }),
+      HD('hd_a_headcount',    'Arrival headcount',                  '到着点呼',                         'port',    'comms',      ['p07'], 840, 60,  { deps: ['hd_a_checkin'], info: ['ic_rooms'] }),
+      HD('hd_a_dinnerserve',  'First-night meal service',           '初日夕食提供',                     'mess',    'chef',       ['p09', 'p10', 'p11'], 1080, 60, { deps: ['hd_a_dinnerprep'], res: ['food'], guestFacing: true })
+    ];
+    var arrivalCanonPlacement = {};
+    // §7/§13.4 refinement-3: HALF-clear (not all 11) — leave the early-morning chain placed
+    // (ferry check -> board -> cross -> checkin -> intake -> headcount, 6 tasks) and clear the
+    // later/independent ones (food source, safety briefing, gear stow, dinner prep/serve, 5
+    // tasks), so authoring Arrival (canonDay/applyDayFix) is a ~+7-8 lever, not +14 — fixHandoffs
+    // stays the dominant single jump (§1 invariant). canonPlacement still captures ALL 11 so
+    // canonDay('arrival')/applyDayFix restore the full roster regardless of what ships blank.
+    var ARRIVAL_CLEARED = { hd_a_foodsource: 1, hd_a_safety: 1, hd_a_gearstow: 1, hd_a_dinnerprep: 1, hd_a_dinnerserve: 1 };
+    arrivalReqTasks.forEach(function (t) {
+      arrivalCanonPlacement[t.id] = { assignedIds: t.assignedIds.slice(), startMin: t.startMin, durMin: t.durMin };
+      if (ARRIVAL_CLEARED[t.id]) t.assignedIds = [];   // ships blank — the half-cleared tutorial board
+    });
     return {
       project: {
         id: 'ogasawara10',
@@ -310,6 +360,11 @@
         FD('t_f_fish',       'FISHING — catch to target', '釣り（目標数まで）', 'vessel', 'specialist', ['p08'], 480, 270, { deps: ['t_f_rig'], info: ['ic_ground'], assumeOn: ['ic_ground'], res: ['tackle'], diff: 4 }),
         FD('t_f_lunch',      'Guest lunch service', 'ゲスト昼食提供', 'mess', 'chef', ['p10', 'p11'], 660, 60, { res: ['food'], guest: true }),
         FD('t_f_tally',      'Catch tally & radio relay', '漁獲集計・無線連絡', 'vessel', 'specialist', ['p08'], 750, 15, { deps: ['t_f_fish'], produces: ['ic_catch'], diff: 1 }),
+        // PHASE 2b · owner & PM flex/standby (§13.1) — low-stakes, no neededInfo/deps, so they
+        // cannot alter the canonical cascade: remote work on another project / join the fishing /
+        // help the galley if needed (normally not needed). Gives 8 organizer lanes + galley = 9 exec atoms.
+        FD('t_f_flex_owner', 'Owner standby (remote work / join fishing / help galley if needed)', '代表待機（別件のリモート対応・釣り同行・厨房手伝いなど）', 'command', 'owner', ['p01'], 480, 60, { diff: 1 }),
+        FD('t_f_flex_pm',    'PM standby (remote coordination / join fishing / help galley if needed)', '総合責任者待機（リモート調整・釣り同行・厨房手伝いなど）', 'command', 'pm', ['p02'], 600, 60, { diff: 1 }),
         // PHASE 3 · relay -> return -> cook backward from 18:00 (12:45–18:45)
         FD('t_f_return',     'Return transit (dockside 14:00)', '帰港（14:00接岸）', 'vessel', 'siteLead', ['p03'], 765, 75, { deps: ['t_f_tally'], res: ['boat'], diff: 3 }),
         FD('t_f_stow',       'Stow gear en route', '帰航中の道具収納', 'vessel', 'specialist', ['p08'], 765, 75, { deps: ['t_f_tally'], diff: 1 }),
@@ -334,9 +389,10 @@
         { id: 'ic_rooms',    name: L('Room assignment', '部屋割り'),                 reason: L('Check-in flow and key handout.', 'チェックインと鍵配布のため。'),
           ownerRoleId: 'logi',       recipientRoleIds: ['siteLead', 'comms', 'logi'],                shareTiming: L('on arrival', '到着時'), secrecy: 'all', impactIfUnshared: L('Check-in chaos.', 'チェックイン混乱。') },
         { id: 'ic_hospital', name: L('Emergency hospital / evac', '緊急病院・搬送先'), reason: L('Needed instantly on injury/illness.', '負傷・体調不良時に即必要。'),
-          ownerRoleId: 'safetyLead', recipientRoleIds: ['pm', 'siteLead', 'comms', 'safetyLead'],    shareTiming: L('day before', '前日'), secrecy: 'all', impactIfUnshared: L('Delayed care, safety risk.', '手当遅延・安全リスク。') },
+          ownerRoleId: 'safetyLead', recipientRoleIds: ['pm', 'siteLead'],                          shareTiming: L('day before', '前日'), secrecy: 'all', impactIfUnshared: L('Delayed care, safety risk.', '手当遅延・安全リスク。') }, // GAP H3 (refinement-2): under-shared — comms/safetyLead missing -> frame_hospital_shared fails
         { id: 'ic_food',     name: L('Food source & allergy list', '食材調達先・アレルギー一覧'), reason: L('Avoid allergic reactions / diet errors.', 'アレルギー・食事ミスの防止。'),
-          ownerRoleId: 'budgetLead', recipientRoleIds: ['specialist', 'chef', 'budgetLead'],         shareTiming: L('day before', '前日'), secrecy: 'all', impactIfUnshared: L('Allergic incident, satisfaction drop.', 'アレルギー事故・満足度低下。') },
+          ownerRoleId: 'budgetLead', recipientRoleIds: ['specialist', 'chef', 'budgetLead'],         shareTiming: L('day before', '前日'), secrecy: 'all', impactIfUnshared: L('Allergic incident, satisfaction drop.', 'アレルギー事故・満足度低下。'),
+          allergens: ['shellfish'] }, // §13.1 make-real: machine-readable allergen list (was free text only)
         { id: 'ic_tackle',   name: L('Fishing tackle list', '釣り道具リスト'),       reason: L('Right gear per boat / spot.', '船・ポイント別の適切な道具。'),
           ownerRoleId: 'logi',       recipientRoleIds: ['siteLead', 'specialist', 'logi'],           shareTiming: L('day before', '前日'), secrecy: 'all', impactIfUnshared: L('Missing gear, trip delayed.', '道具不足・釣行遅延。') },
         { id: 'ic_return',   name: L('Return headcount confirmation', '帰着確認'),   reason: L('Confirm everyone is accounted for.', '帰着時に全員の所在を確認。'),
@@ -345,9 +401,11 @@
         { id: 'ic_weather',  name: L('Sea state, GO/NO-GO & abort criterion', '海況・出航可否・中止基準'), reason: L('Menu commits to caught fish only if the trip is a GO.', '出航できる場合のみ献立を釣果前提にできる。'),
           ownerRoleId: 'safetyLead', recipientRoleIds: ['chef', 'siteLead', 'safetyLead'],           shareTiming: L('dawn, before menu', '早朝・献立決定前'), secrecy: 'all', impactIfUnshared: L('Menu gambles on an unreachable catch.', '実現不能な釣果前提の献立になる。') },
         { id: 'ic_orgfood',  name: L('Organizer dinner add-on count', '運営の夕食追加数'), reason: L('Total portions = 13 guests + organizer requests.', '食数＝ゲスト13＋運営の希望数。'),
-          ownerRoleId: 'comms',      recipientRoleIds: ['chef', 'comms'],                            shareTiming: L('dawn, before menu', '早朝・献立決定前'), secrecy: 'all', impactIfUnshared: L('Portion count wrong at dinner.', '夕食の食数が合わない。') },
+          ownerRoleId: 'comms',      recipientRoleIds: ['chef', 'comms'],                            shareTiming: L('dawn, before menu', '早朝・献立決定前'), secrecy: 'all', impactIfUnshared: L('Portion count wrong at dinner.', '夕食の食数が合わない。'),
+          addOns: 5 }, // §13.1 make-real: machine-readable organizer add-on count (was free text only)
         { id: 'ic_menu',     name: L('Menu: species, portions, cook-min, service time', '献立：魚種・食数・調理分数・提供時刻'), reason: L('Angler rigs to the species; boat folds the return deadline into the route.', '釣り担当は魚種に合わせ、船は帰港期限を計画に織り込む。'),
-          ownerRoleId: 'chef',       recipientRoleIds: ['specialist', 'siteLead', 'chef'],           shareTiming: L('before gear load 05:30', '積込前 05:30'), secrecy: 'all', impactIfUnshared: L('Wrong fish rigged & targeted — rework at the galley.', '狙う魚がズレて手戻り（魚違い）。') },
+          ownerRoleId: 'chef',       recipientRoleIds: ['specialist', 'siteLead', 'chef'],           shareTiming: L('before gear load 05:30', '積込前 05:30'), secrecy: 'all', impactIfUnshared: L('Wrong fish rigged & targeted — rework at the galley.', '狙う魚がズレて手戻り（魚違い）。'),
+          species: 'skipjack', portions: 18 }, // §13.1 make-real: committed species + portions (machine-readable, was free text only)
         { id: 'ic_target',   name: L('Operational catch goal: species, qty, size', '狙う魚種・数量・サイズ'), reason: L('Boat sets heading to the ground that matches the rig.', '仕掛けに合う漁場へ進路を取るため。'),
           ownerRoleId: 'specialist', recipientRoleIds: ['siteLead', 'specialist'],                   shareTiming: L('at gear load 06:15', '積込完了 06:15'), secrecy: 'all', impactIfUnshared: L('Boat guesses the ground — wrong fish.', '船が漁場を推測→魚違い。') },
         { id: 'ic_ground',   name: L('Fishing ground, heading, ETA & hard return', '漁場・進路・帰港時刻'), reason: L('Angler paces the catch; chef locks cook-start around landing.', '釣りの配分と調理開始の確定に必要。'),
@@ -428,24 +486,14 @@
       // ===========================================================================
       days: {
         arrival: {
-          tasks: [
-            // --- required roster (~10): ferry -> crossing -> check-in -> intake -> safety -> stow -> dinner -> headcount ---
-            HD('hd_a_ferrycheck',   'Confirm ferry departure & manifest', '船便出港時刻・乗船名簿確認',       'port',    'pm',         ['p02'], 300, 60,  { produces: ['ic_ferry'] }),
-            HD('hd_a_board',        'Ferry boarding & assemble',          '乗船確認・集合',                   'port',    'logi',       ['p06'], 360, 60,  { deps: ['hd_a_ferrycheck'], info: ['ic_ferry'] }),
-            HD('hd_a_cross',        'Sea crossing & seasickness watch',   '渡航・船酔い対応',                 'vessel',  'siteLead',   ['p03'], 420, 180, { deps: ['hd_a_board'], diff: 3 }),
-            HD('hd_a_checkin',      'Check-in & room assignment',         '受付・部屋割り',                   'lodging', 'logi',       ['p06'], 600, 60,  { deps: ['hd_a_cross'], produces: ['ic_rooms'] }),
-            HD('hd_a_foodsource',   'Food source & allergy check',        '食材調達・アレルギー確認',         'finance', 'budgetLead', ['p04'], 660, 60,  { produces: ['ic_food'] }),
-            HD('hd_a_intake',       'Supply & gear intake (drinks, tackle, food, ice)', '物資・釣具搬入（飲料・釣具・食材・氷）', 'lodging', 'logi', ['p06'], 660, 60, { deps: ['hd_a_checkin'], produces: ['ic_tackle'], res: ['storage'] }),
-            HD('hd_a_safety',       'Safety briefing',                    '安全説明会',                       'clinic',  'safetyLead', ['p05'], 660, 60,  { diff: 3 }),
-            HD('hd_a_gearstow',     'Gear stow',                          '道具収納',                         'port',    'specialist', ['p08'], 720, 60,  { deps: ['hd_a_intake'], info: ['ic_tackle'] }),
-            HD('hd_a_dinnerprep',   'First-night meal prep',              '初日夕食仕込み',                   'mess',    'chef',       ['p09', 'p10'], 720, 120, { deps: ['hd_a_intake'], info: ['ic_food'], res: ['food'], diff: 3 }),
-            HD('hd_a_headcount',    'Arrival headcount',                  '到着点呼',                         'port',    'comms',      ['p07'], 840, 60,  { deps: ['hd_a_checkin'], info: ['ic_rooms'] }),
-            HD('hd_a_dinnerserve',  'First-night meal service',           '初日夕食提供',                     'mess',    'chef',       ['p09', 'p10', 'p11'], 1080, 60, { deps: ['hd_a_dinnerprep'], res: ['food'], guestFacing: true }),
-            // --- decoys (3): plausible-but-wrong cards the deck offers; never in the required set ---
-            HD('hd_a_dec_nightfish',   'Night beach fishing',      '夜釣り',                   'vessel', 'specialist', [], 1080, 60, { required: false, diff: 3 }),
+          // required roster ships PRE-CLEARED (assignedIds:[] — see arrivalReqTasks above, §7/§13.4
+          // P2); decoys (3, plausible-but-wrong, never in the required set) always start unplaced too.
+          tasks: arrivalReqTasks.concat([
+            HD('hd_a_dec_nightfish',   'Night beach fishing',      '夜釣り',                   'vessel', 'specialist', [], 1080, 60, { required: false, diff: 3, safetyFlag: true }),
             HD('hd_a_dec_sightseeing', 'Sightseeing detour',       '観光への立ち寄り',         'port',   'logi',       [], 480,  60, { required: false }),
             HD('hd_a_dec_soloTackle',  'Early solo tackle test',   '個人的な早朝釣具テスト',   'port',   'specialist', [], 300,  60, { required: false })
-          ],
+          ]),
+          canonPlacement: arrivalCanonPlacement,
           handoffs: [
             H('h_a_ferry', 'ic_ferry',  'pm',         'hd_a_ferrycheck', 'logi',       'hd_a_board',      { type: 'onTaskDone', taskId: 'hd_a_ferrycheck' }, 'faceToFace', 'idle', null,
               'Ferry departs 06:00 sharp · full manifest confirmed', '船便6:00定刻出港・乗船名簿確認済'),
@@ -510,7 +558,7 @@
             // --- decoys (3) ---
             HD('hd_r_dec_sidetrip',     'Last-day sightseeing detour',   '最終日の観光立ち寄り', 'port',    'siteLead',   [], 300, 60, { required: false }),
             HD('hd_r_dec_extraservice', 'Extra souvenir shopping run',   'お土産追加購入',       'finance', 'budgetLead', [], 600, 60, { required: false }),
-            HD('hd_r_dec_latefish',     'One more cast before the ferry','出港前のもう一投',     'vessel',  'specialist', [], 660, 60, { required: false })
+            HD('hd_r_dec_latefish',     'One more cast before the ferry','出港前のもう一投',     'vessel',  'specialist', [], 660, 60, { required: false, safetyFlag: true })
           ],
           handoffs: [
             H('h_r_cash_site', 'ic_cash',  'budgetLead', 'hd_r_settle',    'siteLead', 'hd_r_sitecash',    { type: 'onTaskDone', taskId: 'hd_r_settle' }, 'faceToFace', 'idle', null,
@@ -695,7 +743,11 @@
     } else if (fixId === 'grantAuth') {
       ensure(ensure(o, 'budget'), 'lines').bl_meals = { approverRoleId: 'budgetLead', payMethod: 'cash' };
     } else if (fixId === 'shareInfo') {
-      ensure(o, 'info').ic_ferry = { recipientRoleIds: ['pm', 'siteLead', 'specialist', 'chef', 'logi', 'safetyLead'] };
+      var INFO = ensure(o, 'info');
+      INFO.ic_ferry = { recipientRoleIds: ['pm', 'siteLead', 'specialist', 'chef', 'logi', 'safetyLead'] };
+      // refinement-2: also restore ic_hospital's under-shared recipient list (GAP H3) so
+      // shareInfo becomes a real +2 fix (frame_hospital_shared) instead of a dead +0.
+      INFO.ic_hospital = { recipientRoleIds: ['pm', 'siteLead', 'comms', 'safetyLead'] };
     } else if (fixId === 'setReport') {
       ensure(o, 'comms').cr_health = { reportToRoleId: 'pm' };
     } else if (fixId === 'rebalance') {
@@ -1176,18 +1228,23 @@
     return out;
   }
   // canonDay(seg): the witness that 100 is reachable — force every arrow to face-to-face (0 latency),
-  // so by Phase-1 consistency (producer end ≤ consumer start) nothing is late. applyDayFix writes it.
+  // so by Phase-1 consistency (producer end ≤ consumer start) nothing is late. Also restores any
+  // required-task PLACEMENT the seed ships pre-cleared (§7/§13.4 P2 — currently just Arrival, via
+  // its canonPlacement) so the day's required roster is back on the board. applyDayFix writes both.
   function canonDay(seg) {
     var tpl = makeTemplate(), dd = tpl.days && tpl.days[seg]; if (!dd) return {};
     var hoff = {}; for (var i = 0; i < dd.handoffs.length; i++) hoff[dd.handoffs[i].id] = { channel: 'faceToFace' };
-    var o = { days: {} }; o.days[seg] = { handoffs: hoff }; return o;
+    var o = { days: {} }; o.days[seg] = { handoffs: hoff };
+    if (dd.canonPlacement) o.days[seg].placement = clone(dd.canonPlacement);
+    return o;
   }
   function applyDayFix(cfg, seg) {
     cfg = clone(cfg || { seed: 1, overrides: {} }); cfg.overrides = cfg.overrides || {};
     var fix = canonDay(seg); if (!fix.days) return cfg;
     cfg.overrides.days = cfg.overrides.days || {};
-    var cur = cfg.overrides.days[seg] || {}; cur.handoffs = cur.handoffs || {};
+    var cur = cfg.overrides.days[seg] || {}; cur.handoffs = cur.handoffs || {}; cur.placement = cur.placement || {};
     for (var id in fix.days[seg].handoffs) cur.handoffs[id] = fix.days[seg].handoffs[id];
+    if (fix.days[seg].placement) for (var pid in fix.days[seg].placement) cur.placement[pid] = fix.days[seg].placement[pid];
     cfg.overrides.days[seg] = cur; return cfg;
   }
   // scoreDay(plan, seg) — rule-based day score (§20.4). Perfect = every required task placed on the
@@ -1596,10 +1653,14 @@
   // (mergePlan/tasksForSeg/handoffsForSeg/daySchedule/dayReadiness/detect/makeTemplate),
   // never mutates its `plan` argument, no RNG. score()/scoreDay()/daySchedule() and all
   // task/handoff/detector CONTENT are untouched — this is a new read-only lens over them.
-  // Phase 1 (this pass): structure only — Sigma maxPts === 100, correct bucket/dimension
-  // homing (§3.3), determinism, purity. The 5 "make-real" atoms (§13.1) + the Owner/PM
-  // fishday flex lanes have no backing content yet and always evaluate earned:0 (§13.4);
-  // Phase 2 wires their real checks + the seed re-tune.
+  // Phase 1 shipped structure only (Sigma maxPts === 100, bucket/dimension homing, determinism,
+  // purity). Phase 2a (this pass, §13.1/§13.4) wired the 5 "make-real" atoms + the Owner/PM
+  // fishday flex lanes to real, genuinely-failable checks: frame_abort_night mirrors rk_sea's
+  // abort-criterion gate onto rk_night; frame_hospital_shared checks ic_hospital.recipientRoleIds;
+  // fishday_safety_health_check checks t_f_health is placed & staffed; fishday_quality_allergy /
+  // _portions read structured fields added to the infoCards (ic_menu.species/portions,
+  // ic_food.allergens, ic_orgfood.addOns) rather than free text; the two new t_f_flex_owner/pm
+  // tasks give owner/pm a real lane. On the true canonical plan every atom now earns its max.
   // ===========================================================================
 
   // the 4 wrong-fish-riskable fishday sockets (§3.4/§13.2): 1 "drawn" + 2 "on time" = 3pts
@@ -1701,12 +1762,6 @@
     return { id: id, bucket: bucket, dimension: 'quality', itemRef: { type: 'lane', taskId: taskId },
       maxPts: 1, earned: ok ? 1 : 0, status: status, reasonKey: ok ? 'scr_qual_ok' : 'scr_qual_fail', reasonParams: {} };
   }
-  // a "make-real" stub (§13.1/§13.4): in the inventory at its correct maxPts/home, but no
-  // backing check yet — always earned:0 until Phase 2 wires the real content.
-  function tripStubAtom(id, bucket, dimension, maxPts, reasonKey, itemRef) {
-    return { id: id, bucket: bucket, dimension: dimension, itemRef: itemRef || { type: 'gate' },
-      maxPts: maxPts, earned: 0, status: 'missing', reasonKey: reasonKey, reasonParams: {} };
-  }
   // a decoy debit row (§3.1/§13.1): maxPts is always 0 (decoys never ADD to the 100), earned
   // goes negative only if the player actually placed the decoy onto the board.
   function tripDecoyAtom(id, bucket, plan, seg, taskId, safetyFlavored) {
@@ -1721,15 +1776,18 @@
   // ---- Trip Frame (14 = Safety 8, Money 5, People 1) — standing, timeless authorities ----
   function tripFrameAtoms(plan) {
     var out = [];
-    var sl = plan.roles.safetyLead, sea = byId(plan.risks, 'rk_sea');
+    var sl = plan.roles.safetyLead, sea = byId(plan.risks, 'rk_sea'), night = byId(plan.risks, 'rk_night');
     var seaOk = !!(sl.holder && sl.deputyId && sl.authority && sl.authority.canAbort && sea && sea.ownerRoleId && sea.abortCriterion);
     out.push(tripGateAtom('frame_abort_sea', 'frame', 'safety', 2, seaOk, { type: 'gate', detectorId: 'safety' }, 'scr_safety_ok', 'scr_safety_gap'));
-    // MAKE-REAL (§13.1): rk_night.abortCriterion present, mirroring rk_sea — not built this phase
-    out.push(tripStubAtom('frame_abort_night', 'frame', 'safety', 2, 'scr_safety_gap', { type: 'gate', detectorId: 'safety' }));
+    // MAKE-REAL (§13.1): rk_night.abortCriterion present, mirroring rk_sea's shape exactly
+    var nightOk = !!(sl.holder && sl.deputyId && sl.authority && sl.authority.canAbort && night && night.ownerRoleId && night.abortCriterion);
+    out.push(tripGateAtom('frame_abort_night', 'frame', 'safety', 2, nightOk, { type: 'gate', detectorId: 'safety' }, 'scr_safety_ok', 'scr_safety_gap'));
     var health = byId(plan.commRules, 'cr_health');
     out.push(tripGateAtom('frame_health_report', 'frame', 'safety', 2, !!(health && health.reportToRoleId), { type: 'gate', detectorId: 'report' }, 'scr_safety_ok', 'scr_safety_gap'));
-    // MAKE-REAL (§13.1): ic_hospital.recipientRoleIds ⊇ {pm,siteLead,comms,safetyLead} — not built this phase
-    out.push(tripStubAtom('frame_hospital_shared', 'frame', 'safety', 2, 'scr_safety_gap', { type: 'gate', cardId: 'ic_hospital' }));
+    // MAKE-REAL (§13.1): ic_hospital.recipientRoleIds ⊇ {pm,siteLead,comms,safetyLead}
+    var hosp = byId(plan.infoCards, 'ic_hospital'), hospNeed = ['pm', 'siteLead', 'comms', 'safetyLead'];
+    var hospOk = !!hosp && hospNeed.every(function (r) { return hosp.recipientRoleIds.indexOf(r) >= 0; });
+    out.push(tripGateAtom('frame_hospital_shared', 'frame', 'safety', 2, hospOk, { type: 'gate', cardId: 'ic_hospital' }, 'scr_safety_ok', 'scr_safety_gap'));
     var meals = byId(plan.budget.lines, 'bl_meals');
     out.push(tripGateAtom('frame_budget_authority', 'frame', 'money', 3, !!(meals && meals.approverRoleId && meals.payMethod), { type: 'gate', detectorId: 'budgetAuth' }, 'scr_money_ok', 'scr_money_gap'));
     out.push(tripGateAtom('frame_reserve_drawrule', 'frame', 'money', 2, plan.budget.reserve >= (plan.budget.reserveTarget || 300000), { type: 'gate', detectorId: 'reserve' }, 'scr_money_ok', 'scr_money_gap'));
@@ -1861,24 +1919,42 @@
       ['chef', ['t_f_menu', 't_f_lunch', 't_f_sideprep', 't_f_fillet', 't_f_cook', 't_f_plate', 't_f_serve']]
     ];
     out = out.concat(tripLanesFor('fishday', plan, seg, lanes, tmplDur));
-    // §13.1: Owner & PM get a fishing-day flex/standby lane — not built this phase (make-real)
-    out.push(tripStubAtom('fishday_exec_owner_flex', 'fishday', 'exec', 1, 'scr_exec_unstaffed', { type: 'lane', taskId: null, roleId: 'owner' }));
-    out.push(tripStubAtom('fishday_exec_pm_flex', 'fishday', 'exec', 1, 'scr_exec_unstaffed', { type: 'lane', taskId: null, roleId: 'pm' }));
+    // MAKE-REAL (§13.1): Owner & PM's flex/standby lane (t_f_flex_owner/pm) — a real lane atom now
+    // (8 organizer lanes + galley = 9 exec atoms). No neededInfo/deps, so it can't alter the cascade;
+    // it earns like any lane atom (placed/staffed on the right role) and loses it if unplaced/misassigned.
+    out.push(tripLaneAtom('fishday_exec_owner_flex', 'fishday', plan, seg, 'owner', ['t_f_flex_owner'], tmplDur));
+    out.push(tripLaneAtom('fishday_exec_pm_flex', 'fishday', plan, seg, 'pm', ['t_f_flex_pm'], tmplDur));
     var all = tasksForSeg(plan, seg), weather = byId(all, 't_f_weather'), seawatch = byId(all, 't_f_seawatch');
     var sea = byId(plan.risks, 'rk_sea');
     var dawnOk = !!(weather && isPlaced(weather) && weather.durMin >= tmplDur.t_f_weather && sea && sea.abortCriterion);
     out.push(tripGateAtom('fishday_safety_dawn_gonogo', 'fishday', 'safety', 2, dawnOk, { type: 'lane', taskId: 't_f_weather' }, 'scr_safety_ok', 'scr_safety_gap'));
     var abroadOk = !!(seawatch && isPlaced(seawatch) && seawatch.durMin >= tmplDur.t_f_seawatch && seawatch.startMin <= 420);
     out.push(tripGateAtom('fishday_safety_abort_aboard', 'fishday', 'safety', 2, abroadOk, { type: 'lane', taskId: 't_f_seawatch' }, 'scr_safety_ok', 'scr_safety_gap'));
-    // MAKE-REAL (§13.1): t_f_health placed & done — not built this phase
-    out.push(tripStubAtom('fishday_safety_health_check', 'fishday', 'safety', 2, 'scr_safety_gap', { type: 'lane', taskId: 't_f_health' }));
+    // MAKE-REAL (§13.1): t_f_health (crew health check) placed & staffed
+    var healthTask = byId(all, 't_f_health');
+    var healthOk = !!(healthTask && isPlaced(healthTask) && healthTask.durMin >= tmplDur.t_f_health);
+    out.push(tripGateAtom('fishday_safety_health_check', 'fishday', 'safety', 2, healthOk, { type: 'lane', taskId: 't_f_health' }, 'scr_safety_ok', 'scr_safety_gap'));
     var cook = byId(all, 't_f_cook');
     var cookOk = !!(cook && isPlaced(cook) && cook.durMin >= tmplDur.t_f_cook && ds.dinnerMin != null && ds.dinnerMin <= 1080);
     out.push({ id: 'fishday_quality_cookblock', bucket: 'fishday', dimension: 'quality', itemRef: { type: 'lane', taskId: 't_f_cook' },
       maxPts: 2, earned: cookOk ? 2 : 0, status: cookOk ? 'ok' : 'compressed', reasonKey: cookOk ? 'scr_qual_ok' : 'scr_qual_fail', reasonParams: {} });
-    // MAKE-REAL (§13.1): allergy respected / portions = 13 guests + organizer add-ons — not built this phase
-    out.push(tripStubAtom('fishday_quality_allergy', 'fishday', 'quality', 1, 'scr_qual_fail', { type: 'gate' }));
-    out.push(tripStubAtom('fishday_quality_portions', 'fishday', 'quality', 1, 'scr_qual_fail', { type: 'gate' }));
+    // MAKE-REAL (§13.1) + refinement-1: allergy respected — the committed menu species
+    // (ic_menu.species) is looked up in SPECIES_CATEGORIES to its allergen CATEGORY (e.g.
+    // 'shrimp' -> 'shellfish'), which must not intersect ic_food.allergens (category tokens).
+    // A real species/category distinction: 'skipjack' (fish) never intersects a 'shellfish'
+    // allergen, but 'shrimp' correctly does — the literal-species check this replaced could
+    // not tell the two apart.
+    var menuCard = byId(plan.infoCards, 'ic_menu'), foodCard = byId(plan.infoCards, 'ic_food');
+    var menuCats = (menuCard && SPECIES_CATEGORIES[menuCard.species]) || [];
+    var allergyOk = !!(menuCard && menuCard.species) && !(foodCard && foodCard.allergens && foodCard.allergens.some(function (a) { return menuCats.indexOf(a) >= 0; }));
+    out.push(tripGateAtom('fishday_quality_allergy', 'fishday', 'quality', 1, allergyOk, { type: 'gate', cardId: 'ic_menu' }, 'scr_qual_ok', 'scr_qual_fail'));
+    // MAKE-REAL (§13.1): portions = 13 guests + organizer add-ons, DERIVED and checked — the
+    // committed ic_menu.portions must equal GUESTS + ic_orgfood.addOns (two independently-settable
+    // structured fields), not a static config read that always agrees with itself.
+    var orgfoodCard = byId(plan.infoCards, 'ic_orgfood');
+    var expectedPortions = GUESTS + (orgfoodCard && typeof orgfoodCard.addOns === 'number' ? orgfoodCard.addOns : 0);
+    var portionsOk = !!(menuCard && menuCard.portions === expectedPortions);
+    out.push(tripGateAtom('fishday_quality_portions', 'fishday', 'quality', 1, portionsOk, { type: 'gate', cardId: 'ic_menu' }, 'scr_qual_ok', 'scr_qual_fail'));
     return out;
   }
 

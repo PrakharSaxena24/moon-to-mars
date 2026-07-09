@@ -88,8 +88,10 @@ var gplan = P.mergePlan(base);
 ok(P.detect(gplan).map(function (d) { return d.id; }).indexOf('handoffTiming') >= 0, 'gappy plan raises handoffTiming');
 var gfd = P.fishdaySchedule(gplan);
 ok(gfd.idleTotal > 0, 'gappy fishday accrues idle minutes (' + gfd.idleTotal + ' — tackle list late on chat)');
-ok(gfd.missing.length === 2 && gfd.late.length === 1, 'ships 2 missing cook-consult arrows + 1 late tackle arrow (' + gfd.missing.length + '/' + gfd.late.length + ')');
-ok(gfd.wrongFish.length === 2, 'undrawn ic_menu -> wrong-fish rework at gear-load & route (' + gfd.wrongFish.join(',') + ')');
+// §7/§13.4 P2 re-tune: the seed now withholds 9 of the 14 canonical arrows (only 4 kept
+// on-time + 1 kept-but-late) -> 10 missing (task,card) pairs + 1 late (was 2/1 pre-retune)
+ok(gfd.missing.length === 10 && gfd.late.length === 1, 'ships 9 withheld arrows (10 missing pairs) + 1 late tackle arrow (' + gfd.missing.length + '/' + gfd.late.length + ')');
+ok(gfd.wrongFish.length === 4, 'undrawn ic_menu/ic_ground -> wrong-fish rework at gear-load, route, rig & fish (' + gfd.wrongFish.join(',') + ')');
 ok(gfd.efficiency < 100, 'gappy efficiency < 100 (' + gfd.efficiency + '%)');
 ok(gfd.dinnerMin > 1080, 'wrong fish pushes dinner past 18:00 (min ' + gfd.dinnerMin + ')');
 var gsim = fishRun(base);
@@ -111,10 +113,18 @@ var effSeq = [], accF = base;
 var mono = true; for (var e = 1; e < effSeq.length; e++) if (effSeq[e] < effSeq[e - 1]) mono = false;
 ok(mono && effSeq[effSeq.length - 1] === 100, 'efficiency climbs monotonically to 100 (' + effSeq.join('→') + ')');
 
-// a task's idle is the MAX of its late inputs, never the sum
+// a task's idle is the MAX of its late inputs, never the sum. h_orgfood and h_weather_chef
+// are two of the arrows the P2 seed withholds, so both are supplied as FULL handoff objects
+// here (not bare patches) — seed-independent regardless of which arrows the template ships
+// pre-drawn. h_weather_chef is restored ON TIME (canonical, untouched) so t_f_menu's third
+// input (ic_weather) doesn't itself go missing and dominate via IDLE_CAP(60), which would
+// swamp the very max(22,32) comparison this test exists to isolate.
 var two = P.mergePlan({ seed: 1, overrides: { handoffs: {
-  h_food:    { trigger: { type: 'atMinute', value: 320 }, channel: 'phone' },   // arrives 322 -> 22 late
-  h_orgfood: { trigger: { type: 'atMinute', value: 330 }, channel: 'phone' }    // arrives 332 -> 32 late
+  h_food:    { trigger: { type: 'atMinute', value: 320 }, channel: 'phone' },   // arrives 322 -> 22 late (h_food is pre-drawn; patch is enough)
+  h_orgfood: { cardId: 'ic_orgfood', fromRoleId: 'comms', fromTaskId: 't_f_orgfood', toRoleId: 'chef', toTaskId: 't_f_menu',
+    trigger: { type: 'atMinute', value: 330 }, channel: 'phone', ifLate: 'idle', reworkKind: null, content: { en: 'x', jp: 'x' } }, // arrives 332 -> 32 late
+  h_weather_chef: { cardId: 'ic_weather', fromRoleId: 'safetyLead', fromTaskId: 't_f_weather', toRoleId: 'chef', toTaskId: 't_f_menu',
+    trigger: { type: 'onTaskDone', taskId: 't_f_weather' }, channel: 'faceToFace', ifLate: 'idle', reworkKind: null, content: { en: 'x', jp: 'x' } } // on time (canonical)
 } } });
 ok(P.fishdaySchedule(two).byTask.t_f_menu.idleMin === 32, 'task idle = max(22, 32) of late inputs, not sum (' + P.fishdaySchedule(two).byTask.t_f_menu.idleMin + ')');
 
@@ -134,7 +144,8 @@ ok(P.score(isim).idleMin === gfd.idleTotal, 'plan gap survives the hand-feed: sc
 
 // the canonical channel-latency table (§6.1) — the pricing of 報連相 — pinned exactly
 ok(P.CHANNELS.faceToFace === 0 && P.CHANNELS.radio === 1 && P.CHANNELS.phone === 2 && P.CHANNELS.chat === 10 && P.CHANNELS.board === 30, 'channel latency pinned: 対面0 · 無線1 · 電話2 · チャット10 · 掲示板30');
-ok(gfd.idleTotal === 220 && gfd.reworkTotal === 90 && gfd.late[0].lateMin === 40, 'gappy ledger pinned exactly: 220 idle + 90 rework person-min, tackle 40 min late');
+// §7/§13.4 P2 re-tune: withholding 9 more arrows raises idle 220->1450 (rework/lateness unchanged)
+ok(gfd.idleTotal === 1450 && gfd.reworkTotal === 90 && gfd.late[0].lateMin === 40, 'gappy ledger pinned exactly: 1450 idle + 90 rework person-min, tackle 40 min late');
 
 // drawing a FASTER duplicate arrow is a legitimate alternate fix (min-arrival per pair)
 var dupFd = P.fishdaySchedule(P.mergePlan({ seed: 1, overrides: { handoffs: { h_tackle2: { cardId: 'ic_tackle', fromRoleId: 'logi', fromTaskId: 't_f_tackleprep', toRoleId: 'specialist', toTaskId: 't_f_gearload', trigger: { type: 'onTaskDone', taskId: 't_f_tackleprep' }, channel: 'faceToFace', ifLate: 'idle', reworkKind: null, content: { en: 'x', jp: 'x' } } } } }));
@@ -194,8 +205,9 @@ try { miCoarse = P.memberInfo(coarse, 'p03'); } catch (e) { miThrew = true; }
 ok(!miThrew && miCoarse === null, 'memberInfo on a coarse sim returns null (no crash)');
 
 // editor merge surface: draw / erase arrows, retime a block
-ok(P.mergePlan({ seed: 1, overrides: { handoffs: { h_x: { cardId: 'ic_menu', fromRoleId: 'chef', fromTaskId: 't_f_menu', toRoleId: 'specialist', toTaskId: 't_f_gearload', trigger: { type: 'onTaskDone', taskId: 't_f_menu' }, channel: 'faceToFace', ifLate: 'assume', reworkKind: 'wrongFish', content: { en: 'x', jp: 'x' } } } } }).handoffs.length === 13, 'editor can draw a new arrow (12 -> 13)');
-ok(P.mergePlan({ seed: 1, overrides: { handoffs: { h_catch_chef: null } } }).handoffs.length === 11, 'editor can erase an arrow (12 -> 11)');
+// §7/§13.4 P2 re-tune: the gappy seed now ships only 5 of 14 fishday arrows (was 12)
+ok(P.mergePlan({ seed: 1, overrides: { handoffs: { h_x: { cardId: 'ic_menu', fromRoleId: 'chef', fromTaskId: 't_f_menu', toRoleId: 'specialist', toTaskId: 't_f_gearload', trigger: { type: 'onTaskDone', taskId: 't_f_menu' }, channel: 'faceToFace', ifLate: 'assume', reworkKind: 'wrongFish', content: { en: 'x', jp: 'x' } } } } }).handoffs.length === 6, 'editor can draw a new arrow (5 -> 6)');
+ok(P.mergePlan({ seed: 1, overrides: { handoffs: { h_catch_chef: null } } }).handoffs.length === 4, 'editor can erase an arrow (5 -> 4)');
 var mv = P.mergePlan({ seed: 1, overrides: { timing: { t_f_menu: { startMin: 315, durMin: 45 } } } }).tasks.filter(function (t) { return t.id === 't_f_menu'; })[0];
 ok(mv.startMin === 315 && mv.durMin === 45, 'editor can retime a task block (315/45)');
 
@@ -358,9 +370,9 @@ console.log('\n=== AUTHORABLE DAYS — daySchedule / scoreDay (§20) ===');
   // 8. façade equality (fishday): daySchedule('fishday') delegates to (and matches) fishdaySchedule()
   var fdPlan = P.mergePlan(base);
   var dsFacade = P.daySchedule(fdPlan, 'fishday'), fdFacade = P.fishdaySchedule(fdPlan);
-  ok(dsFacade.idleTotal === fdFacade.idleTotal && fdFacade.idleTotal === 220,
-    'daySchedule(fishday).idleTotal === fishdaySchedule().idleTotal === 220 (' + dsFacade.idleTotal + '/' + fdFacade.idleTotal + ')');
-  ok(dsFacade.efficiency === 91, 'daySchedule(fishday).efficiency === 91 (' + dsFacade.efficiency + '%)');
+  ok(dsFacade.idleTotal === fdFacade.idleTotal && fdFacade.idleTotal === 1450,
+    'daySchedule(fishday).idleTotal === fishdaySchedule().idleTotal === 1450 (' + dsFacade.idleTotal + '/' + fdFacade.idleTotal + ')');
+  ok(dsFacade.efficiency === 68, 'daySchedule(fishday).efficiency === 68 (' + dsFacade.efficiency + '%)');
 
   // 9. purity: the §20 read helpers (daySchedule/scoreDay/dayReadiness/deckFor) never perturb
   // score()/plan.tasks/plan.days, for any of the four authorable segs
@@ -474,19 +486,33 @@ console.log('\n=== SEAT ASSIGNMENT — overrides.seats bijection (default = no-o
 // ============================================================================
 console.log('\n=== COARSE-DAY ANIMATION — opt-in minute-sim (§21.12) ===');
 (function () {
+  // §7/§13.4 P2 re-tune: Arrival now ships HALF-cleared (6 of its 11 required tasks placed;
+  // the other 5 blanked) — the placed subset is an internally-consistent, on-time chain (a
+  // structural authoring gap on the still-unplaced tasks, not a live temporal stall), so it
+  // animates those 6 tasks with zero stalls. Ops/Return still ship fully wired, so they keep
+  // the original "seeded gaps -> live stall" shape.
   ['arrival', 'ops', 'return'].forEach(function (seg) {
     var anim = P.createSim(base, seg, { animate: true });
     ok(anim.mode === 'minute', 'coarse ' + seg + ': {animate:true} => minute-clock sim');
     ok(P.createSim(base, seg).mode !== 'minute', 'coarse ' + seg + ': 2-arg createSim stays the classic day clock (verify-safe gate)');
-    ok(anim.tasks.length > 0 && anim.tasks.every(function (t) { return anim.sched.byTask[t.id]; }),
-      'coarse ' + seg + ': every animated task is scheduled (sim.tasks <-> sched.byTask lock-step)');
+    if (seg === 'arrival') {
+      ok(anim.tasks.length === 6 && anim.tasks.every(function (t) { return anim.sched.byTask[t.id]; }),
+        'coarse arrival (half-cleared seed): the 6 placed tasks animate, scheduled (' + anim.tasks.length + ')');
+      ok(P.dayReadiness(P.mergePlan(base), seg).some(function (r) { return r.type === 'UNPLACED_REQUIRED'; }),
+        'coarse arrival (half-cleared seed): dayReadiness flags UNPLACED_REQUIRED for the still-unplaced tasks');
+    } else {
+      ok(anim.tasks.length > 0 && anim.tasks.every(function (t) { return anim.sched.byTask[t.id]; }),
+        'coarse ' + seg + ': every animated task is scheduled (sim.tasks <-> sched.byTask lock-step)');
+    }
     ok(anim.clockMin === anim.winStart && anim.winEnd > anim.winStart, 'coarse ' + seg + ': clock starts at the segment window start');
     // seeded (gappy) day: someone stalls on a gap -> pauses on a cp_stall at least once
+    // (arrival's placed subset is internally consistent, so it correctly pauses zero times)
     var g = 0, stalls = 0;
     while (!anim.finished && g < 400) { P.tick(anim); if (anim.paused) { if (anim.checkpoint.id === 'cp_stall') stalls++; P.resume(anim); } g++; }
     ok(anim.finished, 'coarse ' + seg + ': runs to a finish');
-    ok(stalls > 0, 'coarse ' + seg + ' (seeded gaps): pauses on a cp_stall at least once');
-    // auto-arranged arrows -> no handoff stall -> zero pauses, 100% efficiency
+    if (seg === 'arrival') ok(stalls === 0, 'coarse arrival (half-cleared seed): the placed chain is clean -> zero cp_stall pauses');
+    else ok(stalls > 0, 'coarse ' + seg + ' (seeded gaps): pauses on a cp_stall at least once');
+    // auto-arranged arrows + restored placements -> no handoff stall -> zero pauses, 100% efficiency
     var cfg = P.applyDayFix(base, seg), clean = P.createSim(cfg, seg, { animate: true }), g2 = 0, p2 = 0;
     while (!clean.finished && g2 < 400) { P.tick(clean); if (clean.paused) { p2++; P.resume(clean); } g2++; }
     ok(p2 === 0, 'coarse ' + seg + ' (auto-arranged arrows): no stall pause');
@@ -566,6 +592,118 @@ console.log('\n=== SCORING BLUEPRINT §13 — scoreTrip/tripEfficiency (P1 struc
   var chefAfter = P.scoreTrip(P.mergePlan(misCfg)).atoms.filter(function (a) { return a.id === 'fishday_exec_chef'; })[0];
   ok(chefBefore.earned === 1 && chefAfter.earned === 0 && chefAfter.reasonKey === 'scr_exec_misassigned',
     'scoreTrip: a wrong-role fishday lane task loses its exec point (misassign caught on Day 3, not only coarse days)');
+})();
+
+// ============================================================================
+// SCORING BLUEPRINT §13 — P2a: the 7 formerly-stubbed atoms are now real (§13.1),
+// plus the true canonical (all classic fixes + all three per-day canonDay fixes)
+// reaches scoreTrip 100/A/clean with every atom at its max — the P2 anchor §13.4
+// promised once the make-real content + owner/pm flex lanes landed.
+// ============================================================================
+console.log('\n=== SCORING BLUEPRINT §13 — P2a make-real atoms (earn on canonical, fail on broken) ===');
+(function () {
+  function trueCanonCfg() {
+    var cfg = P.applyAllFixes({ seed: 1, overrides: {} });
+    ['arrival', 'ops', 'return'].forEach(function (s) { cfg = P.applyDayFix(cfg, s); });
+    return cfg;
+  }
+  function atomOf(atoms, id) { return atoms.filter(function (a) { return a.id === id; })[0]; }
+
+  var canonCfg = trueCanonCfg();
+  var canonPlan = P.mergePlan(canonCfg);
+  var t = P.scoreTrip(canonPlan);
+
+  // the frozen acceptance anchor (task §2): true canonical -> 100/A/clean, every atom at its max
+  ok(t.total === 100 && t.grade === 'A' && t.gate.clean === true,
+    'scoreTrip: true canonical (all fixes + all 3 canonDay) -> 100/A/clean (' + t.total + '/' + t.grade + '/' + t.gate.clean + ')');
+  ok(t.atoms.every(function (a) { return a.earned === a.maxPts; }),
+    'scoreTrip: true canonical -> every atom earns its maxPts exactly (no surviving gap)');
+
+  var SEVEN = ['fishday_exec_owner_flex', 'fishday_exec_pm_flex', 'frame_hospital_shared', 'frame_abort_night',
+    'fishday_safety_health_check', 'fishday_quality_allergy', 'fishday_quality_portions'];
+  SEVEN.forEach(function (id) {
+    var a = atomOf(t.atoms, id);
+    ok(!!a && a.earned === a.maxPts && a.earned > 0, id + ': earns its full ' + (a && a.maxPts) + ' pts on the true canonical (' + (a && a.earned) + ')');
+  });
+
+  // 1. fishday_exec_owner_flex: unplacing the flex task loses its point
+  var brk1 = trueCanonCfg(); brk1.overrides.staffing = brk1.overrides.staffing || {}; brk1.overrides.staffing.t_f_flex_owner = [];
+  var a1 = atomOf(P.scoreTrip(P.mergePlan(brk1)).atoms, 'fishday_exec_owner_flex');
+  ok(a1.earned === 0 && a1.reasonKey === 'scr_exec_unstaffed', 'fishday_exec_owner_flex: unplacing t_f_flex_owner -> earned 0 (' + a1.reasonKey + ')');
+
+  // 2. fishday_exec_pm_flex: misassigning the flex task to the wrong role loses its point
+  var brk2 = trueCanonCfg(); brk2.overrides.staffing = brk2.overrides.staffing || {}; brk2.overrides.staffing.t_f_flex_pm = ['p08'];
+  var a2 = atomOf(P.scoreTrip(P.mergePlan(brk2)).atoms, 'fishday_exec_pm_flex');
+  ok(a2.earned === 0 && a2.reasonKey === 'scr_exec_misassigned', 'fishday_exec_pm_flex: reassigning t_f_flex_pm to specialist p08 -> earned 0 (' + a2.reasonKey + ')');
+
+  // 3. frame_hospital_shared: dropping a needed recipient loses the point
+  var brk3 = trueCanonCfg(); brk3.overrides.info = brk3.overrides.info || {}; brk3.overrides.info.ic_hospital = { recipientRoleIds: ['pm', 'siteLead'] };
+  var a3 = atomOf(P.scoreTrip(P.mergePlan(brk3)).atoms, 'frame_hospital_shared');
+  ok(a3.earned === 0 && a3.reasonKey === 'scr_safety_gap', 'frame_hospital_shared: ic_hospital not shared to comms/safetyLead -> earned 0 (' + a3.reasonKey + ')');
+
+  // 4. frame_abort_night: clearing rk_night's abort criterion loses the point (rk_sea untouched)
+  var brk4 = trueCanonCfg(); brk4.overrides.risks = brk4.overrides.risks || {}; brk4.overrides.risks.rk_night = { abortCriterion: null };
+  var st4 = P.scoreTrip(P.mergePlan(brk4));
+  var a4 = atomOf(st4.atoms, 'frame_abort_night'), a4sea = atomOf(st4.atoms, 'frame_abort_sea');
+  ok(a4.earned === 0 && a4.reasonKey === 'scr_safety_gap' && a4sea.earned === a4sea.maxPts,
+    'frame_abort_night: clearing rk_night.abortCriterion -> earned 0, frame_abort_sea unaffected (' + a4.reasonKey + ')');
+
+  // 5. fishday_safety_health_check: unstaffing t_f_health loses the point
+  var brk5 = trueCanonCfg(); brk5.overrides.staffing = brk5.overrides.staffing || {}; brk5.overrides.staffing.t_f_health = [];
+  var a5 = atomOf(P.scoreTrip(P.mergePlan(brk5)).atoms, 'fishday_safety_health_check');
+  ok(a5.earned === 0 && a5.reasonKey === 'scr_safety_gap', 'fishday_safety_health_check: unstaffing t_f_health -> earned 0 (' + a5.reasonKey + ')');
+
+  // 6. fishday_quality_allergy: committing the menu to a species in the allergen CATEGORY
+  // (refinement-1: 'shrimp' -> category 'shellfish', which intersects ic_food.allergens —
+  // exercises the real species->category path, not a literal species/category string match)
+  var brk6 = trueCanonCfg(); brk6.overrides.info = brk6.overrides.info || {}; brk6.overrides.info.ic_menu = { species: 'shrimp' };
+  var a6 = atomOf(P.scoreTrip(P.mergePlan(brk6)).atoms, 'fishday_quality_allergy');
+  ok(a6.earned === 0 && a6.reasonKey === 'scr_qual_fail', 'fishday_quality_allergy: menu species set to shrimp (category shellfish, the allergen) -> earned 0 (' + a6.reasonKey + ')');
+
+  // 7. fishday_quality_portions: a menu portion count that disagrees with GUESTS+addOns loses the point
+  var brk7 = trueCanonCfg(); brk7.overrides.info = brk7.overrides.info || {}; brk7.overrides.info.ic_menu = { portions: 20 };
+  var a7 = atomOf(P.scoreTrip(P.mergePlan(brk7)).atoms, 'fishday_quality_portions');
+  ok(a7.earned === 0 && a7.reasonKey === 'scr_qual_fail', 'fishday_quality_portions: menu portions (20) disagree with 13 guests + 5 add-ons (18) -> earned 0 (' + a7.reasonKey + ')');
+
+  // purity: none of these broken-plan constructions perturbed the true canonical's own score
+  ok(P.scoreTrip(canonPlan).total === 100, 'scoreTrip: true canonical still scores 100 after constructing the 7 broken variants (pure)');
+})();
+
+// ============================================================================
+// SCORING BLUEPRINT §7/§13.4 — P2 numeric: the re-tuned seed (Arrival pre-cleared +
+// most fishday arrows withheld) lands the gappy trip in the D band, and drawing the
+// fishday information arrows (fixHandoffs) is the single LARGEST jump toward 100 —
+// bigger than authoring Arrival (applyDayFix) and bigger than any one classic fix.
+// ============================================================================
+console.log('\n=== SCORING BLUEPRINT §7/§13.4 — P2 numeric: gappy D-band + arrow-draw is the biggest jump ===');
+(function () {
+  var gappyPlan = P.mergePlan(base);
+  var g = P.scoreTrip(gappyPlan);
+  console.log('  gappy scoreTrip:', g.total, '/', g.grade, JSON.stringify(g.byBucket));
+  ok(g.total < 60, 'scoreTrip: gappy trip lands in the D band (<60) (' + g.total + ')');
+  ok(g.total >= 40 && g.total <= 60, 'scoreTrip: gappy trip is near the ~50 target (' + g.total + ')');
+  ok(g.grade === 'D', 'scoreTrip: gappy trip grades D (' + g.grade + ')');
+  ok(g.gate.clean === false, 'scoreTrip: gappy trip is not clean');
+
+  var CLASSIC = ['setSafety', 'grantAuth', 'shareInfo', 'setReport', 'rebalance', 'fixReserve', 'setReturn'];
+  var deltas = {};
+  CLASSIC.forEach(function (fx) { deltas[fx] = P.scoreTrip(P.mergePlan(P.applyFix(base, fx))).total - g.total; });
+  deltas.applyDayFix_arrival = P.scoreTrip(P.mergePlan(P.applyDayFix(base, 'arrival'))).total - g.total;
+  deltas.fixHandoffs = P.scoreTrip(P.mergePlan(P.applyFix(base, 'fixHandoffs'))).total - g.total;
+  console.log('  per-fix score deltas from gappy:', JSON.stringify(deltas));
+
+  var maxOtherDelta = Math.max.apply(null, CLASSIC.map(function (fx) { return deltas[fx]; }).concat([deltas.applyDayFix_arrival]));
+  ok(deltas.fixHandoffs > maxOtherDelta,
+    'fixHandoffs delta (+' + deltas.fixHandoffs + ') is the single largest jump — bigger than authoring Arrival (+' +
+    deltas.applyDayFix_arrival + ') and every classic fix (max +' + Math.max.apply(null, CLASSIC.map(function (fx) { return deltas[fx]; })) + ')');
+  ok(deltas.fixHandoffs > deltas.applyDayFix_arrival, 'fixHandoffs (+' + deltas.fixHandoffs + ') beats applyDayFix(arrival) (+' + deltas.applyDayFix_arrival + ') specifically');
+
+  // the true canonical (all classic fixes + all 3 canonDay) still reaches 100/A/clean —
+  // re-affirmed here alongside the gradient numbers (already anchored in the P2a block above)
+  var canonCfg2 = P.applyAllFixes({ seed: 1, overrides: {} });
+  ['arrival', 'ops', 'return'].forEach(function (s) { canonCfg2 = P.applyDayFix(canonCfg2, s); });
+  var t2 = P.scoreTrip(P.mergePlan(canonCfg2));
+  ok(t2.total === 100 && t2.grade === 'A' && t2.gate.clean === true, 'scoreTrip: canonical still 100/A/clean under the re-tuned seed (' + t2.total + '/' + t2.grade + ')');
 })();
 
 console.log('\n' + (fail === 0 ? 'ALL ' + pass + ' CHECKS PASSED ✓' : pass + ' passed, ' + fail + ' FAILED ✗'));
