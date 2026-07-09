@@ -1590,6 +1590,338 @@
       budget: { spent: 0, total: plan.budget.total }, day: 0, handFed: 0 });
   }
 
+  // ===========================================================================
+  // §Phase1 — scoreTrip(plan) / tripEfficiency(plan) — the whole-trip 100-point
+  // ledger (scoring blueprint §13.2 frozen contract). PURELY ADDITIVE: reads only
+  // (mergePlan/tasksForSeg/handoffsForSeg/daySchedule/dayReadiness/detect/makeTemplate),
+  // never mutates its `plan` argument, no RNG. score()/scoreDay()/daySchedule() and all
+  // task/handoff/detector CONTENT are untouched — this is a new read-only lens over them.
+  // Phase 1 (this pass): structure only — Sigma maxPts === 100, correct bucket/dimension
+  // homing (§3.3), determinism, purity. The 5 "make-real" atoms (§13.1) + the Owner/PM
+  // fishday flex lanes have no backing content yet and always evaluate earned:0 (§13.4);
+  // Phase 2 wires their real checks + the seed re-tune.
+  // ===========================================================================
+
+  // the 4 wrong-fish-riskable fishday sockets (§3.4/§13.2): 1 "drawn" + 2 "on time" = 3pts
+  var FISHDAY_RISKABLE = { 'specialist|ic_menu': 1, 'siteLead|ic_menu': 1, 'siteLead|ic_target': 1, 'specialist|ic_ground': 1 };
+
+  // template-derived durMin floor per task id, across fishday + all authorable coarse days
+  function tripTemplateDurMap() {
+    var tmpl = makeTemplate(), map = {}, i;
+    for (i = 0; i < tmpl.tasks.length; i++) map[tmpl.tasks[i].id] = tmpl.tasks[i].durMin;
+    for (var seg in tmpl.days) { var dt = tmpl.days[seg].tasks; for (i = 0; i < dt.length; i++) map[dt[i].id] = dt[i].durMin; }
+    return map;
+  }
+
+  // (roleId,cardId) consuming pairs across a fixed set of required tasks, deduped — the
+  // "socket" universe, priced from the TEMPLATE's required set (never the live plan), so
+  // maxPts is invariant no matter what the player has placed/drawn (§6 template denominators).
+  function tripSocketPairs(reqTasks, cardOwner) {
+    var seen = {}, out = [], i, j;
+    for (i = 0; i < reqTasks.length; i++) {
+      var t = reqTasks[i];
+      for (j = 0; j < (t.neededInfo || []).length; j++) {
+        var cid = t.neededInfo[j];
+        if (cardOwner[cid] === t.ownerRoleId) continue; // owner holds its own card — no socket
+        var key = t.ownerRoleId + '|' + cid;
+        if (!seen[key]) { seen[key] = 1; out.push({ roleId: t.ownerRoleId, cardId: cid }); }
+      }
+    }
+    return out;
+  }
+  function tripPairTaskIds(reqTasks, roleId, cardId) {
+    var out = [];
+    for (var i = 0; i < reqTasks.length; i++) { var t = reqTasks[i]; if (t.ownerRoleId === roleId && (t.neededInfo || []).indexOf(cardId) >= 0) out.push(t.id); }
+    return out;
+  }
+  // status of a (role,card) socket, read off daySchedule's OWN missing/late arrays (the
+  // engine's existing min-over-arrows checker) — never a re-derived arrival calculation.
+  function tripSocketStatus(ds, taskIds, cardId, livePlaced) {
+    var i, anyPlacedNeed = false;
+    for (i = 0; i < taskIds.length; i++) if (livePlaced[taskIds[i]]) anyPlacedNeed = true;
+    if (!anyPlacedNeed) return 'missing';
+    for (i = 0; i < ds.missing.length; i++) { var m = ds.missing[i]; if (m.cardId === cardId && taskIds.indexOf(m.taskId) >= 0) return 'missing'; }
+    for (i = 0; i < ds.late.length; i++) { var l = ds.late[i]; if (l.cardId === cardId && taskIds.indexOf(l.taskId) >= 0) return 'late'; }
+    return 'ok';
+  }
+  function tripSocketAtom(id, bucket, plan, ds, taskIds, roleId, cardId, riskable, livePlaced) {
+    var st = tripSocketStatus(ds, taskIds, cardId, livePlaced);
+    var maxPts = riskable ? 3 : 1, earned, status, reasonKey;
+    if (st === 'missing') { earned = 0; status = 'missing'; reasonKey = 'scr_info_missing'; }
+    else if (st === 'late') {
+      if (riskable) { earned = 1; status = 'present-but-late'; reasonKey = 'scr_info_drawn_late'; }
+      else { earned = 0; status = 'late'; reasonKey = 'scr_info_late'; }
+    } else { earned = maxPts; status = 'ok'; reasonKey = 'scr_info_ok'; }
+    return { id: id, bucket: bucket, dimension: 'info',
+      itemRef: { type: 'socket', cardId: cardId, taskId: taskIds, roleId: roleId },
+      maxPts: maxPts, earned: earned, status: status, reasonKey: reasonKey, reasonParams: {} };
+  }
+  // one execution atom per role-lane: EVERY required task of that role in this seg must be
+  // placed, staffed on the right role, dep-consistent, non-overlapping, durMin >= template.
+  function tripLaneAtom(id, bucket, plan, seg, roleId, taskIds, tmplDur) {
+    var all = tasksForSeg(plan, seg), byIdMap = {}, i;
+    for (i = 0; i < all.length; i++) byIdMap[all[i].id] = all[i];
+    var rd = dayReadiness(plan, seg);
+    var bad = false, status = 'ok', reasonKey = 'scr_exec_ok';
+    for (i = 0; i < taskIds.length && !bad; i++) {
+      var t = byIdMap[taskIds[i]];
+      if (!t || !isPlaced(t)) { bad = true; status = 'missing'; reasonKey = 'scr_exec_unstaffed'; }
+    }
+    if (!bad) for (i = 0; i < taskIds.length && !bad; i++) {
+      var t2 = byIdMap[taskIds[i]], floor = tmplDur[taskIds[i]];
+      if (typeof floor === 'number' && t2.durMin < floor) { bad = true; status = 'compressed'; reasonKey = 'scr_exec_compressed'; }
+    }
+    // wrong-role placement (§3.1 "on the right role"): read the schedule's own misassigned[]
+    // directly — dayReadiness surfaces MISASSIGNED on coarse segs only, never on fishday.
+    if (!bad) { var mds = daySchedule(plan, seg);
+      for (i = 0; i < taskIds.length && !bad; i++) if (mds.misassigned.indexOf(taskIds[i]) >= 0) { bad = true; status = 'broken'; reasonKey = 'scr_exec_misassigned'; }
+    }
+    if (!bad) for (i = 0; i < rd.length && !bad; i++) {
+      var r = rd[i];
+      if (r.type === 'TASK_UNSTAFFED' && taskIds.indexOf(r.taskId) >= 0) { bad = true; status = 'missing'; reasonKey = 'scr_exec_unstaffed'; }
+      else if (r.type === 'MISASSIGNED' && taskIds.indexOf(r.taskId) >= 0) { bad = true; status = 'broken'; reasonKey = 'scr_exec_misassigned'; }
+      else if (r.type === 'DEP_BROKEN' && taskIds.indexOf(r.taskId) >= 0) { bad = true; status = 'broken'; reasonKey = 'scr_exec_broken'; }
+      else if (r.type === 'OVERLOAD' && (taskIds.indexOf(r.taskId) >= 0 || taskIds.indexOf(r.otherId) >= 0)) { bad = true; status = 'overlap'; reasonKey = 'scr_exec_overlap'; }
+    }
+    return { id: id, bucket: bucket, dimension: 'exec', itemRef: { type: 'lane', taskId: taskIds, roleId: roleId },
+      maxPts: 1, earned: bad ? 0 : 1, status: status, reasonKey: reasonKey, reasonParams: {} };
+  }
+  // a binary gate atom (authority / criterion / route) — dimension is caller-supplied
+  // (safety | money | people); ok/gapKey come from the fixed §13.3 reason set.
+  function tripGateAtom(id, bucket, dimension, maxPts, ok, itemRef, okKey, gapKey) {
+    return { id: id, bucket: bucket, dimension: dimension, itemRef: itemRef, maxPts: maxPts,
+      earned: ok ? maxPts : 0, status: ok ? 'ok' : 'missing', reasonKey: ok ? okKey : gapKey, reasonParams: {} };
+  }
+  // a quality atom gated on the day cascade's own idle read-off (no idle => on-time/uncompressed)
+  function tripQualityAtom(id, bucket, plan, seg, taskId, tmplDur, ds) {
+    var all = tasksForSeg(plan, seg), t = byId(all, taskId);
+    var placed = !!(t && isPlaced(t));
+    var ok = !!(placed && t.durMin >= tmplDur[taskId] && ds.byTask[taskId] && ds.byTask[taskId].idleMin === 0 && !ds.byTask[taskId].unresolved);
+    var status = ok ? 'ok' : (!placed ? 'missing' : (t.durMin < tmplDur[taskId] ? 'compressed' : 'late'));
+    return { id: id, bucket: bucket, dimension: 'quality', itemRef: { type: 'lane', taskId: taskId },
+      maxPts: 1, earned: ok ? 1 : 0, status: status, reasonKey: ok ? 'scr_qual_ok' : 'scr_qual_fail', reasonParams: {} };
+  }
+  // a "make-real" stub (§13.1/§13.4): in the inventory at its correct maxPts/home, but no
+  // backing check yet — always earned:0 until Phase 2 wires the real content.
+  function tripStubAtom(id, bucket, dimension, maxPts, reasonKey, itemRef) {
+    return { id: id, bucket: bucket, dimension: dimension, itemRef: itemRef || { type: 'gate' },
+      maxPts: maxPts, earned: 0, status: 'missing', reasonKey: reasonKey, reasonParams: {} };
+  }
+  // a decoy debit row (§3.1/§13.1): maxPts is always 0 (decoys never ADD to the 100), earned
+  // goes negative only if the player actually placed the decoy onto the board.
+  function tripDecoyAtom(id, bucket, plan, seg, taskId, safetyFlavored) {
+    var all = tasksForSeg(plan, seg), t = byId(all, taskId);
+    var placed = !!(t && isPlaced(t));
+    var penalty = safetyFlavored ? -3 : -2;
+    return { id: id, bucket: bucket, dimension: safetyFlavored ? 'safety' : 'exec',
+      itemRef: { type: 'decoy', taskId: taskId }, maxPts: 0, earned: placed ? penalty : 0,
+      status: placed ? 'decoy' : 'ok', reasonKey: placed ? 'scr_decoy' : 'scr_exec_ok', reasonParams: {} };
+  }
+
+  // ---- Trip Frame (14 = Safety 8, Money 5, People 1) — standing, timeless authorities ----
+  function tripFrameAtoms(plan) {
+    var out = [];
+    var sl = plan.roles.safetyLead, sea = byId(plan.risks, 'rk_sea');
+    var seaOk = !!(sl.holder && sl.deputyId && sl.authority && sl.authority.canAbort && sea && sea.ownerRoleId && sea.abortCriterion);
+    out.push(tripGateAtom('frame_abort_sea', 'frame', 'safety', 2, seaOk, { type: 'gate', detectorId: 'safety' }, 'scr_safety_ok', 'scr_safety_gap'));
+    // MAKE-REAL (§13.1): rk_night.abortCriterion present, mirroring rk_sea — not built this phase
+    out.push(tripStubAtom('frame_abort_night', 'frame', 'safety', 2, 'scr_safety_gap', { type: 'gate', detectorId: 'safety' }));
+    var health = byId(plan.commRules, 'cr_health');
+    out.push(tripGateAtom('frame_health_report', 'frame', 'safety', 2, !!(health && health.reportToRoleId), { type: 'gate', detectorId: 'report' }, 'scr_safety_ok', 'scr_safety_gap'));
+    // MAKE-REAL (§13.1): ic_hospital.recipientRoleIds ⊇ {pm,siteLead,comms,safetyLead} — not built this phase
+    out.push(tripStubAtom('frame_hospital_shared', 'frame', 'safety', 2, 'scr_safety_gap', { type: 'gate', cardId: 'ic_hospital' }));
+    var meals = byId(plan.budget.lines, 'bl_meals');
+    out.push(tripGateAtom('frame_budget_authority', 'frame', 'money', 3, !!(meals && meals.approverRoleId && meals.payMethod), { type: 'gate', detectorId: 'budgetAuth' }, 'scr_money_ok', 'scr_money_gap'));
+    out.push(tripGateAtom('frame_reserve_drawrule', 'frame', 'money', 2, plan.budget.reserve >= (plan.budget.reserveTarget || 300000), { type: 'gate', detectorId: 'reserve' }, 'scr_money_ok', 'scr_money_gap'));
+    var siteLeadRole = plan.roles.siteLead;
+    var reliefOk = !!siteLeadRole.deputyId || loadOf(plan, siteLeadRole.holder) < LOAD_CAP;
+    out.push(tripGateAtom('frame_load_relief', 'frame', 'people', 1, reliefOk, { type: 'gate', detectorId: 'fatigue' }, 'scr_exec_ok', 'scr_exec_unstaffed'));
+    return out;
+  }
+
+  // shared: build the (role,card) socket atoms for one authorable coarse-day seg, priced off
+  // the TEMPLATE's required tasks (never the live plan) — used by arrival/ops/return.
+  function tripCoarseSocketAtoms(bucket, plan, tmpl, seg, prefix) {
+    var out = [], i;
+    var reqTasks = tasksForSeg(tmpl, seg).filter(function (t) { return t.required !== false; });
+    var cardOwner = {}; for (i = 0; i < tmpl.infoCards.length; i++) cardOwner[tmpl.infoCards[i].id] = tmpl.infoCards[i].ownerRoleId;
+    var pairs = tripSocketPairs(reqTasks, cardOwner);
+    var ds = daySchedule(plan, seg);
+    var liveTasks = tasksForSeg(plan, seg), livePlaced = {};
+    for (i = 0; i < liveTasks.length; i++) if (isPlaced(liveTasks[i])) livePlaced[liveTasks[i].id] = 1;
+    for (i = 0; i < pairs.length; i++) {
+      var p = pairs[i], tids = tripPairTaskIds(reqTasks, p.roleId, p.cardId);
+      out.push(tripSocketAtom(prefix + '_info_' + p.roleId + '_' + p.cardId, bucket, plan, ds, tids, p.roleId, p.cardId, false, livePlaced));
+    }
+    return out;
+  }
+  function tripLanesFor(bucket, plan, seg, lanes, tmplDur) {
+    var out = [];
+    for (var i = 0; i < lanes.length; i++) out.push(tripLaneAtom(bucket + '_exec_' + lanes[i][0], bucket, plan, seg, lanes[i][0], lanes[i][1], tmplDur));
+    return out;
+  }
+
+  // ---- Arrival D1 (15 = Info 4, Exec 7, Safety 1, Quality 2, Money 1) ----
+  function tripArrivalAtoms(plan, tmpl, tmplDur) {
+    var seg = 'arrival', out = tripCoarseSocketAtoms('arrival', plan, tmpl, seg, 'arrival');
+    var lanes = [
+      ['pm', ['hd_a_ferrycheck']], ['logi', ['hd_a_board', 'hd_a_checkin', 'hd_a_intake']],
+      ['siteLead', ['hd_a_cross']], ['budgetLead', ['hd_a_foodsource']], ['specialist', ['hd_a_gearstow']],
+      ['chef', ['hd_a_dinnerprep', 'hd_a_dinnerserve']], ['comms', ['hd_a_headcount']]
+    ];
+    out = out.concat(tripLanesFor('arrival', plan, seg, lanes, tmplDur));
+    var ds = daySchedule(plan, seg);
+    out.push(tripQualityAtom('arrival_quality_dinnerprep', 'arrival', plan, seg, 'hd_a_dinnerprep', tmplDur, ds));
+    out.push(tripQualityAtom('arrival_quality_dinnerserve', 'arrival', plan, seg, 'hd_a_dinnerserve', tmplDur, ds));
+    var all = tasksForSeg(plan, seg), safety = byId(all, 'hd_a_safety');
+    var safetyOk = !!(safety && isPlaced(safety) && safety.durMin >= tmplDur.hd_a_safety);
+    out.push(tripGateAtom('arrival_safety_briefing', 'arrival', 'safety', 1, safetyOk, { type: 'lane', taskId: 'hd_a_safety' }, 'scr_safety_ok', 'scr_safety_gap'));
+    var transport = byId(plan.budget.lines, 'bl_transport');
+    out.push(tripGateAtom('arrival_money_transport_auth', 'arrival', 'money', 1, !!(transport && transport.approverRoleId && transport.payMethod), { type: 'gate', detectorId: null }, 'scr_money_ok', 'scr_money_gap'));
+    out.push(tripDecoyAtom('arrival_decoy_nightfish', 'arrival', plan, seg, 'hd_a_dec_nightfish', true));
+    out.push(tripDecoyAtom('arrival_decoy_sightseeing', 'arrival', plan, seg, 'hd_a_dec_sightseeing', false));
+    out.push(tripDecoyAtom('arrival_decoy_solotackle', 'arrival', plan, seg, 'hd_a_dec_soloTackle', false));
+    return out;
+  }
+
+  // ---- Ops (18 = Info 5, Exec 5, Safety 2, Quality 4, Money 2) — the representative day ----
+  function tripOpsAtoms(plan, tmpl, tmplDur) {
+    var seg = 'ops', out = tripCoarseSocketAtoms('ops', plan, tmpl, seg, 'ops');
+    var lanes = [
+      ['logi', ['hd_o_tackleprep', 'hd_o_catchhandle', 'hd_o_clean']], ['specialist', ['hd_o_shorefish']],
+      ['chef', ['hd_o_foodprep', 'hd_o_lunch', 'hd_o_dinnerprep', 'hd_o_dinnerserve']],
+      ['budgetLead', ['hd_o_foodsource', 'hd_o_accounting']], ['comms', ['hd_o_report']]
+    ];
+    out = out.concat(tripLanesFor('ops', plan, seg, lanes, tmplDur));
+    var all = tasksForSeg(plan, seg);
+    var weather = byId(all, 'hd_o_weather'), watch = byId(all, 'hd_o_safetywatch');
+    out.push(tripGateAtom('ops_safety_weathercheck', 'ops', 'safety', 1, !!(weather && isPlaced(weather) && weather.durMin >= tmplDur.hd_o_weather), { type: 'lane', taskId: 'hd_o_weather' }, 'scr_safety_ok', 'scr_safety_gap'));
+    out.push(tripGateAtom('ops_safety_watch', 'ops', 'safety', 1, !!(watch && isPlaced(watch) && watch.durMin >= tmplDur.hd_o_safetywatch), { type: 'lane', taskId: 'hd_o_safetywatch' }, 'scr_safety_ok', 'scr_safety_gap'));
+    var ds = daySchedule(plan, seg);
+    out.push(tripQualityAtom('ops_quality_foodprep', 'ops', plan, seg, 'hd_o_foodprep', tmplDur, ds));
+    out.push(tripQualityAtom('ops_quality_lunch', 'ops', plan, seg, 'hd_o_lunch', tmplDur, ds));
+    out.push(tripQualityAtom('ops_quality_dinnerprep', 'ops', plan, seg, 'hd_o_dinnerprep', tmplDur, ds));
+    out.push(tripQualityAtom('ops_quality_dinnerserve', 'ops', plan, seg, 'hd_o_dinnerserve', tmplDur, ds));
+    var onsite = byId(plan.budget.lines, 'bl_onsite'), tackleLine = byId(plan.budget.lines, 'bl_tackle');
+    out.push(tripGateAtom('ops_money_onsite_auth', 'ops', 'money', 1, !!(onsite && onsite.approverRoleId && onsite.payMethod), { type: 'gate', detectorId: null }, 'scr_money_ok', 'scr_money_gap'));
+    out.push(tripGateAtom('ops_money_tackle_auth', 'ops', 'money', 1, !!(tackleLine && tackleLine.approverRoleId && tackleLine.payMethod), { type: 'gate', detectorId: null }, 'scr_money_ok', 'scr_money_gap'));
+    out.push(tripDecoyAtom('ops_decoy_sidefish', 'ops', plan, seg, 'hd_o_dec_sidefish', false));
+    out.push(tripDecoyAtom('ops_decoy_marketrun', 'ops', plan, seg, 'hd_o_dec_marketrun', false));
+    out.push(tripDecoyAtom('ops_decoy_longlunch', 'ops', plan, seg, 'hd_o_dec_longlunch', false));
+    return out;
+  }
+
+  // ---- Return D10 (12 = Info 3, Exec 4, Safety 3, Quality 0, Money 2) ----
+  function tripReturnAtoms(plan, tmpl, tmplDur) {
+    var seg = 'return', out = tripCoarseSocketAtoms('return', plan, tmpl, seg, 'return');
+    var lanes = [
+      ['logi', ['hd_r_teardown', 'hd_r_checkout', 'hd_r_ship']], ['budgetLead', ['hd_r_settle']],
+      ['comms', ['hd_r_headcount', 'hd_r_finalreport']], ['pm', ['hd_r_ferrymarshal', 'hd_r_boarding']]
+    ];
+    out = out.concat(tripLanesFor('return', plan, seg, lanes, tmplDur));
+    var ic_return = byId(plan.infoCards, 'ic_return');
+    var need = ['pm', 'owner', 'safetyLead', 'comms'], headcountOk = true;
+    if (!ic_return) headcountOk = false; else for (var i = 0; i < need.length; i++) if (ic_return.recipientRoleIds.indexOf(need[i]) < 0) headcountOk = false;
+    out.push(tripGateAtom('return_safety_headcount_full', 'return', 'safety', 1, headcountOk, { type: 'gate', cardId: 'ic_return' }, 'scr_safety_ok', 'scr_safety_gap'));
+    var shipTask = byId(plan.tasks, 't_ship');
+    out.push(tripGateAtom('return_safety_ship_staffed', 'return', 'safety', 1, !!(shipTask && shipTask.assignedIds.length > 0), { type: 'gate', detectorId: 'returnLogi' }, 'scr_safety_ok', 'scr_safety_gap'));
+    var rkWeather = byId(plan.risks, 'rk_weather');
+    out.push(tripGateAtom('return_safety_evac_plan', 'return', 'safety', 1, !!(rkWeather && rkWeather.ownerRoleId && rkWeather.fallback), { type: 'gate', detectorId: null }, 'scr_safety_ok', 'scr_safety_gap'));
+    var all = tasksForSeg(plan, seg), sitecash = byId(all, 'hd_r_sitecash'), settle = byId(all, 'hd_r_settle');
+    var rd = dayReadiness(plan, seg), sitecashBroken = rd.some(function (r) { return (r.type === 'DEP_BROKEN' || r.type === 'MISASSIGNED') && r.taskId === 'hd_r_sitecash'; });
+    out.push(tripGateAtom('return_money_sitecash_signoff', 'return', 'money', 1, !!(sitecash && isPlaced(sitecash) && !sitecashBroken), { type: 'lane', taskId: 'hd_r_sitecash' }, 'scr_money_ok', 'scr_money_gap'));
+    out.push(tripGateAtom('return_money_settle_complete', 'return', 'money', 1, !!(settle && isPlaced(settle) && settle.durMin >= tmplDur.hd_r_settle), { type: 'lane', taskId: 'hd_r_settle' }, 'scr_money_ok', 'scr_money_gap'));
+    out.push(tripDecoyAtom('return_decoy_sidetrip', 'return', plan, seg, 'hd_r_dec_sidetrip', false));
+    out.push(tripDecoyAtom('return_decoy_extraservice', 'return', plan, seg, 'hd_r_dec_extraservice', false));
+    out.push(tripDecoyAtom('return_decoy_latefish', 'return', plan, seg, 'hd_r_dec_latefish', true));
+    return out;
+  }
+
+  // ---- Fishing Day D3 (41 = Info 22, Exec 9, Safety 6, Quality 4) — the heart ----
+  function tripFishdayAtoms(plan, tmpl, tmplDur) {
+    var seg = 'fishday', out = [];
+    var reqTasks = tasksForSeg(tmpl, seg); // every fishday task is required (no decoys on Day 3)
+    var cardOwner = {}; var i; for (i = 0; i < tmpl.infoCards.length; i++) cardOwner[tmpl.infoCards[i].id] = tmpl.infoCards[i].ownerRoleId;
+    var pairs = tripSocketPairs(reqTasks, cardOwner);
+    var ds = daySchedule(plan, seg);
+    var liveTasks = tasksForSeg(plan, seg), livePlaced = {};
+    for (i = 0; i < liveTasks.length; i++) if (isPlaced(liveTasks[i])) livePlaced[liveTasks[i].id] = 1;
+    for (i = 0; i < pairs.length; i++) {
+      var p = pairs[i], tids = tripPairTaskIds(reqTasks, p.roleId, p.cardId);
+      var riskable = !!FISHDAY_RISKABLE[p.roleId + '|' + p.cardId];
+      out.push(tripSocketAtom('fishday_info_' + p.roleId + '_' + p.cardId, 'fishday', plan, ds, tids, p.roleId, p.cardId, riskable, livePlaced));
+    }
+    var lanes = [
+      ['siteLead', ['t_f_route', 't_f_depart', 't_f_hold', 't_f_return', 't_f_dock']],
+      ['budgetLead', ['t_f_food', 't_f_accounting']],
+      ['safetyLead', ['t_f_weather', 't_f_seawatch', 't_f_health']],
+      ['logi', ['t_f_tackleprep', 't_f_icing']],
+      ['comms', ['t_f_orgfood', 't_f_headcount1', 't_f_triplog', 't_f_headcount2', 't_f_report']],
+      ['specialist', ['t_f_gearload', 't_f_rig', 't_f_fish', 't_f_tally', 't_f_stow', 't_f_land']],
+      ['chef', ['t_f_menu', 't_f_lunch', 't_f_sideprep', 't_f_fillet', 't_f_cook', 't_f_plate', 't_f_serve']]
+    ];
+    out = out.concat(tripLanesFor('fishday', plan, seg, lanes, tmplDur));
+    // §13.1: Owner & PM get a fishing-day flex/standby lane — not built this phase (make-real)
+    out.push(tripStubAtom('fishday_exec_owner_flex', 'fishday', 'exec', 1, 'scr_exec_unstaffed', { type: 'lane', taskId: null, roleId: 'owner' }));
+    out.push(tripStubAtom('fishday_exec_pm_flex', 'fishday', 'exec', 1, 'scr_exec_unstaffed', { type: 'lane', taskId: null, roleId: 'pm' }));
+    var all = tasksForSeg(plan, seg), weather = byId(all, 't_f_weather'), seawatch = byId(all, 't_f_seawatch');
+    var sea = byId(plan.risks, 'rk_sea');
+    var dawnOk = !!(weather && isPlaced(weather) && weather.durMin >= tmplDur.t_f_weather && sea && sea.abortCriterion);
+    out.push(tripGateAtom('fishday_safety_dawn_gonogo', 'fishday', 'safety', 2, dawnOk, { type: 'lane', taskId: 't_f_weather' }, 'scr_safety_ok', 'scr_safety_gap'));
+    var abroadOk = !!(seawatch && isPlaced(seawatch) && seawatch.durMin >= tmplDur.t_f_seawatch && seawatch.startMin <= 420);
+    out.push(tripGateAtom('fishday_safety_abort_aboard', 'fishday', 'safety', 2, abroadOk, { type: 'lane', taskId: 't_f_seawatch' }, 'scr_safety_ok', 'scr_safety_gap'));
+    // MAKE-REAL (§13.1): t_f_health placed & done — not built this phase
+    out.push(tripStubAtom('fishday_safety_health_check', 'fishday', 'safety', 2, 'scr_safety_gap', { type: 'lane', taskId: 't_f_health' }));
+    var cook = byId(all, 't_f_cook');
+    var cookOk = !!(cook && isPlaced(cook) && cook.durMin >= tmplDur.t_f_cook && ds.dinnerMin != null && ds.dinnerMin <= 1080);
+    out.push({ id: 'fishday_quality_cookblock', bucket: 'fishday', dimension: 'quality', itemRef: { type: 'lane', taskId: 't_f_cook' },
+      maxPts: 2, earned: cookOk ? 2 : 0, status: cookOk ? 'ok' : 'compressed', reasonKey: cookOk ? 'scr_qual_ok' : 'scr_qual_fail', reasonParams: {} });
+    // MAKE-REAL (§13.1): allergy respected / portions = 13 guests + organizer add-ons — not built this phase
+    out.push(tripStubAtom('fishday_quality_allergy', 'fishday', 'quality', 1, 'scr_qual_fail', { type: 'gate' }));
+    out.push(tripStubAtom('fishday_quality_portions', 'fishday', 'quality', 1, 'scr_qual_fail', { type: 'gate' }));
+    return out;
+  }
+
+  function scoreTrip(plan) {
+    var tmpl = makeTemplate(), tmplDur = tripTemplateDurMap();
+    var atoms = [].concat(
+      tripFrameAtoms(plan),
+      tripArrivalAtoms(plan, tmpl, tmplDur),
+      tripOpsAtoms(plan, tmpl, tmplDur),
+      tripFishdayAtoms(plan, tmpl, tmplDur),
+      tripReturnAtoms(plan, tmpl, tmplDur)
+    );
+    var BUCKETS = ['frame', 'arrival', 'ops', 'fishday', 'return'];
+    var DIMS = ['info', 'exec', 'safety', 'quality', 'money', 'people'];
+    var byBucket = {}, byDimension = {}, i;
+    for (i = 0; i < BUCKETS.length; i++) byBucket[BUCKETS[i]] = { maxPts: 0, earned: 0 };
+    for (i = 0; i < DIMS.length; i++) byDimension[DIMS[i]] = { maxPts: 0, earned: 0 };
+    var rawTotal = 0;
+    for (i = 0; i < atoms.length; i++) {
+      var a = atoms[i];
+      byBucket[a.bucket].maxPts += a.maxPts; byBucket[a.bucket].earned += a.earned;
+      byDimension[a.dimension].maxPts += a.maxPts; byDimension[a.dimension].earned += a.earned;
+      rawTotal += a.earned;
+    }
+    var total = Math.max(0, Math.min(100, Math.round(rawTotal)));
+    var clean = atoms.every(function (a) { return a.maxPts > 0 ? a.earned === a.maxPts : a.earned === 0; });
+    var withheldA = total >= 90 && !clean;
+    var grade = (total >= 90 && clean) ? 'A' : (total >= 75 ? 'B' : (total >= 60 ? 'C' : 'D'));
+    return { total: total, grade: grade, gate: { clean: clean, withheldA: withheldA },
+      atoms: atoms, byBucket: byBucket, byDimension: byDimension };
+  }
+
+  // minute-weighted Sigma productive / Sigma available across the four modeled days;
+  // unplaced tasks contribute neither avail nor idle (daySchedule already excludes them).
+  function tripEfficiency(plan) {
+    var segs = ['arrival', 'ops', 'fishday', 'return'], avail = 0, cost = 0;
+    for (var i = 0; i < segs.length; i++) {
+      var ds = daySchedule(plan, segs[i]);
+      avail += ds.availMin; cost += ds.idleTotal + ds.reworkTotal + ds.overbookMin;
+    }
+    return avail > 0 ? Math.round(100 * avail / (avail + cost)) : 100;
+  }
+
   var api = {
     DT: DT, DAYS: DAYS, HEADCOUNT: HEADCOUNT, STATIONS: STATIONS, ROLES: ROLES, COMPANIES: COMPANIES,
     CAT_MAX: CAT_MAX, DETECTORS: DETECTORS,
@@ -1613,7 +1945,9 @@
     DAY_HOUR_START: DAY_HOUR_START, DAY_HOUR_END: DAY_HOUR_END, HOUR_DT: HOUR_DT,
     dayLayout: dayLayout, derivedHandoffs: derivedHandoffs,
     // §20.3 — authorable all-days rebuild, Phase 1 (data only; nothing reads these yet)
-    SNAP_MIN: SNAP_MIN, DAY_WINDOWS: DAY_WINDOWS, AUTHORABLE: AUTHORABLE
+    SNAP_MIN: SNAP_MIN, DAY_WINDOWS: DAY_WINDOWS, AUTHORABLE: AUTHORABLE,
+    // scoring blueprint §13.2 — the whole-trip 100-point ledger (Phase 1: structural)
+    scoreTrip: scoreTrip, tripEfficiency: tripEfficiency
   };
   global.PRS = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

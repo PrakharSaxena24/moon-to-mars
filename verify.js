@@ -500,5 +500,73 @@ console.log('\n=== COARSE-DAY ANIMATION — opt-in minute-sim (§21.12) ===');
   ok((isim.handFed || 0) === hf + 1 && isim.sched && isim.sched.byTask, 'coarse arrival: intervene re-solves the schedule + increments handFed');
 })();
 
+// ============================================================================
+// SCORING BLUEPRINT §13 — P1 structural: scoreTrip(plan)/tripEfficiency(plan).
+// P1 changes NO content/seed, so this asserts STRUCTURE only (Sigma maxPts, the
+// bucket/dimension weight table, determinism, purity) — never canonical-earns-100
+// or any gradient (that is a P2 anchor, once the 5 make-real atoms + Owner/PM
+// flex lanes + seed re-tune land). The existing 196 checks above stay untouched.
+// ============================================================================
+console.log('\n=== SCORING BLUEPRINT §13 — scoreTrip/tripEfficiency (P1 structural) ===');
+(function () {
+  var canon = P.mergePlan(P.applyAllFixes(base));
+  var st1 = P.scoreTrip(canon);
+
+  var sumMax = 0; st1.atoms.forEach(function (a) { sumMax += a.maxPts; });
+  ok(sumMax === 100, 'scoreTrip: Sigma atoms.maxPts === 100 exactly (' + sumMax + ')');
+
+  var bb = {}; for (var k in st1.byBucket) bb[k] = st1.byBucket[k].maxPts;
+  ok(JSON.stringify(bb) === JSON.stringify({ frame: 14, arrival: 15, ops: 18, fishday: 41, return: 12 }),
+    'scoreTrip: byBucket maxPts === {frame:14,arrival:15,ops:18,fishday:41,return:12} (' + JSON.stringify(bb) + ')');
+
+  var bd = {}; for (var k2 in st1.byDimension) bd[k2] = st1.byDimension[k2].maxPts;
+  ok(JSON.stringify(bd) === JSON.stringify({ info: 34, exec: 25, safety: 20, quality: 10, money: 10, people: 1 }),
+    'scoreTrip: byDimension maxPts === {info:34,exec:25,safety:20,quality:10,money:10,people:1} (' + JSON.stringify(bd) + ')');
+
+  // the maxPts inventory is TEMPLATE-derived (§6 "never the player's plan") — the same
+  // Sigma=100 holds on the gappy baseline too, not just the canonical/all-fixes plan
+  var stGappy = P.scoreTrip(P.mergePlan(base));
+  var sumMaxGappy = 0; stGappy.atoms.forEach(function (a) { sumMaxGappy += a.maxPts; });
+  ok(sumMaxGappy === 100, 'scoreTrip: Sigma maxPts === 100 on the gappy baseline too (template-priced, not plan-priced)');
+
+  // determinism: two calls on the same (merged) plan return byte-identical output
+  var d1 = JSON.stringify(P.scoreTrip(canon)), d2 = JSON.stringify(P.scoreTrip(canon));
+  ok(d1 === d2, 'scoreTrip: determinism — two calls on the same plan are byte-identical');
+  var e1 = P.tripEfficiency(canon), e2 = P.tripEfficiency(canon);
+  ok(e1 === e2 && typeof e1 === 'number' && e1 >= 0 && e1 <= 100, 'tripEfficiency: determinism + returns an int 0..100 (' + e1 + ')');
+
+  // purity: neither function perturbs score()/createSim() output, nor mutates its plan argument
+  var planBefore = JSON.stringify(canon);
+  var scoreBefore = JSON.stringify(P.score(P.createSim(P.applyAllFixes(base))));
+  P.scoreTrip(canon); P.tripEfficiency(canon);
+  var planAfter = JSON.stringify(canon);
+  var scoreAfter = JSON.stringify(P.score(P.createSim(P.applyAllFixes(base))));
+  ok(planBefore === planAfter, 'scoreTrip/tripEfficiency: do not mutate the plan they were given');
+  ok(scoreBefore === scoreAfter, 'scoreTrip/tripEfficiency: do not perturb score(createSim(...)) (pure)');
+
+  // shape sanity (§13.2 frozen contract): the fields the report/UI will read
+  ok(typeof st1.total === 'number' && st1.total >= 0 && st1.total <= 100, 'scoreTrip: total is an int 0..100 (' + st1.total + ')');
+  ok(['A', 'B', 'C', 'D'].indexOf(st1.grade) >= 0, 'scoreTrip: grade is one of A/B/C/D (' + st1.grade + ')');
+  ok(typeof st1.gate.clean === 'boolean' && typeof st1.gate.withheldA === 'boolean', 'scoreTrip: gate.{clean,withheldA} are booleans');
+  ok(st1.atoms.length > 0 && st1.atoms.every(function (a) { return a.id && a.bucket && a.dimension && a.itemRef && typeof a.maxPts === 'number' && typeof a.earned === 'number' && a.status && a.reasonKey; }),
+    'scoreTrip: every atom carries {id,bucket,dimension,itemRef,maxPts,earned,status,reasonKey} (' + st1.atoms.length + ' atoms)');
+
+  // §13.3 — every reasonKey is drawn from the fixed template set (no free text, no typos)
+  var RK = { scr_info_ok: 1, scr_info_late: 1, scr_info_missing: 1, scr_info_drawn_late: 1, scr_exec_ok: 1, scr_exec_unstaffed: 1, scr_exec_misassigned: 1, scr_exec_overlap: 1, scr_exec_compressed: 1, scr_exec_broken: 1, scr_safety_ok: 1, scr_safety_gap: 1, scr_qual_ok: 1, scr_qual_fail: 1, scr_money_ok: 1, scr_money_gap: 1, scr_decoy: 1 };
+  ok(st1.atoms.every(function (a) { return RK[a.reasonKey]; }) && P.scoreTrip(P.mergePlan(base)).atoms.every(function (a) { return RK[a.reasonKey]; }),
+    'scoreTrip: every reasonKey is from the fixed §13.3 set (canonical + gappy)');
+  // §13.2 — itemRef.type is one of lane|socket|gate|decoy|frame
+  var IT = { lane: 1, socket: 1, gate: 1, decoy: 1, frame: 1 };
+  ok(st1.atoms.every(function (a) { return IT[a.itemRef.type]; }), 'scoreTrip: every itemRef.type is lane|socket|gate|decoy|frame');
+  // false-credit guard: a wrong-role fishday lane task must LOSE its exec point. daySchedule flags
+  // misassigned[] on every seg, but dayReadiness surfaces MISASSIGNED on coarse segs only — so the
+  // lane atom reads the schedule directly, else a wrong-role Day-3 placement keeps full exec credit.
+  var chefBefore = st1.atoms.filter(function (a) { return a.id === 'fishday_exec_chef'; })[0];
+  var misCfg = P.applyAllFixes({ seed: 1, overrides: {} }); misCfg.overrides.staffing = misCfg.overrides.staffing || {}; misCfg.overrides.staffing.t_f_cook = ['p01'];
+  var chefAfter = P.scoreTrip(P.mergePlan(misCfg)).atoms.filter(function (a) { return a.id === 'fishday_exec_chef'; })[0];
+  ok(chefBefore.earned === 1 && chefAfter.earned === 0 && chefAfter.reasonKey === 'scr_exec_misassigned',
+    'scoreTrip: a wrong-role fishday lane task loses its exec point (misassign caught on Day 3, not only coarse days)');
+})();
+
 console.log('\n' + (fail === 0 ? 'ALL ' + pass + ' CHECKS PASSED ✓' : pass + ' passed, ' + fail + ' FAILED ✗'));
 process.exit(fail === 0 ? 0 : 1);

@@ -246,6 +246,22 @@
       sec_rod_t: '🎣 Fishing/Gear', sec_rod_b: 'The supply & assignment point — all the fishing gear is prepared here and it’s decided who carries what. The food, drinks, medicine and the rest of the kit are packed here too, ready to move out.',
       sec_transport_t: '🚤 Transport', sec_transport_b: 'Loading & haul-out — everything is loaded onto the small trucks and carried down to the port, where the boats wait (Nobu-san → the iso rock; Kimura-san → the jigging grounds).',
 
+      // --- §13.3 scoring ledger: bucket / dimension names, reason templates, status chips ---
+      sb_frame: 'Trip Frame', sb_arrival: 'Arrival', sb_ops: 'Ops', sb_fishday: 'Fishing Day', sb_return: 'Return',
+      sd_info: 'Info', sd_exec: 'Execution', sd_safety: 'Safety', sd_quality: 'Quality', sd_money: 'Money', sd_people: 'People',
+      scr_info_ok: 'Delivered on time', scr_info_late: 'Arrived late — waited on it (手待ち)',
+      scr_info_missing: 'No handoff drawn — nobody knew (迷い)', scr_info_drawn_late: 'Drawn, but arrived late (partial credit)',
+      scr_exec_ok: 'Staffed, timed and ordered correctly', scr_exec_unstaffed: 'Nobody assigned to this task',
+      scr_exec_misassigned: 'Staffed by the wrong role', scr_exec_overlap: 'Double-booked against another task',
+      scr_exec_compressed: 'Duration shrunk below the real time it takes', scr_exec_broken: 'Starts before its prerequisite finishes',
+      scr_safety_ok: 'Safety authority and criteria are in place', scr_safety_gap: 'No safety authority or criterion set',
+      scr_qual_ok: 'Quality condition met', scr_qual_fail: 'Quality condition missed',
+      scr_money_ok: 'Budget authority and reserve are usable', scr_money_gap: 'No usable budget authority or reserve',
+      scr_decoy: 'Placed a task that wasn’t needed',
+      gradeGateB: function (n) { return n + ' · B — an A requires zero known gaps'; },
+      daySliceLine: function (earned, max, phase) { return phase + ': ' + earned + ' of its ' + max + ' trip points'; },
+      sst_ok: 'OK', sst_missing: 'Missing', sst_late: 'Late', sst_broken: 'Broken', sst_overlap: 'Overlap', sst_compressed: 'Compressed', sst_decoy: 'Decoy',
+
       // --- intro / cast (onboarding) ---
       btnCast: '👥 Cast',
       introKicker: 'REHEARSE BEFORE YOU RUN',
@@ -529,6 +545,22 @@
       sec_food_t: '🍱 食事', sec_food_b: 'ひなたの厨房——料理長（秋山・ナオ・カイト）がここで調理。朝夕に食事を提供し、昼のお弁当はAIBOSメンバーの手伝いで毎朝用意します。',
       sec_rod_t: '🎣 釣り・装備', sec_rod_b: '装備・分担の拠点——釣り道具をここで準備し、誰が何を持つかを決める。食料・飲み物・薬などの荷物もここで荷造りし、出発の準備を整える。',
       sec_transport_t: '🚤 移動', sec_transport_b: '積み込み・搬送——すべてを小型トラックに積み込み、船が待つ港まで運ぶ（のぶさん→磯、きむらさん→沖のジギング）。',
+
+      // --- §13.3 採点台帳：バケット／ディメンション名、減点理由テンプレート、状態チップ ---
+      sb_frame: '全体基盤', sb_arrival: '到着', sb_ops: '運営', sb_fishday: '釣行日', sb_return: '帰着',
+      sd_info: '情報', sd_exec: '実行', sd_safety: '安全', sd_quality: '品質', sd_money: '予算', sd_people: '人員',
+      scr_info_ok: '情報は定刻に届いた', scr_info_late: '到着が遅れ、手待ちが発生',
+      scr_info_missing: '受け渡しが未設定——迷いが発生', scr_info_drawn_late: '矢印はあるが到着が遅れた（一部減点）',
+      scr_exec_ok: '配置・時間・順序ともに適切', scr_exec_unstaffed: '担当者が未割当',
+      scr_exec_misassigned: '担当役割が違う', scr_exec_overlap: '他のタスクと時間が重複',
+      scr_exec_compressed: '所要時間が実際より短く圧縮されている', scr_exec_broken: '前提タスクの完了前に開始している',
+      scr_safety_ok: '安全の権限・基準が整っている', scr_safety_gap: '安全の権限・基準が未設定',
+      scr_qual_ok: '品質条件を満たしている', scr_qual_fail: '品質条件を満たしていない',
+      scr_money_ok: '予算権限・予備費が使用可能', scr_money_gap: '使える予算権限・予備費がない',
+      scr_decoy: '不要なタスクを配置した',
+      gradeGateB: function (n) { return n + '・B——Aにはギャップゼロが条件'; },
+      daySliceLine: function (earned, max, phase) { return phase + '：トリップ100点のうち ' + earned + ' / ' + max + ' 点'; },
+      sst_ok: 'OK', sst_missing: '未設定', sst_late: '遅延', sst_broken: '破綻', sst_overlap: '重複', sst_compressed: '圧縮', sst_decoy: 'ダミー',
 
       // --- intro / cast (onboarding) ---
       btnCast: '👥 登場人物',

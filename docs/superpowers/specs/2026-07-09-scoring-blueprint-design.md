@@ -1,8 +1,9 @@
 # Scoring Blueprint — Ogasawara Rehearsal
 
-> **Status: DRAFT v0.2 — for owner review before any code changes.**
-> v0.2 folds in an independent Fable design review of v0.1. This is the authoritative reference the
-> scoring engine will be built/refactored against once approved. Scoring is *the heart of the game*.
+> **Status: v0.3 — APPROVED; Phase‑0 resolutions LOCKED (2026‑07‑09). Build in progress.**
+> v0.2 folded in a Fable design review; v0.3 adds §13 (Phase‑0 reconciliations + frozen build contract) after
+> a Fable plan‑reconfirm and a Sonnet atom enumeration. This is the authoritative reference the scoring engine
+> is built/refactored against. Scoring is *the heart of the game*.
 
 ---
 
@@ -102,9 +103,9 @@ points, zero fractions.**
 
 ### 3.4 Worked inventory — the Fishing Day (41 pts, 28 atoms), grounded in the canonical §5 plan
 **Information — 22 pts (14 socket atoms).** The 9 cards fan out to **14 consuming sockets**:
-`ic_food→🍳(1)`, `ic_weather→🍳,🧭(2)`, `ic_orgfood→🍳(1)`, `ic_tackle→🎣(1)`, `ic_headcount→🧭(1)`,
-`ic_catch→🍳,📦,🎧(3)` = **10 standard sockets × 1 = 10**; plus the **4 riskable** `ic_menu→🎣`, `ic_menu→🧭`,
-`ic_target→🧭`, `ic_ground→🎣` **× 3 = 12**. (10 + 12 = 22.)
+`ic_food→🍳(1)`, `ic_weather→🍳,🧭(2)`, `ic_orgfood→🍳(1)`, `ic_tackle→🎣(1)`, `ic_ground→🍳(1)` (cook‑lock),
+`ic_headcount→🧭(1)`, `ic_catch→🍳,📦,🎧(3)` = **10 standard sockets × 1 = 10**; plus the **4 riskable**
+`ic_menu→🎣`, `ic_menu→🧭`, `ic_target→🧭`, `ic_ground→🎣` **× 3 = 12**. (10 + 12 = 22.)
 **Execution — 9 pts (9 lane atoms):** the 8 organizer lanes + 1 galley lane (the 3 chefs parallelize) each
 run their required tasks placed/staffed/dep‑consistent/uncompressed = 1 each.
 **Safety — 6 pts (2 gate atoms):** dawn go/no‑go *with an explicit abort criterion* (3) + abort authority
@@ -211,3 +212,76 @@ The **Fishing Day** inventory is fully worked in §3.4 (28 atoms → 41 pts) aga
 100) are the **first task of the implementation plan**, read mechanically off `plan.days[seg].tasks`,
 `handoffsForSeg`, and the classic detectors. The pricing *rules* (§3.1) are fixed now; only the enumeration
 is deferred, and `verify.js`'s "Σ = 100" assertion is the backstop that the enumeration is complete.
+
+---
+
+## 13. Phase‑0 resolutions & frozen build contract (LOCKED 2026‑07‑09)
+A Sonnet enumeration produced the full 80‑atom inventory (sums to exactly 100; both axes match §3.3) and
+surfaced the gaps between the locked table and what's checkable in code. A Fable plan‑reconfirm returned GO
+with a Phase‑0 gate. The rulings below are LOCKED; builders follow them without improvising.
+
+### 13.1 Owner rulings
+- **Free‑point atoms → make them real.** The 5 atoms that can't fail today get real checks so each can fail
+  on a bad plan (faithful to §0): **hospital‑info shared** (`ic_hospital.recipientRoleIds ⊇ {pm,siteLead,
+  comms,safetyLead}`); **night abort‑criterion** (`rk_night.abortCriterion` present, mirroring `rk_sea`);
+  **allergy respected** (a real gate: the committed menu species must not intersect a guest allergen —
+  needs a structured menu‑species field/flag the engine can read, not free text); **portions correct**
+  (`= 13 guests + organizer add‑ons`, derived/checked, not a static config read); **crew health‑check**
+  (`t_f_health` placed & done → priced as a Fishing‑Day Safety atom).
+- **Owner & PM get a fishing‑day activity.** `p01`/`p02` today own zero `t_f_*` tasks (only 7 active lanes).
+  Give each a real **flex/standby** fishing‑day task — *remote work on another project, or join the fishing,
+  or help the galley if needed (normally not needed)* — so they're active lanes (and not idle on the map).
+  Result: **8 organizer lanes + galley = 9 Execution atoms**, Fishing Day stays 41. (Low‑stakes tasks: no
+  `neededInfo`, no deps; they must be placed on the right role and not overlap, like any Execution atom.)
+- **Late standard info‑socket → loses its point** (information has a clock; the idle it causes also shows in
+  Efficiency — one fault, two *numbers*). Riskable sockets keep the 1 "drawn" + 2 "on time" split.
+- **`score()` stays internal‑only** — it still provides `individuals`/`team`/`conditions` + the classic
+  fix‑pack to `renderReport`, but its total/grade stop being a headline and its headline verify pins retire.
+- **Decoy safety‑flag** wired onto `hd_a_dec_nightfish` + `hd_r_dec_latefish` (−3, safety‑flavored); other
+  decoys stay −2.
+- **Live pacing** — group the (now ~12–14) freeze prompts by the two convergence points (pre‑departure info;
+  catch relay) so it's a rhythm, not a nag. Finalized at the seed phase against a measured freeze count.
+- **Return Safety/Money split** is content‑based (the Return roster has no `safetyLead`/`chef` task) — accepted.
+
+### 13.2 Frozen API contract (builders implement exactly this)
+```
+scoreTrip(plan) -> {
+  total,            // int 0..100 = Σ atoms.earned
+  grade,            // A (>=90 && gate.clean) | B >=75 | C >=60 | D
+  gate: { clean, withheldA },   // grade gate replaces the 89 cap
+  atoms: [ {
+    id, bucket, dimension,
+    itemRef: { type:'lane'|'socket'|'gate'|'decoy'|'frame', taskId?, cardId?, handoffId?, detectorId? },
+    maxPts,           // int
+    earned,           // int
+    status,           // ok | missing | late | present-but-late | broken | overlap | compressed | decoy
+    reasonKey,        // one of the fixed §13.3 keys (NOT free text)
+    reasonParams      // {} for i18n interpolation
+  } ],
+  byBucket,           // { frame,arrival,ops,fishday,return } -> {maxPts, earned}
+  byDimension         // { info,exec,safety,quality,money,people } -> {maxPts, earned}
+}
+tripEfficiency(plan) -> int %   // minute‑weighted Σ productive / Σ available over the 4 modeled days;
+                                // unplaced tasks contribute neither avail nor idle
+```
+Pure functions (no RNG, no plan mutation), exported on the engine `api`.
+
+### 13.3 Fixed reason‑template keys (so i18n is bounded & parallel)
+`scr_info_ok · scr_info_late · scr_info_missing · scr_info_drawn_late` (riskable partial) · `scr_exec_ok ·
+scr_exec_unstaffed · scr_exec_misassigned · scr_exec_overlap · scr_exec_compressed · scr_exec_broken ·
+scr_safety_ok · scr_safety_gap · scr_qual_ok · scr_qual_fail · scr_money_ok · scr_money_gap · scr_decoy`.
+Plus bucket names (`sb_frame/arrival/ops/fishday/return`), dimension names (`sd_info/exec/safety/quality/
+money/people`), the grade‑gate line (`gradeGateB` = "{n} · B — an A requires zero known gaps"), and the
+day‑slice line (`daySliceLine(earned,max,phase)` = "{phase}: {earned} of its {max} trip points").
+
+### 13.4 Verify split (Fable) & phase‑sequencing note
+- **P1 (with `scoreTrip`) — structural:** Σ maxPts = 100 exactly; `byBucket` maxPts = {14,15,18,41,12};
+  `byDimension` maxPts = {34,25,20,10,10,1}; determinism (two calls equal); purity (doesn't perturb `score()`
+  or mutate the plan). The existing 196 checks stay green (P1 changes **no** content/seed).
+- **P2 (with the seed re‑tune) — numeric:** the all‑fixes + `canonDay` plan earns 100/A; gappy ≈ 50/D;
+  monotone fix ladder; **arrow‑draw is the largest single jump**; migrate the old 220/91%/18:30 pins into
+  Efficiency vs atom anchors.
+- **Sequencing:** the content additions (owner/PM flex tasks, the 5 make‑real checks, decoy flags) + seed
+  re‑tune + `canonDay` **placement‑restore** land together in **P2**. In **P1**, `scoreTrip`'s inventory
+  references those atoms but they simply score `earned:0` until P2 — so `Σ maxPts = 100` holds structurally
+  from day one, while "canonical earns 100" is a P2 anchor.
