@@ -952,7 +952,9 @@
   // Pure READ over ADJ / anim state; never writes engine state. BFS gives a station route; each figure
   // follows waypoint-to-waypoint, easing from rest and settling on arrival, with a deterministic per-person
   // speed. The FINAL leg targets the fanned point (f.tx/f.ty) so figures at the SAME station still fan out.
-  var FAN_COL = 23, FAN_ROW = 24, FEET_BASE = 36;              // base fan spacing / feet offset (× stageScale)
+  // fan spacing tracks the sprite-era pawn size (PRS_STAGE.FIG_SCALE = 1.3) so bigger pawns don't overlap
+  var FIGK = (window.PRS_STAGE && window.PRS_STAGE.FIG_SCALE) || 1.3;
+  var FAN_COL = Math.round(23 * FIGK), FAN_ROW = Math.round(24 * FIGK), FEET_BASE = 36;   // (× stageScale)
   function stageScaleNow() {                                   // bigger stage -> bigger pawns/fan (capped ~1.7)
     var w = (anim && anim.w) || 1000, h = (anim && anim.h) || 560;
     return Math.max(1, Math.min(Math.min(w / 1000, h / 560), 1.7));
@@ -1857,7 +1859,7 @@
   function pawnAt(e) {
     if (!sim || !anim) return null;
     var pt = sitemapPt(e); if (!pt) return null;
-    var R = 26 * (USE_CANVAS ? stageScaleNow() : 1), best = null, bestD = R * R;
+    var R = 26 * FIGK * (USE_CANVAS ? stageScaleNow() : 1), best = null, bestD = R * R;   // radius grows with the sprite-era pawn scale
     sim.participants.forEach(function (p) {
       var f = anim.fig[p.id]; if (!f) return;
       var dx = f.cx - pt.x, dy = f.cy - pt.y, d = dx * dx + dy * dy;
