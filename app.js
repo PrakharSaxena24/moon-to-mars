@@ -2353,7 +2353,8 @@
     var out = [];
     for (i = 0; i < order.length; i++) {
       var a = order[i];
-      a.sev = a.min >= 120 ? 'high' : (a.min >= 45 ? 'mid' : 'low');
+      a.sev = a.min >= 120 ? 'high' : (a.min >= 45 ? 'mid' : 'low');   // DOM hotspot class
+      a.sevN = a.min >= 120 ? 1 : (a.min >= 45 ? 0.6 : 0.3);           // canvas light: 0..1 (stage grades amber→hanko)
       out.push(a);
     }
     return out;
@@ -2399,9 +2400,11 @@
       fig: RSTG.fig, guest: {}, boat: RSTG.boat, wakes: [],
       motes: [], cascade: { hops: [], has: false },
       ghost: [{}, {}, {}], trail: [], chain: [], hotPts: [], frozen: false,
-      // S2 contracts (spec §4): harmless extras until stage.js's dusk/marker/stamp layers merge
+      // S2 render contracts (spec §4): stage.js draws the dusk grade, the marker LIGHT
+      // (numeric sev 0..1, amber→hanko) and the hanko stamp; the DOM side (below) owns
+      // only the hotspots + aria + the person-minute chips.
       dusk: 1,
-      stallMarkers: RSTG.markers.map(function (m) { return { stationId: m.stationId, sev: m.sev }; }),
+      stallMarkers: RSTG.markers.map(function (m) { return { stationId: m.stationId, sev: m.sevN }; }),
       stamp: RSTG.stamp };
   }
   function bootReportStage(res, trip) {
