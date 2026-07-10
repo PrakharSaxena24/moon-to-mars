@@ -1238,3 +1238,47 @@ reversibility clause holds.
 - **Deferred:** Phase 4 report-on-stage (dusk, stall markers as click-through fixes, hanko grade stamp);
   wrong-holder placement consequences (engine work); pawn at-rest name legibility at the pre-dawn zoom
   (hover/click covers it); guests on the plan stage.
+
+## 27. Harbor Complete — sprites, master washi, cinematics, the finished arc (SHIPPED 2026-07-11)
+Owner: "push and complete everything, upgrade the graphics for MUCH better play"; picks: master-grade washi
+WITH a dedicated Fable sprite atelier · auto-cinematics (no user camera) · full backlog close · pawns ~30%
+bigger. Spec `docs/superpowers/specs/2026-07-11-harbor-complete-design.md` · plan
+`docs/superpowers/plans/2026-07-11-harbor-complete.md`.
+- **`sprites.js` (NEW, the one authorized file):** `window.PRS_SPRITES` — a hand-crafted SVG sprite library,
+  120 offscreen canvases (10 roles + guest × idle/walk×2/work×2/stall × both facings, pre-mirrored, 2×
+  resolution, feet-anchor meta). Sumi-e washi art keyed to `role().color`; every role readable at 40px; the
+  stall pose slumps with the tool lowered (logi sets the crate down). Strict enhancement contract: `ready`
+  stays false on any decode failure and the procedural pawns remain the permanent, byte-equivalent fallback
+  (proven via scratch copies with sprites.js deleted AND with a poisoned decode).
+- **Master world (stage.js):** the SKY table became a lighting model — global grade, long dawn shadows
+  (07:00 departure is the money shot), lantern pools that bloom, living water (3 wave bands, foam, shore/sun
+  reflection columns, spray, wake), cloud shadows, richer stations (noren, nets, chimney), pooled particles
+  (galley smoke, cook steam, dusk fireflies). `FIG_SCALE = 1.3` (the first pass declared-but-never-applied it
+  — a live 1× bug caught at completion). scene() JS = **0.40ms/frame** at fishday-noon (budget 8ms);
+  save/restore 82/82. Note: headless software-raster measures ~40ms present-cost at 1600px (GPU hardware
+  expected fine) — documented, not gated.
+- **Auto-cinematics:** `PRS_STAGE.camTo/camReset/camState` + a view.cam fallback path; freeze punch-in
+  (Live + coarse cp_stall, 1.35× on the stalled pawn), dinner breathe-out, vignette dawn drift; camera never
+  moves under RM or normal interaction; `camReleaseSafe` on every exit chokepoint, cam-hold gates hotspots AND
+  pawn hit-testing until true identity.
+- **Report-on-stage (the arc completes):** plan on the harbor → run on the harbor → the report returns at
+  **dusk** — stall markers glow at the exact stations where idle/rework accrued (person-minute chips,
+  gap-naming aria, click-through to the fixing receipt row / drawer socket), pawns inspectable with day
+  accounts (idle/rework/waited-on), and the grade lands as a red **hanko stamp** (thock; RM static; re-armed
+  per report, language-switch safe).
+- **Backlog closed:** Live's 11 per-arrow freezes → **4 cluster stops** (pre-departure / catch-relay; each
+  card still individually previewed+committed; "6 messages converge here — fix them in one pass"); coarse
+  days fly their info motes and sail inbound/outbound boat crossings; dead `.scorecard`/`.pillar` CSS +
+  `scorecardTitle` retired.
+- **Verified:** verify **258/258** (engine/verify byte-untouched) · smoke 22/22 · plan-harbor E2E 52/52 ·
+  a new **37-check Harbor-Complete E2E** (sprite fallback via scratch repo, camera identity, markers/stamp,
+  grouped freezes, coarse motes, RM/JP/390px) — **369 checks, zero JS errors**. Fable close-out lens found 6
+  reproduced issues, all fixed: bubble chips lifted clear of sprite hats, fan spacing FIG_SCALE'd on
+  report/vignette/plan stages, cam-hold persists through the eased release + pawn clicks gated, guests
+  clamped ashore + the angler's podium moved to the waterline, the async sprite swap eased over 450ms.
+- **Execution:** Fable atelier (S1) ∥ Fable-xhigh world (S2) ∥ Fable report (S3) ∥ Sonnet E2E (S4), then Opus
+  S5; two Fable session-limit interruptions cost retries, zero work (partials committed green and resumed).
+  Commits: spec `7788014` · plan `514d060` · base `3deeb24` · S5 `1186398` · S2 `a7f44db` (+plumbing) · S3
+  `6dc17e8`-era completion · QA `6c9e148`.
+- **Deferred:** guest sprite individuality (procedural yukata crowd kept deliberately); user pan/zoom;
+  real-hardware perf measurement; Phase-2 content branches (§13).
