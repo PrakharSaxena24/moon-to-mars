@@ -657,6 +657,54 @@ button.rail-row:focus-visible{outline:2px solid var(--accent);outline-offset:1px
 .ar-arrive.late{background:rgba(161,61,47,.09);color:var(--wait-dark);}
 .ar-note{font-size:11.5px;color:var(--ink3);margin-top:6px;}
 
+/* ===== WB · the day drawer: the deck→arrange→connect editor rides a bottom sheet ===== */
+/* Non-modal bottom sheet. z-index sits BELOW the modals (50) / drag ghost (60) / pawn
+   popover (60) so arrow-editing, block dragging and pawn inspection all overlay it. */
+.day-drawer{
+  position:fixed; left:0; right:0; bottom:0;
+  height:85vh; max-height:85vh; z-index:45;
+  display:flex; flex-direction:column;
+  background:var(--panel);
+  border:1px solid var(--line2); border-bottom:none;
+  border-top-left-radius:var(--r-lg); border-top-right-radius:var(--r-lg);
+  box-shadow:0 -10px 34px rgba(20,16,10,.24);
+  transform:translateY(100%); visibility:hidden;
+  transition:transform .28s ease, visibility 0s linear .28s;
+}
+.day-drawer.open{ transform:translateY(0); visibility:visible; transition:transform .28s ease, visibility 0s linear 0s; }
+.dd-head{
+  flex:0 0 auto; display:flex; align-items:center; justify-content:space-between; gap:12px;
+  padding:12px 18px; border-bottom:1px solid var(--line);
+  background:linear-gradient(180deg,var(--bg2),var(--panel));
+  border-top-left-radius:var(--r-lg); border-top-right-radius:var(--r-lg);
+}
+.dd-title{ font-family:var(--serif); font-size:17px; margin:0; letter-spacing:.2px; }
+.dd-close{
+  flex:0 0 auto; width:34px; height:34px; border-radius:50%;
+  border:1px solid var(--line2); background:var(--bg1); color:var(--ink2);
+  font-size:20px; line-height:1; cursor:pointer; box-shadow:var(--shadow);
+}
+.dd-close:hover{ background:var(--bg2); color:var(--ink); }
+/* the shell button carries .btn (transition:.15s all) — visibility must never transition on it,
+   or it inherits the drawer's flip with a discrete delay and the open-time focus() no-ops */
+#dd-close{ transition:background-color .15s ease, color .15s ease, border-color .15s ease; }
+.dd-close:focus-visible{ outline:2px solid var(--accent); outline-offset:1px; }
+.dd-body{ flex:1 1 auto; overflow-y:auto; -webkit-overflow-scrolling:touch; padding:16px 18px 26px; }
+.dd-body #fd-card{ margin:0; }
+/* ≥1180px: leave the ledger-rail column (300px + 14px gap) visible to the right of the sheet,
+   aligned to the centered .wrap (max 1280, body has 16px horizontal padding). */
+@media(min-width:1180px){
+  .day-drawer{
+    left:calc(16px + max(0px, (100vw - 1312px)/2));
+    right:calc(16px + 314px + max(0px, (100vw - 1312px)/2));
+  }
+}
+/* phones: full-width sheet over everything */
+@media(max-width:760px){ .day-drawer{ height:92vh; max-height:92vh; } }
+@media(prefers-reduced-motion:reduce){
+  .day-drawer, .day-drawer.open{ transition:none; }
+}
+
 /* checkpoint inspector */
 .insp-body{display:flex;flex-direction:column;gap:8px;max-height:52vh;overflow-y:auto;}
 .insp-row{display:flex;gap:10px;border:1px solid var(--line);border-radius:var(--r-md);padding:9px 11px;background:var(--bg1);}

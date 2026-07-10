@@ -355,7 +355,10 @@
       trayFerryNeeded: 'a ferry recipient (site / angler / chef / logistics / safety)',
       pickTitle: function (obj) { return 'Hand off: ' + obj; },
       pickValidNote: 'Choose who receives it — valid recipients are listed first.',
-      tokenAria: function (obj, name) { return obj + ' — held by ' + name; }
+      tokenAria: function (obj, name) { return obj + ' — held by ' + name; },
+      // --- WB day drawer ---
+      ddTitle: function (day) { return 'Plan the day — ' + day; },
+      ddClose: 'Close the day editor'
     },
 
     ja: {
@@ -706,7 +709,10 @@
       trayFerryNeeded: '船便の受け取り役（船・釣り・料理・調達・安全のいずれか）',
       pickTitle: function (obj) { return obj + ' の受け渡し'; },
       pickValidNote: '受け取る相手を選択——有効な相手が上に表示されます。',
-      tokenAria: function (obj, name) { return obj + '——' + name + 'が保持'; }
+      tokenAria: function (obj, name) { return obj + '——' + name + 'が保持'; },
+      // --- WB day drawer ---
+      ddTitle: function (day) { return day + 'の計画'; },
+      ddClose: '計画エディタを閉じる'
     }
   };
 

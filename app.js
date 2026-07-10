@@ -2168,7 +2168,77 @@
     paintSetup();
   }
 
+  // =========================================================================
+  // WB — the day drawer. The deck→arrange→connect editor (#fd-card, byte-
+  // unchanged inside) rides a bottom sheet that a day tab (or the arrows
+  // satchel) slides up over the plan stage. Non-modal: the ledger rail stays
+  // live beside it (≥1180px, where the drawer leaves the rail's column).
+  // The tray/plan-stage worker (WA) ships the shell in index.html with
+  // #fd-card already inside #dd-body; when it isn't present yet (this
+  // worktree), we build the identical shell here and the 3-way merge
+  // reconciles the duplicate.
+  // =========================================================================
+  var drawerSeg = null;         // the day currently shown in the drawer, or null when closed
+  var drawerInvoker = null;     // the control to restore focus to on close (usually the day tab)
+
+  function ensureDrawerShell() {
+    if ($('day-drawer')) return;                        // WA's index.html shell is already present (post-merge)
+    var host = $('setup') || document.body;
+    var d = document.createElement('div');
+    d.id = 'day-drawer'; d.className = 'day-drawer';
+    d.setAttribute('role', 'dialog');
+    d.setAttribute('aria-modal', 'false');              // non-modal: the rail beside it stays interactive
+    d.setAttribute('aria-labelledby', 'dd-title');
+    d.innerHTML =
+      '<div id="dd-head" class="dd-head">' +
+        '<h2 id="dd-title" class="dd-title"></h2>' +
+        '<button id="dd-close" class="dd-close" type="button">×</button>' +
+      '</div>' +
+      '<div id="dd-body" class="dd-body"></div>';
+    host.appendChild(d);
+    var card = $('fd-card');                            // move the existing editor subtree into the drawer body
+    if (card) $('dd-body').appendChild(card);
+  }
+
+  function drawerIsOpen() { return drawerSeg !== null; }
+
+  function openDayDrawer(seg, invoker) {
+    if (seg === 'all' || !seg) { closeDayDrawer(); return; }
+    ensureDrawerShell();
+    var d = $('day-drawer'); if (!d) return;
+    // remember the invoking control (the day tab, or the satchel via activeElement) to restore
+    // focus to on close — but never a control that already lives inside the drawer
+    var inv = invoker || document.activeElement;
+    if (inv && inv !== document.body && !d.contains(inv)) drawerInvoker = inv;
+    if (daySel !== seg) { daySel = seg; placingChip = null; removeGhost(); removeDropSlot(); paintSetup(); }
+    drawerSeg = seg;
+    var ttl = $('dd-title'); if (ttl) ttl.textContent = T().ddTitle(dayLabel(seg));
+    var cl = $('dd-close'); if (cl) cl.setAttribute('aria-label', T().ddClose);
+    // integration seam: the shell ships aria-hidden="true" and a display:none guard keys off it —
+    // flip it (and force a reflow) BEFORE .open so the slide transition starts from the base state
+    d.setAttribute('aria-hidden', 'false');
+    void d.offsetHeight;
+    d.classList.add('open');
+    buildDayGrid();                                     // re-fit now it's visible so fd-scroll sizes correctly
+    if (cl) { try { cl.focus(); } catch (e) { } }
+  }
+
+  function closeDayDrawer() {
+    var d = $('day-drawer');
+    if (d) { d.classList.remove('open'); d.setAttribute('aria-hidden', 'true'); }
+    if (!drawerIsOpen()) { drawerSeg = null; return; }
+    drawerSeg = null;
+    var inv = drawerInvoker; drawerInvoker = null;
+    var target = null;
+    // paintSetup rebuilds the day-select buttons, so a stored day tab is detached by now —
+    // re-resolve the live tab from its day id; otherwise restore the stored control (e.g. satchel)
+    if (inv && inv.dataset && inv.dataset.day) target = document.querySelector('.day-btn[data-day="' + inv.dataset.day + '"]');
+    if (!target && inv && document.body.contains(inv)) target = inv;
+    if (target) { try { target.focus(); } catch (e) { } }
+  }
+
   function bind() {
+    ensureDrawerShell();
     document.querySelectorAll('.lang button').forEach(function (b) { b.addEventListener('click', function () { L = b.getAttribute('data-lang'); applyLang(); }); });
     $('modesw').addEventListener('click', function (e) {
       var b = e.target.closest('button[data-mode]'); if (!b) return;
@@ -2188,9 +2258,23 @@
 
     $('day-select').addEventListener('click', function (e) {
       var b = e.target.closest('.day-btn'); if (!b) return;
-      daySel = b.dataset.day; placingChip = null; removeGhost(); removeDropSlot();
+      var seg = b.dataset.day;
+      // re-clicking the tab whose drawer is already open closes it (whole-trip has no drawer)
+      var reclick = (seg !== 'all' && seg === daySel && drawerSeg === seg);
+      daySel = seg; placingChip = null; removeGhost(); removeDropSlot();
       paintSetup();
+      if (seg === 'all' || reclick) closeDayDrawer();   // whole-trip closes any drawer; the stage IS that surface
+      else openDayDrawer(seg, b);                        // the four days each slide their editor up
     });
+    // §WB drawer chrome: close button, and Escape (capture-phase so the drawer wins over the pawn
+    // popover, but never over an open modal — a modal owns its own Escape via the bubbling handler)
+    $('dd-close').addEventListener('click', closeDayDrawer);
+    document.addEventListener('keydown', function (e) {
+      if (e.key !== 'Escape' || !drawerIsOpen()) return;
+      if (topModal()) return;                           // a dialog is open → let it own the keypress
+      e.stopImmediatePropagation();                     // drawer precedence over the pawn popover
+      closeDayDrawer();
+    }, true);
     // §W1 receipt rows: Close / Undo / route-to-fishday (the dropdowns are gone)
     $('editors').addEventListener('click', function (e) {
       var b = e.target.closest('button'); if (!b || !b.dataset.det) return;
