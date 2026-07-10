@@ -118,6 +118,7 @@
     updateRunButtons();   // keep the pause/guests/drawer imperative labels (and aria-labels) in sync with the language
     paintSetup(); buildRules(); buildLegend();
     if (!$('intro').classList.contains('hidden')) { renderIntro(); bootVignette(vigLastAuto); }   // cast grid re-render + vignette re-boot (§W4 lifecycle) in the new language
+    if (!$('setup').classList.contains('hidden')) bootPlanStage();   // re-mount the plan stage (chip/aria in the new language); paintSetup above already repainted the tray
     // mid-run: rebuild station labels but keep every walker where it stands (no teleport)
     if (!$('run').classList.contains('hidden') && sim && anim) { buildSitemap(true); renderSim(sim); if (pawnCardPid && pawnCardOpen()) openPawnCard(pawnCardPid); }
     if (appMode === 'live' && liveState && !$('run').classList.contains('hidden')) {
@@ -129,6 +130,23 @@
     if ($('inspect-modal').classList.contains('show')) openInspector();
     if ($('arrow-modal').classList.contains('show') && arrowEdit) openArrowPanel(arrowEdit);
     if ($('detail-modal').classList.contains('show') && lastDetailStation) openProblemPanel(lastDetailStation);
+  }
+
+  // =========================================================================
+  // §6 SCREEN-STATE CONSOLIDATION — one show/hide helper for {intro,setup,run,report}.
+  // Mechanical: each caller still owns its own stopAnim/closeModals/render; this owns ONLY
+  // visibility + body.running + the live-dock's run-only rule + the two canvas lifecycles
+  // (vignette on intro, plan stage on setup) + the drawer's clean reset on leaving setup.
+  // =========================================================================
+  function enterScreen(name) {
+    var screens = ['intro', 'setup', 'run', 'report'], i;
+    killVignette();                                                  // the intro vignette dies on every transition (idempotent)
+    killPlanStage();                                                 // ...as does the plan-stage rAF (idempotent)
+    if (typeof closeDayDrawer === 'function') closeDayDrawer();      // the drawer worker asked for a clean reset when leaving setup
+    for (i = 0; i < screens.length; i++) $(screens[i]).classList.toggle('hidden', screens[i] !== name);
+    if (name !== 'run') $('live-dock').classList.add('hidden');      // the live dock only ever shows INSIDE run (callers show it)
+    document.body.classList.toggle('running', name === 'run');
+    if (name === 'setup') bootPlanStage();                           // (re)mount the pre-dawn plan stage + its local rAF
   }
 
   // =========================================================================
@@ -401,6 +419,9 @@
     buildMissionControl();
     buildDayGrid();
     renderRail('setup', trip);
+    renderTray();          // the tray/tokens are a VIEW of fixed[]/orgOv — repaint on every edit
+    syncPlanStage();       // a seat swap re-homes pawns; other edits leave positions put
+    psPositionOverlays();
   }
 
   // =========================================================================
@@ -1225,7 +1246,7 @@
     closeModals();
     $('live-dock').classList.add('hidden');               // a morning run never shows the live dock
     speedMult = 1; document.querySelectorAll('.spd').forEach(function (x) { x.classList.toggle('on', x.getAttribute('data-spd') === '1'); });
-    $('setup').classList.add('hidden'); $('report').classList.add('hidden'); $('run').classList.remove('hidden');
+    enterScreen('run');
     $('figs').innerHTML = ''; $('banner').classList.remove('show');
     var ff = $('fanfare'); if (ff) ff.classList.remove('show');
     animReset(); updateRunButtons(); buildSitemap();
@@ -1872,7 +1893,7 @@
       finishTimer = null;
       if (sim !== simAt) return;      // a mode/screen change won the race — don't pop the report over it
       closePawnCard();
-      stopAnim(); document.body.classList.remove('running'); $('run').classList.add('hidden'); $('report').classList.remove('hidden'); renderReport(lastResult);
+      stopAnim(); enterScreen('report'); renderReport(lastResult);
     }, 700);
   }
 
@@ -2141,9 +2162,9 @@
   function toSetup() {
     if (timer) { clearInterval(timer); timer = null; }
     clearFinishTimer();
-    stopAnim(); sim = null; paused = false; livePausedForFix = false; document.body.classList.remove('running');
+    stopAnim(); sim = null; paused = false; livePausedForFix = false;
     closeModals();
-    $('report').classList.add('hidden'); $('run').classList.add('hidden'); $('live-dock').classList.add('hidden'); $('setup').classList.remove('hidden');
+    enterScreen('setup');
     paintSetup();
   }
 
@@ -2175,12 +2196,7 @@
       var b = e.target.closest('button'); if (!b || !b.dataset.det) return;
       if (b.classList.contains('rc-close')) applyReceiptFix(b.dataset.det, true);
       else if (b.classList.contains('rc-undo')) applyReceiptFix(b.dataset.det, false);
-      else if (b.classList.contains('rc-route')) {
-        daySel = 'fishday'; placingChip = null; removeGhost(); removeDropSlot();
-        paintSetup();
-        var fc = $('fd-card');
-        if (fc && fc.scrollIntoView) fc.scrollIntoView({ behavior: RM.matches ? 'auto' : 'smooth', block: 'start' });
-      }
+      else if (b.classList.contains('rc-route')) openFishdayEditor();   // satchel behavior (openDayDrawer when WB lands, tab-switch fallback)
     });
     // §W1 rail bucket rows are jump-links: a day bucket switches to that day's tab; the frame
     // bucket scrolls to the first still-open receipt row (falling back to the 'all' tab if the
@@ -2189,6 +2205,7 @@
       var r = e.target.closest('.rail-row'); if (!r || !r.dataset.bucket) return;
       var bk = r.dataset.bucket;
       if (bk === 'frame') {
+        expandAllSettings();   // the receipt rows live in the collapsible fallback — open it before scrolling there
         var oc = document.querySelector('#editors .editor-card:not(.closed)');
         if (!oc && daySel !== 'all') {
           daySel = 'all'; placingChip = null; removeGhost(); removeDropSlot(); paintSetup();
@@ -2236,6 +2253,63 @@
     $('btn-auto').addEventListener('click', function () { for (var k in fixed) fixed[k] = true; fdReset(); mcReset(); paintSetup(); });
     $('btn-clear').addEventListener('click', function () { for (var k in fixed) fixed[k] = false; fdReset(); mcReset(); orgSeatReset(); paintSetup(); });
     $('launch').addEventListener('click', launch);
+
+    // §2 COMMAND TRAY — three input modes share the select/resolve/reject grammar.
+    // click: keyboard activation (detail 0) opens the target picker; a pointer tap is
+    // handled by pointerup (tap-tap select); dock objects (strongbox/satchel) act on any click.
+    $('cmd-tray').addEventListener('click', function (e) {
+      var b = e.target.closest('.tray-obj, .tray-duty'); if (!b) return;
+      if (b.classList.contains('dock')) { trayObjAction(b.getAttribute('data-det')); return; }
+      if (traySuppressClick) return;                 // a drag already resolved on the stage
+      if (e.detail === 0) {                          // keyboard (Enter/Space) -> modal picker
+        openPicker(b.classList.contains('tray-duty') ? { kind: 'duty', role: b.getAttribute('data-role') } : { kind: 'obj', det: b.getAttribute('data-det') });
+      }
+    });
+    $('cmd-tray').addEventListener('pointerdown', trayPointerDown);
+    document.addEventListener('pointermove', trayPointerMove);
+    document.addEventListener('pointerup', trayPointerUp);
+    document.addEventListener('pointercancel', function () { if (trayDrag) { if (trayDrag.ghost && trayDrag.ghost.parentNode) trayDrag.ghost.parentNode.removeChild(trayDrag.ghost); trayDrag = null; trayDeselect(); } });
+    $('tray-hint-x').addEventListener('click', dismissTrayHint);
+
+    // plan-stage pawn inspection + tap-tap resolution
+    (function () {
+      var wrap = $('plan-stage-wrap');
+      wrap.addEventListener('pointermove', function (e) {
+        if ($('setup').classList.contains('hidden') || !PSTG.sim || trayDrag) return;
+        var pid = psPawnAt(e.clientX, e.clientY);
+        if (pid !== PSTG.hoverPid) { PSTG.hoverPid = pid; wrap.classList.toggle('pawn-hover', !!pid && !traySel); }
+      });
+      wrap.addEventListener('pointerleave', function () { if (PSTG.hoverPid) { PSTG.hoverPid = null; wrap.classList.remove('pawn-hover'); } });
+      wrap.addEventListener('click', function (e) {
+        if (traySuppressClick || !PSTG.sim) return;
+        if (e.target.closest('.plan-token')) return;   // tokens own their own click (undo)
+        var pid = psPawnAt(e.clientX, e.clientY);
+        if (traySel) { trayResolve(traySel, pid, true); return; }   // tap-tap: keep armed on a wrong pawn
+        if (pid) openPlanPawnCard(pid); else closePawnCard();
+      });
+      $('plan-tokens').addEventListener('click', function (e) {
+        var tk = e.target.closest('.plan-token'); if (tk) undoToken(tk.getAttribute('data-det'));
+      });
+    })();
+    // keyboard: token chips undo; picker rows resolve
+    document.addEventListener('keydown', function (e) {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      var el = e.target; if (!el || !el.classList) return;
+      if (el.classList.contains('plan-token')) { e.preventDefault(); undoToken(el.getAttribute('data-det')); }
+    });
+    $('pick-body').addEventListener('click', function (e) {
+      var b = e.target.closest('.pick-row'); if (!b || b.disabled || !pickSel) return;
+      var sel = pickSel; closePicker(); trayResolve(sel, b.getAttribute('data-pid'), false);
+    });
+    $('pick-close').addEventListener('click', closePicker);
+    $('pick-modal').addEventListener('click', function (e) { if (e.target === $('pick-modal')) closePicker(); });
+
+    // §4 "All settings" collapsible: collapsed by default ≥1180px, expanded below
+    if (window.innerWidth >= 1180) { $('all-settings').classList.add('collapsed'); $('all-settings-toggle').setAttribute('aria-expanded', 'false'); }
+    $('all-settings-toggle').addEventListener('click', function () {
+      var as = $('all-settings'), open = as.classList.toggle('collapsed');
+      this.setAttribute('aria-expanded', open ? 'false' : 'true');
+    });
 
     // day editor: deck chips + drag blocks / draw & edit arrows, on every day tab (§20)
     $('fd-wrap').addEventListener('pointerdown', fdPointerDown);
@@ -2322,10 +2396,10 @@
     document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && pawnCardOpen() && !topModal()) closePawnCard(); });
     document.addEventListener('pointerdown', function (e) {
       if (!pawnCardOpen()) return;
-      if (e.target.closest('#pawn-card') || e.target.closest('#sitemap') || e.target.closest('#stage-roster')) return;
+      if (e.target.closest('#pawn-card') || e.target.closest('#sitemap') || e.target.closest('#stage-roster') || e.target.closest('#plan-stage-panel')) return;
       closePawnCard();
     });
-    window.addEventListener('resize', function () { if (pawnCardOpen()) positionPawnCard(pawnCardPid); });
+    window.addEventListener('resize', function () { if (pawnCardOpen()) { if (!$('setup').classList.contains('hidden') && PSTG.fig[pawnCardPid]) positionPlanPawnCard(pawnCardPid); else positionPawnCard(pawnCardPid); } });
     $('dash-warnings').addEventListener('click', function (e) { var w = e.target.closest('.warn'); if (w && w.dataset.station) openProblemPanel(w.dataset.station); });
     $('detail-close').addEventListener('click', closeDetail);
     $('detail-modal').addEventListener('click', function (e) { if (e.target === $('detail-modal')) closeDetail(); });
@@ -2343,7 +2417,7 @@
     // ---- keyboard access: Escape closes the TOP modal (visual stacking = DOM order,
     // rules on top); Tab is trapped inside an open dialog; Enter/Space activates targets ----
     function topModal() {
-      var order = ['rules-modal', 'inspect-modal', 'arrow-modal', 'detail-modal'];
+      var order = ['rules-modal', 'pick-modal', 'inspect-modal', 'arrow-modal', 'detail-modal'];
       for (var i = 0; i < order.length; i++) if ($(order[i]).classList.contains('show')) return order[i];
       return null;
     }
@@ -2351,6 +2425,7 @@
       var top = topModal();
       if (e.key === 'Escape') {
         if (top === 'rules-modal') $('rules-modal').classList.remove('show');
+        else if (top === 'pick-modal') closePicker();
         else if (top === 'inspect-modal') closeInspector();
         else if (top === 'arrow-modal') { arrowEdit = null; $('arrow-modal').classList.remove('show'); modalClosed(); }
         else if (top === 'detail-modal') closeDetail();
@@ -2401,7 +2476,11 @@
     var rszT = null;
     window.addEventListener('resize', function () {
       if (rszT) clearTimeout(rszT);
-      rszT = setTimeout(function () { rszT = null; refitStage(); }, 130);
+      rszT = setTimeout(function () {
+        rszT = null; refitStage();
+        // the non-RM plan stage re-fits itself each frame; under RM (no loop) re-fit here
+        if (RM.matches && PSTG.ctx && !$('setup').classList.contains('hidden')) { psResize(); psPositionOverlays(); }
+      }, 130);
     });
   }
 
@@ -2413,7 +2492,7 @@
   // =========================================================================
   var LIVE_CH = ['board', 'chat', 'radio', 'faceToFace'];
   function ldPanel(id) { ['ld-brief', 'ld-prompt', 'ld-spot', 'ld-result'].forEach(function (p) { var e = $(p); if (e) e.classList.toggle('on', p === id); }); }
-  function closeModals() { ['detail-modal', 'inspect-modal', 'arrow-modal', 'rules-modal'].forEach(function (m) { var e = $(m); if (e) e.classList.remove('show'); }); closePawnCard(); lastFocus = null; }
+  function closeModals() { ['detail-modal', 'inspect-modal', 'arrow-modal', 'rules-modal', 'pick-modal'].forEach(function (m) { var e = $(m); if (e) e.classList.remove('show'); }); closePawnCard(); lastFocus = null; }
   function clearStationTints() { P.STATIONS.forEach(function (s) { var n = $('st-' + s.id); if (n) n.classList.remove('terr-green', 'terr-amber', 'terr-red'); }); stageTint = null; }
   function chIcon(ch) { return { board: '📋', chat: '💬', radio: '📻', phone: '📞', faceToFace: '🤝' }[ch] || '•'; }
   function personName(task) { var pid = task.assignedIds[0], p = pid && byId(currentPlan().participants, pid); return p ? nm(p.name) : nm(P.role(task.ownerRoleId).name); }
@@ -2467,11 +2546,9 @@
   // gets a Replay ▶ poster instead (spec §5 returning-player behavior)
   function showIntro(auto) {
     if (timer) { clearInterval(timer); timer = null; }
-    stopAnim(); closeModals(); document.body.classList.remove('running');
-    ['setup', 'run', 'report'].forEach(function (s) { $(s).classList.add('hidden'); });
-    $('live-dock').classList.add('hidden');
+    stopAnim(); closeModals();
     renderIntro();
-    $('intro').classList.remove('hidden');
+    enterScreen('intro');
     if (auto !== true) vigLastFinal = false;   // a fresh cast-reopen offers the beat-1 poster
     bootVignette(auto === true);
     if (window.scrollTo) window.scrollTo(0, 0);
@@ -2831,23 +2908,460 @@
     VIG.host = null;
   }
 
+  // =========================================================================
+  // §1/§2 PLAN STAGE + COMMAND TRAY — setup becomes stage-first (plan WA).
+  // The setup screen opens on the pre-dawn harbor: a static fishday minute-sim
+  // held at 04:00 (never ticked -> indigo sky, calm, no gap tints), the 11
+  // duty-holders standing at their role-home stations with the Phase-1 idle
+  // gestures, drawn by PRS_STAGE.scene onto its OWN canvas via a local rAF —
+  // the exact vignette pattern (one handle, killed on every screen exit, RM =
+  // one static frame). Docked along the bottom is the COMMAND TRAY: one draggable
+  // object per unresolved frame decision (+ the 8 duty chips). The tray is a pure
+  // VIEW of fixed[]/orgOv — placing/undoing writes the SAME applyReceiptFix / seat
+  // paths the receipt-row fallback uses, so tray, tokens, receipt rows and rail
+  // always agree. Three input modes ship together (drag / tap-tap / keyboard
+  // picker). Pawns are never draggable; you only ever hand things to people.
+  // =========================================================================
+  var PSTG = { raf: null, sim: null, cv: null, ctx: null, host: null, fig: {}, boat: null,
+    w: 0, h: 0, sc: 1, last: 0, hoverPid: null };
+  // Hand-tuned per-role podium positions (normalized) so the 11 pawns spread into
+  // distinct, targetable spots — command/finance/clinic are hidden stations folded
+  // onto Hinata's single coord, so a station-home map would pile 8 pawns on one point,
+  // and an un-ticked sim parks every idle holder at lodging. roleId is re-derived from
+  // seats by mergePlan, so a duty swap glides the pawn to the new role's spot.
+  var PS_POS = {
+    comms:      { x: 0.20, y: 0.32 }, owner:     { x: 0.33, y: 0.28 }, pm:         { x: 0.30, y: 0.46 },
+    budgetLead: { x: 0.13, y: 0.52 }, safetyLead:{ x: 0.19, y: 0.68 }, chef:       { x: 0.42, y: 0.34 },
+    logi:       { x: 0.50, y: 0.50 }, specialist:{ x: 0.60, y: 0.62 }, siteLead:   { x: 0.80, y: 0.66 }
+  };
+  var SEAT_ROLES = ['owner', 'pm', 'siteLead', 'budgetLead', 'safetyLead', 'logi', 'comms', 'specialist'];
+  // the tray catalog (spec §2 order). drag:false objects dock but open a panel/drawer instead.
+  var TRAY_OBJ = [
+    { det: 'safety',        ic: '🚩', key: 'objFlag',      drag: true },
+    { det: 'budgetAuth',    ic: '🖃', key: 'objSeal',      drag: true },
+    { det: 'info',          ic: '🎫', key: 'objFerry',     drag: true },
+    { det: 'report',        ic: '🏥', key: 'objRoute',     drag: true },
+    { det: 'fatigue',       ic: '⚖',  key: 'objRelief',    drag: true },
+    { det: 'returnLogi',    ic: '📦', key: 'objParcel',    drag: true },
+    { det: 'reserve',       ic: '💴', key: 'objStrongbox', drag: false, opens: 'finance' },
+    { det: 'handoffTiming', ic: '🎣', key: 'objSatchel',   drag: false, opens: 'fishday' }
+  ];
+  var TRAY_OBJ_BY_DET = {}; TRAY_OBJ.forEach(function (o) { TRAY_OBJ_BY_DET[o.det] = o; });
+  // static single-role targets; 'info' (ferry) is read from the engine fix (ferryTargetRoles)
+  var TRAY_TARGET_ROLE = { safety: ['safetyLead'], budgetAuth: ['budgetLead'], report: ['safetyLead'],
+    fatigue: ['siteLead'], returnLogi: ['logi'] };
+  var traySel = null;        // {kind:'obj'|'duty', det?, role?} currently lifted (drag) or selected (tap-tap)
+  var trayDrag = null;       // in-flight pointer drag state
+  var traySuppressClick = false;   // a drag that ended on the stage must not also fire a stage click
+  var tokenAnchor = {};      // cosmetic det->pid: which valid pawn a token rests on (truth stays fixed[])
+  var _ferryTargets = null;
+
+  // the recipient roles the shareInfo fix ACTUALLY adds to ic_ferry (read from the engine, no hardcode)
+  function ferryTargetRoles() {
+    if (_ferryTargets) return _ferryTargets;
+    var base = P.mergePlan({ seed: 1, overrides: {} });
+    var withFix = P.mergePlan(P.applyFix({ seed: 1, overrides: {} }, 'shareInfo'));
+    var b = byId(base.infoCards, 'ic_ferry'), w = byId(withFix.infoCards, 'ic_ferry');
+    var have = {}; (b ? b.recipientRoleIds : []).forEach(function (r) { have[r] = 1; });
+    _ferryTargets = (w ? w.recipientRoleIds : []).filter(function (r) { return have[r] !== 1; });
+    return _ferryTargets;
+  }
+  function targetRolesFor(det) { return det === 'info' ? ferryTargetRoles() : (TRAY_TARGET_ROLE[det] || []); }
+  function targetPidsFor(det) {
+    var roles = targetRolesFor(det), out = [];
+    if (!PSTG.sim) return out;
+    PSTG.sim.participants.forEach(function (p) { if (roles.indexOf(p.roleId) >= 0) out.push(p.id); });
+    return out;
+  }
+  // where a placed token rests: the remembered drop pawn if still valid, else the canonical holder
+  function tokenPidFor(det) {
+    var valid = targetPidsFor(det);
+    if (tokenAnchor[det] && valid.indexOf(tokenAnchor[det]) >= 0) return tokenAnchor[det];
+    return valid[0] || null;
+  }
+
+  // ---- the plan stage (pre-dawn harbor) ----
+  // positions are grouped by ROLE (not station): everyone solo at their podium, the
+  // 3 chefs fanned horizontally around theirs. Halos/tokens map role -> pawn the same way.
+  function psTargets(s) {
+    var pos = {}, byRole = {};
+    s.participants.forEach(function (p) { (byRole[p.roleId] = byRole[p.roleId] || []).push(p); });
+    var colGap = 27 * PSTG.sc, feet = 30 * PSTG.sc;
+    for (var rid in byRole) {
+      var a = PS_POS[rid] || { x: 0.5, y: 0.5 }, arr = byRole[rid], n = arr.length;
+      arr.forEach(function (p, i) { pos[p.id] = { x: a.x * PSTG.w + (i - (n - 1) / 2) * colGap, y: a.y * PSTG.h + feet }; });
+    }
+    return pos;
+  }
+  function psSyncFigs(snap) {
+    if (!PSTG.sim) return;
+    var pos = psTargets(PSTG.sim);
+    PSTG.sim.participants.forEach(function (p) {
+      var t2 = pos[p.id]; if (!t2) return;
+      var f = PSTG.fig[p.id];
+      if (!f) f = PSTG.fig[p.id] = { pid: p.id, cx: t2.x, cy: t2.y, tx: t2.x, ty: t2.y, walking: false, faceL: false, spdMul: figSpeedMul(p.id) };
+      f.tx = t2.x; f.ty = t2.y;
+      if (snap) { f.cx = t2.x; f.cy = t2.y; f.walking = false; }
+    });
+  }
+  function psWalk(dt) {
+    var speed = Math.max(60, PSTG.w * 0.14);
+    for (var pid in PSTG.fig) {
+      var f = PSTG.fig[pid], dx = f.tx - f.cx, dy = f.ty - f.cy, d = Math.sqrt(dx * dx + dy * dy);
+      if (d < 1.2) { f.cx = f.tx; f.cy = f.ty; f.walking = false; continue; }
+      var stp = speed * f.spdMul * dt; if (stp > d) stp = d;
+      f.cx += dx / d * stp; f.cy += dy / d * stp;
+      f.walking = true; if (Math.abs(dx) > 2) f.faceL = dx < 0;
+    }
+  }
+  function psView(rm) {
+    return { w: PSTG.w, h: PSTG.h, scale: PSTG.sc, lang: L, rm: !!rm,
+      night: true, speedMult: 1, guestsVisible: false, hoverPid: PSTG.hoverPid,
+      spotlightPid: null, tintMap: null, gapState: null,
+      fig: PSTG.fig, guest: {}, boat: PSTG.boat, wakes: [],
+      motes: [], cascade: { hops: [], has: false },
+      ghost: [{}, {}, {}], trail: [], chain: [], hotPts: [], frozen: false };
+  }
+  function psDims() {
+    var host = $('plan-stage-wrap');
+    var w = (host && host.clientWidth) || 900;
+    var h = (host && host.clientHeight) || 380;
+    return { w: w, h: h };
+  }
+  function psBuildSim() {
+    // a fresh fishday sim sits at 04:00 (never ticked): indigo pre-dawn sky, all tasks
+    // pending (no gap tints), everyone idle. Positions come from psTargets (role podiums).
+    PSTG.sim = P.createSim({ seed: 1, overrides: buildCfg().overrides }, 'fishday');
+  }
+  function bootPlanStage() {
+    killPlanStage();
+    if (!window.PRS_STAGE || $('setup').classList.contains('hidden')) return;
+    var cv = $('plan-stage'), host = $('plan-stage-wrap'); if (!cv || !host) return;
+    var d = psDims();
+    PSTG.host = host; PSTG.cv = cv; PSTG.w = d.w; PSTG.h = d.h;
+    PSTG.sc = clamp(Math.min(d.w / 1000, d.h / 520), 0.6, 1.25);
+    PSTG.boat = { cx: DOCK.x * d.w, cy: DOCK.y * d.h };
+    cv.setAttribute('aria-label', T().planStageAria);
+    PSTG.ctx = PRS_STAGE.initStage(cv, { w: d.w, h: d.h });
+    psBuildSim();
+    PSTG.fig = {}; psSyncFigs(true);
+    $('plan-chip').textContent = T().planChip;
+    renderTray();
+    if (RM.matches) { PRS_STAGE.scene(PSTG.ctx, PSTG.sim, 1, psView(true)); psPositionOverlays(); return; }
+    PSTG.last = 0; PSTG.raf = requestAnimationFrame(psFrame);
+  }
+  function killPlanStage() {
+    if (PSTG.raf) cancelAnimationFrame(PSTG.raf);
+    PSTG.raf = null; PSTG.sim = null; PSTG.ctx = null; PSTG.fig = {}; PSTG.boat = null;
+    PSTG.host = null; PSTG.cv = null; PSTG.hoverPid = null; PSTG.last = 0;
+    trayDeselect();
+    var pt = $('plan-tokens'); if (pt) pt.innerHTML = '';
+    var ph = $('plan-halos'); if (ph) ph.innerHTML = '';
+    var w = $('plan-stage-wrap'); if (w) w.classList.remove('pawn-hover');
+  }
+  function psFrame(ts) {
+    if (!PSTG.raf) return;
+    PSTG.raf = requestAnimationFrame(psFrame);
+    if ($('setup').classList.contains('hidden') || !PSTG.sim) { killPlanStage(); return; }
+    if (!PSTG.last) PSTG.last = ts;
+    var dt = Math.min(0.1, (ts - PSTG.last) / 1000); PSTG.last = ts;
+    var host = $('plan-stage-wrap');
+    if (host && host.clientWidth && Math.abs(host.clientWidth - PSTG.w) > 4) psResize();
+    psWalk(dt);
+    PRS_STAGE.scene(PSTG.ctx, PSTG.sim, ts / 1000, psView(false));
+    psPositionOverlays();
+  }
+  function psResize() {
+    var d = psDims(); if (!PSTG.cv) return;
+    var sx = PSTG.w ? d.w / PSTG.w : 1, sy = PSTG.h ? d.h / PSTG.h : 1;
+    PSTG.w = d.w; PSTG.h = d.h; PSTG.sc = clamp(Math.min(d.w / 1000, d.h / 520), 0.6, 1.25);
+    PSTG.boat = { cx: DOCK.x * d.w, cy: DOCK.y * d.h };
+    PRS_STAGE.initStage(PSTG.cv, { w: d.w, h: d.h });
+    for (var pid in PSTG.fig) { var f = PSTG.fig[pid]; f.cx *= sx; f.cy *= sy; f.tx *= sx; f.ty *= sy; }
+    if (RM.matches) PRS_STAGE.scene(PSTG.ctx, PSTG.sim, 1, psView(true));
+  }
+  // rebuild the plan-stage sim from the current plan (a seat swap re-homes pawns). Keeps
+  // fig positions so non-seat edits don't jump; a swap glides the moved pawns to new stations.
+  function syncPlanStage() {
+    if (!PSTG.ctx || $('setup').classList.contains('hidden')) return;
+    psBuildSim(); psSyncFigs(false);
+    if (RM.matches) { PRS_STAGE.scene(PSTG.ctx, PSTG.sim, 1, psView(true)); psPositionOverlays(); }
+  }
+
+  // ---- pawn hit-test + inspection (degraded #pawn-card: name/role/duty/seat) ----
+  function psPawnAt(cx, cy) {
+    var wrap = $('plan-stage-wrap'); if (!wrap || !PSTG.sim) return null;
+    var r = wrap.getBoundingClientRect(), x = cx - r.left, y = cy - r.top;
+    var R = 30 * PSTG.sc, best = null, bestD = R * R;
+    PSTG.sim.participants.forEach(function (p) {
+      var f = PSTG.fig[p.id]; if (!f) return;
+      var dx = f.cx - x, dy = (f.cy - 14 * PSTG.sc) - y, d = dx * dx + dy * dy;
+      if (d <= bestD) { bestD = d; best = p.id; }
+    });
+    return best;
+  }
+  function planPawnCardHTML(p) {
+    var t = T(), rr = P.role(p.roleId), jp = (p.name && p.name.jp) ? p.name.jp : '';
+    var head = '<button class="pc-x" id="pc-close" aria-label="' + t.closeBtn + '">×</button>' +
+      '<div class="pc-head"><span class="pc-ic" style="background:' + rr.color + '">' + rr.icon + '</span>' +
+      '<div class="pc-id"><b id="pc-name">' + nm(p.name) + '</b>' +
+      (jp && jp !== nm(p.name) ? '<span class="pc-jp">' + jp + '</span>' : '') +
+      '<span class="pc-role">' + rr.icon + ' ' + nm(rr.name) + '</span></div></div>';
+    var held = [];
+    TRAY_OBJ.forEach(function (o) { if (fixed[DET_FIX[o.det]] && tokenPidFor(o.det) === p.id) held.push(o.ic + ' ' + t[o.key]); });
+    var duty = '<div class="pc-duty">' + (t['duty_' + p.roleId] || '') + '</div>';
+    var note = '<div class="pc-note">' + t.planSeat(nm(rr.name)) + '</div>';
+    var holds = held.length ? '<div class="pc-sec"><span class="pc-h">' + t.trayTitle + '</span><div class="ins-cards">' +
+      held.map(function (h) { return '<span class="ins-card ok">' + h + '</span>'; }).join('') + '</div></div>' : '';
+    return head + duty + note + holds;
+  }
+  function positionPlanPawnCard(pid) {
+    var card = $('pawn-card'), f = PSTG.fig[pid], wrap = $('plan-stage-wrap'); if (!f || !wrap) return;
+    var r = wrap.getBoundingClientRect();
+    var sx = r.left + f.cx * (r.width / (PSTG.w || r.width));
+    var sy = r.top + f.cy * (r.height / (PSTG.h || r.height));
+    card.style.left = '0px'; card.style.top = '0px';
+    var cw = card.offsetWidth, ch = card.offsetHeight, M = 8;
+    var left = sx - cw / 2, top = sy - 44 * PSTG.sc - ch - 10;
+    if (top < M) top = sy + 14 * PSTG.sc;
+    if (left < M) left = M;
+    if (left + cw > window.innerWidth - M) left = window.innerWidth - M - cw;
+    if (top + ch > window.innerHeight - M) top = window.innerHeight - M - ch;
+    card.style.left = Math.round(left) + 'px'; card.style.top = Math.round(top) + 'px';
+  }
+  function openPlanPawnCard(pid) {
+    if (!PSTG.sim) return;
+    var p = byId(PSTG.sim.participants, pid); if (!p) return;
+    var card = $('pawn-card'); if (!card) return;
+    var fresh = card.classList.contains('hidden');
+    if (fresh) { var a = document.activeElement; pawnCardInvoker = (a && a !== document.body) ? a : null; }
+    pawnCardPid = pid;
+    card.innerHTML = planPawnCardHTML(p);
+    card.setAttribute('aria-label', nm(p.name) + ' · ' + nm(P.role(p.roleId).name));
+    card.classList.remove('hidden');
+    positionPlanPawnCard(pid);
+    if (fresh) { try { card.focus(); } catch (e) { } }
+  }
+
+  // ---- the tray view (pure function of fixed[]/orgOv) ----
+  function unresolvedCount() { var n = 0; TRAY_OBJ.forEach(function (o) { if (!fixed[DET_FIX[o.det]]) n++; }); return n; }
+  function renderTray() {
+    var t = T(), box = $('tray-objs'); if (!box) return;
+    // grammar hint (dismissible once)
+    var hint = $('tray-hint'), hx = $('tray-hint-x'), htx = $('tray-hint-txt');
+    if (hint) hint.classList.toggle('hidden', trayHintSeen());
+    if (htx) htx.textContent = t.grammarHint;
+    if (hx) hx.setAttribute('aria-label', t.trayHintClose);
+    var objs = TRAY_OBJ.map(function (o) {
+      var on = fixed[DET_FIX[o.det]];
+      if (o.drag && on) return '';   // placed draggable objects live at a pawn as a token, not in the tray
+      var extra = '';
+      if (o.det === 'handoffTiming') { var d = Math.max(0, receiptAltTotal('handoffTiming') - P.scoreTrip(currentPlan()).total); if (!on && d > 0) extra = '<span class="to-prize">+' + d + '</span>'; }
+      var cls = 'tray-obj' + (o.drag ? ' drag' : ' dock') + (on ? ' done' : '') + (traySel && traySel.kind === 'obj' && traySel.det === o.det ? ' sel' : '');
+      var aria = t[o.key] + (on ? ' ✓' : '');
+      return '<button type="button" class="' + cls + '" data-det="' + o.det + '" aria-label="' + aria + '">' +
+        '<span class="to-ic">' + o.ic + '</span><span class="to-nm">' + t[o.key] + '</span>' + extra +
+        (on ? '<span class="to-done">✓</span>' : '') + '</button>';
+    }).join('');
+    var plan = currentPlan();
+    var duties = SEAT_ROLES.map(function (rid) {
+      var rr = P.role(rid), holder = plan.roles[rid] && plan.roles[rid].holder ? byId(plan.participants, plan.roles[rid].holder) : null;
+      var cls = 'tray-duty' + (traySel && traySel.kind === 'duty' && traySel.role === rid ? ' sel' : '');
+      return '<button type="button" class="' + cls + '" data-role="' + rid + '" aria-label="' + nm(rr.name) + ' · ' + (holder ? nm(holder.name) : '') + '">' +
+        '<span class="td-ic" style="background:' + rr.color + '">' + rr.icon + '</span><span class="td-nm">' + nm(rr.name) + '</span></button>';
+    }).join('');
+    box.innerHTML =
+      '<div class="tray-count">' + t.trayCount(unresolvedCount()) + '</div>' +
+      '<div class="tray-row tray-decisions">' + objs + '</div>' +
+      '<div class="tray-row tray-dutychips">' + duties + '</div>';
+  }
+  // position halos (valid targets while an object is lifted) + tokens (placed objects) from the fig cache
+  function psPositionOverlays() {
+    var halos = $('plan-halos'), tokens = $('plan-tokens'), t = T();
+    if (!halos || !tokens || !PSTG.sim) return;
+    // halos
+    var want = {};
+    if (traySel) (traySel.kind === 'duty' ? PSTG.sim.participants.filter(function (p) { return SEAT_ROLES.indexOf(p.roleId) >= 0; }).map(function (p) { return p.id; }) : targetPidsFor(traySel.det)).forEach(function (pid) { want[pid] = 1; });
+    for (var pid in want) {
+      var h = halos.querySelector('.pawn-halo[data-pid="' + pid + '"]');
+      if (!h) { h = document.createElement('div'); h.className = 'pawn-halo'; h.setAttribute('data-pid', pid); halos.appendChild(h); }
+      var f = PSTG.fig[pid]; if (f) { h.style.left = Math.round(f.cx) + 'px'; h.style.top = Math.round(f.cy) + 'px'; }
+    }
+    var hs = halos.querySelectorAll('.pawn-halo');
+    for (var i = 0; i < hs.length; i++) { if (!want[hs[i].getAttribute('data-pid')]) hs[i].parentNode.removeChild(hs[i]); }
+    // tokens — one per placed draggable object, at its anchor pawn's feet
+    var placed = {};
+    TRAY_OBJ.forEach(function (o) {
+      if (!o.drag || !fixed[DET_FIX[o.det]]) return;
+      var pid2 = tokenPidFor(o.det); if (!pid2) return;
+      placed[o.det] = pid2;
+      var p = byId(PSTG.sim.participants, pid2), tk = tokens.querySelector('.plan-token[data-det="' + o.det + '"]');
+      if (!tk) { tk = document.createElement('button'); tk.type = 'button'; tk.className = 'plan-token'; tk.setAttribute('data-det', o.det); tokens.appendChild(tk); }
+      tk.innerHTML = '<span class="pt-ic">' + o.ic + '</span>';
+      tk.setAttribute('aria-label', t.tokenAria(t[o.key], p ? nm(p.name) : ''));
+      var f2 = PSTG.fig[pid2]; if (f2) { tk.style.left = Math.round(f2.cx) + 'px'; tk.style.top = Math.round(f2.cy + 8 * PSTG.sc) + 'px'; }
+    });
+    var tks = tokens.querySelectorAll('.plan-token');
+    for (var j = 0; j < tks.length; j++) { if (!placed[tks[j].getAttribute('data-det')]) tks[j].parentNode.removeChild(tks[j]); }
+    if (pawnCardOpen() && pawnCardPid && PSTG.fig[pawnCardPid] && !$('setup').classList.contains('hidden')) positionPlanPawnCard(pawnCardPid);
+  }
+  function trayHintSeen() { try { return localStorage.getItem('prs_trayhint_seen') === '1'; } catch (e) { return false; } }
+  function dismissTrayHint() { try { localStorage.setItem('prs_trayhint_seen', '1'); } catch (e) { } var h = $('tray-hint'); if (h) h.classList.add('hidden'); }
+
+  // ---- placement grammar: select / resolve / reject (shared by drag, tap-tap, keyboard) ----
+  function trayDeselect() {
+    traySel = null;
+    var g = $('tray-ghost'); if (g && g.parentNode) g.parentNode.removeChild(g);
+    var w = $('plan-stage-wrap'); if (w) w.classList.remove('placing');
+    renderTray(); psPositionOverlays();
+  }
+  function traySelect(sel) {
+    if (traySel && traySel.kind === sel.kind && traySel.det === sel.det && traySel.role === sel.role) { trayDeselect(); return; }
+    traySel = sel;
+    var w = $('plan-stage-wrap'); if (w) w.classList.add('placing');
+    renderTray(); psPositionOverlays();
+  }
+  function selObjName(sel) { return sel.kind === 'duty' ? (nm(P.role(sel.role).name) + (L === 'ja' ? 'の担当' : ' duty')) : T()[TRAY_OBJ_BY_DET[sel.det].key]; }
+  function selNeeded(sel) {
+    if (sel.kind === 'duty') return T().trayOrganizer;
+    if (sel.det === 'info') return T().trayFerryNeeded;
+    return nm(P.role(targetRolesFor(sel.det)[0]).name);
+  }
+  function trayReject(p, sel) {
+    var t = T(), toast = $('tray-toast'); if (!toast) return;
+    toast.textContent = t.rejLine(nm(p.name), nm(P.role(p.roleId).name), selObjName(sel), selNeeded(sel));
+    toast.classList.remove('hidden'); toast.classList.remove('show'); void toast.offsetWidth; toast.classList.add('show');
+    if (trayToastT) clearTimeout(trayToastT);
+    trayToastT = setTimeout(function () { toast.classList.remove('show'); toast.classList.add('hidden'); }, 3600);
+  }
+  var trayToastT = null;
+  // resolve a selection against a pawn. keepOnReject=true (tap-tap) leaves the selection armed.
+  function trayResolve(sel, pid, keepOnReject) {
+    if (!pid || !PSTG.sim) { trayDeselect(); return; }
+    var p = byId(PSTG.sim.participants, pid); if (!p) { trayDeselect(); return; }
+    if (sel.kind === 'duty') {
+      if (SEAT_ROLES.indexOf(p.roleId) < 0) { trayReject(p, sel); if (!keepOnReject) trayDeselect(); return; }
+      swapSeats(sel.role, p.roleId); trayDeselect(); updatePlanUI(); return;
+    }
+    if (targetRolesFor(sel.det).indexOf(p.roleId) < 0) { trayReject(p, sel); if (!keepOnReject) trayDeselect(); return; }
+    tokenAnchor[sel.det] = pid;
+    traySel = null;
+    applyReceiptFix(sel.det, true);   // -> updatePlanUI -> renderTray + tokens (three-way sync)
+    var tk = $('plan-tokens').querySelector('.plan-token[data-det="' + sel.det + '"]');
+    if (tk) { try { tk.focus(); } catch (e) { } }
+  }
+  function swapSeats(roleX, roleY) {
+    if (roleX === roleY) return;
+    var tmp = orgOv[roleX]; orgOv[roleX] = orgOv[roleY]; orgOv[roleY] = tmp;
+  }
+  function undoToken(det) {
+    tokenAnchor[det] = null;
+    applyReceiptFix(det, false);
+    var b = $('tray-objs').querySelector('.tray-obj[data-det="' + det + '"]');
+    if (b) { try { b.focus(); } catch (e) { } }
+  }
+  function openFishdayEditor() {
+    daySel = 'fishday'; placingChip = null; removeGhost(); removeDropSlot(); paintSetup();
+    if (typeof openDayDrawer === 'function') { openDayDrawer('fishday'); return; }
+    var fc = $('fd-card'); if (fc && fc.scrollIntoView) fc.scrollIntoView({ behavior: RM.matches ? 'auto' : 'smooth', block: 'start' });
+  }
+  function expandAllSettings() {
+    var as = $('all-settings'), tg = $('all-settings-toggle');
+    if (as) as.classList.remove('collapsed');
+    if (tg) tg.setAttribute('aria-expanded', 'true');
+  }
+  function openFinancePanel() {
+    expandAllSettings();
+    var mc = $('mission-control'); if (mc && mc.scrollIntoView) mc.scrollIntoView({ behavior: RM.matches ? 'auto' : 'smooth', block: 'center' });
+  }
+  function trayObjAction(det) {   // dock objects: strongbox -> finance panel, satchel -> fishday editor
+    if (det === 'reserve') openFinancePanel();
+    else if (det === 'handoffTiming') openFishdayEditor();
+  }
+
+  // ---- keyboard target picker (#pick-modal) ----
+  var pickSel = null;
+  function openPicker(sel) {
+    pickSel = sel;
+    var t = T(), body = $('pick-body');
+    $('pick-title').textContent = t.pickTitle(selObjName(sel));
+    $('pick-sub').textContent = t.pickValidNote;
+    var isDuty = sel.kind === 'duty';
+    var validRoles = isDuty ? SEAT_ROLES : targetRolesFor(sel.det);
+    var people = PSTG.sim ? PSTG.sim.participants.slice() : currentPlan().participants.filter(function (p) { return p.company !== 'guest'; });
+    var rows = people.filter(function (p) { return p.roleId !== 'crew'; }).map(function (p) {
+      var ok = validRoles.indexOf(p.roleId) >= 0, rr = P.role(p.roleId);
+      return { ok: ok, html: '<button type="button" class="pick-row' + (ok ? '' : ' bad') + '" data-pid="' + p.id + '"' + (ok ? '' : ' disabled aria-disabled="true"') + '>' +
+        '<span class="td-ic" style="background:' + rr.color + '">' + rr.icon + '</span>' +
+        '<span class="pick-nm">' + nm(p.name) + '</span><span class="pick-role">' + nm(rr.name) + '</span>' +
+        (ok ? '' : '<span class="pick-why">' + t.rejLine(nm(p.name), nm(rr.name), selObjName(sel), selNeeded(sel)) + '</span>') + '</button>' };
+    });
+    rows.sort(function (a, b) { return (a.ok === b.ok) ? 0 : (a.ok ? -1 : 1); });
+    body.innerHTML = rows.map(function (r) { return r.html; }).join('');
+    modalOpening('pick-modal'); $('pick-modal').classList.add('show');
+    var f = body.querySelector('.pick-row:not([disabled])'); if (f) f.focus();
+  }
+  function closePicker() { pickSel = null; $('pick-modal').classList.remove('show'); modalClosed(); }
+
+  // ---- pointer drag (also handles tap-tap-select when the pointer doesn't move) ----
+  function trayPointerDown(e) {
+    var b = e.target.closest && e.target.closest('.tray-obj, .tray-duty'); if (!b) return;
+    if (b.classList.contains('dock')) return;   // strongbox/satchel: not draggable (click handles them)
+    var sel = b.classList.contains('tray-duty')
+      ? { kind: 'duty', role: b.getAttribute('data-role') }
+      : { kind: 'obj', det: b.getAttribute('data-det') };
+    trayDrag = { sel: sel, x0: e.clientX, y0: e.clientY, moved: false };
+  }
+  function trayPointerMove(e) {
+    if (!trayDrag) return;
+    var dx = e.clientX - trayDrag.x0, dy = e.clientY - trayDrag.y0;
+    if (!trayDrag.moved) {
+      if (dx * dx + dy * dy < 36) return;
+      trayDrag.moved = true;
+      traySel = trayDrag.sel;
+      var w = $('plan-stage-wrap'); if (w) w.classList.add('placing');
+      renderTray(); psPositionOverlays();
+      if (!RM.matches) {
+        var g = document.createElement('div'); g.className = 'tray-ghost'; g.id = 'tray-ghost';
+        g.textContent = trayDrag.sel.kind === 'duty' ? P.role(trayDrag.sel.role).icon : TRAY_OBJ_BY_DET[trayDrag.sel.det].ic;
+        document.body.appendChild(g); trayDrag.ghost = g;
+      }
+    }
+    if (trayDrag.ghost) { trayDrag.ghost.style.left = e.clientX + 'px'; trayDrag.ghost.style.top = e.clientY + 'px'; }
+  }
+  function trayPointerUp(e) {
+    if (!trayDrag) return;
+    var td = trayDrag; trayDrag = null;
+    if (td.ghost && td.ghost.parentNode) td.ghost.parentNode.removeChild(td.ghost);
+    if (td.moved) {
+      traySuppressClick = true; setTimeout(function () { traySuppressClick = false; }, 0);
+      var wrap = $('plan-stage-wrap'), inside = false;
+      if (wrap) { var r = wrap.getBoundingClientRect(); inside = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom; }
+      var pid = inside ? psPawnAt(e.clientX, e.clientY) : null;
+      if (pid) trayResolve(td.sel, pid, false);
+      else trayDeselect();   // dropped on water / off-stage: silent return
+    } else {
+      // a tap (no drag) = tap-tap select on the stage
+      traySelect(td.sel);
+    }
+  }
+
   function enterMode(m) {
     var was = appMode;
     appMode = m;
-    killVignette();                                               // §W4 lifecycle: the vignette dies with the intro
-    var iel = $('intro'); if (iel) iel.classList.add('hidden');   // leaving the intro whenever a real mode is entered
+    killVignette();                                               // §W4 lifecycle: the vignette dies with the intro (enterScreen repeats this; idempotent)
     $('mode-live').classList.toggle('on', m === 'live');
     $('mode-morning').classList.toggle('on', m === 'morning');
     if (timer) { clearInterval(timer); timer = null; }
     clearFinishTimer();
-    stopAnim(); closeModals(); $('report').classList.add('hidden');
+    stopAnim(); closeModals();
     if (m === 'live') {
       if (was === 'morning' || !morningSnap) snapshotMorning();
-      $('setup').classList.add('hidden'); startLive();
+      startLive();                              // -> launchLive -> enterScreen('run')
     } else {
-      document.body.classList.remove('running'); sim = null; paused = false; livePausedForFix = false;
+      sim = null; paused = false; livePausedForFix = false;
       if (was === 'live') restoreMorning();     // only a Live detour wiped the plan — same-mode re-entry keeps it
-      $('run').classList.add('hidden'); $('live-dock').classList.add('hidden'); $('setup').classList.remove('hidden');
+      enterScreen('setup');
       paintSetup();
     }
   }
@@ -2864,7 +3378,7 @@
     sim = P.createSim({ seed: (Math.floor(Math.random() * 1e9) >>> 0) || 1, overrides: buildCfg().overrides }, 'fishday');
     paused = false; livePausedForFix = false; document.body.classList.add('running');
     closeModals(); speedMult = 2; document.querySelectorAll('.spd').forEach(function (x) { x.classList.toggle('on', x.getAttribute('data-spd') === '2'); });
-    $('setup').classList.add('hidden'); $('report').classList.add('hidden'); $('run').classList.remove('hidden');
+    enterScreen('run');
     $('figs').innerHTML = ''; $('banner').classList.remove('show'); $('live-dock').classList.remove('hidden');
     var ff = $('fanfare'); if (ff) ff.classList.remove('show');
     animReset(); updateRunButtons(); buildSitemap();
@@ -3088,8 +3602,7 @@
     stopAnim(); if (timer) { clearInterval(timer); timer = null; }
     clearFinishTimer(); livePausedForFix = false;
     lastResult = { trip: P.score(sim), day: P.daySummary(sim), segment: 'fishday' };
-    document.body.classList.remove('running');
-    $('run').classList.add('hidden'); $('live-dock').classList.add('hidden'); $('report').classList.remove('hidden');
+    enterScreen('report');
     renderReport(lastResult);
   }
 

@@ -74,60 +74,106 @@
       </div>
     </aside>
     <div class="setup-main">
-    <div class="card canvascard">
-      <div class="goalrow">
-        <div class="goalbig" data-i18n="canvasTitle"></div>
-        <div class="goaldesc"><b id="c-name"></b></div>
+
+    <!-- §1/§2 PLAN STAGE — setup becomes stage-first: the pre-dawn harbor + a command tray of
+         physical decision objects. #plan-stage's canvas + local rAF are created by bootPlanStage()
+         and DESTROYED by killPlanStage() (never merely hidden), on every screen transition. -->
+    <div class="plan-stage-panel" id="plan-stage-panel">
+      <div class="plan-stage-wrap" id="plan-stage-wrap">
+        <canvas id="plan-stage" role="img"></canvas>
+        <div class="plan-chip" id="plan-chip"></div>
+        <div class="plan-halos" id="plan-halos" aria-hidden="true"></div>
+        <div class="plan-tokens" id="plan-tokens"></div>
       </div>
-      <div class="canvas-grid" id="canvas-grid"></div>
-      <div class="conds" id="c-conds"></div>
+      <div class="cmd-tray" id="cmd-tray" role="group">
+        <div class="tray-hint" id="tray-hint">
+          <span id="tray-hint-txt"></span>
+          <button class="tray-hint-x" id="tray-hint-x" type="button"></button>
+        </div>
+        <div class="tray-objs" id="tray-objs"></div>
+      </div>
     </div>
 
-    <div class="card">
-      <h2 data-i18n="orgTitle"></h2>
-      <div class="tag" data-i18n="orgHint" style="margin:-6px 0 12px;"></div>
-      <div id="org" class="org"></div>
-    </div>
-
-    <div class="card">
-      <h2 data-i18n="timelineTitle"></h2>
-      <div id="timeline" class="timeline"></div>
-    </div>
-
-    <div class="card">
-      <h2 data-i18n="mcTitle"></h2>
-      <div class="tag" data-i18n="mcHint" style="margin:-6px 0 12px;"></div>
-      <div id="mission-control" class="mission-control"></div>
-    </div>
-
-    <div class="card">
-      <h2 data-i18n="designTitle"></h2>
-      <div class="tag" data-i18n="designHint" style="margin:-6px 0 12px;"></div>
+    <!-- day selector stays visible in the top strip (an open ~85vh day drawer leaves it clickable) -->
+    <div class="day-bar card">
+      <div class="day-bar-h" data-i18n="designTitle"></div>
       <div id="day-select" class="day-select"></div>
       <div id="tracker" class="tracker"></div>
-      <div class="ed-head" id="ed-head"></div>
-      <div id="editors" class="editors"></div>
-      <div class="planhint" id="plan-hint"></div>
-      <div style="display:flex;gap:8px;margin-top:14px;">
-        <button class="btn sm ghost" id="btn-auto" data-i18n="autoBtn"></button>
-        <button class="btn sm ghost" id="btn-clear" data-i18n="clearBtn"></button>
+    </div>
+
+    <!-- §4 "All settings" — the Phase-1 receipt rows, org, resources & spend cards remain COMPLETE
+         here (collapsed by default ≥1180px; anything the tray does, the fallback can do). -->
+    <div class="all-settings" id="all-settings">
+      <button class="all-settings-toggle" id="all-settings-toggle" type="button" aria-expanded="true" aria-controls="all-settings-body">
+        <span data-i18n="allSettings"></span><span class="as-caret" aria-hidden="true">▾</span>
+      </button>
+      <div class="all-settings-body" id="all-settings-body">
+
+        <div class="card">
+          <h2 data-i18n="designTitle"></h2>
+          <div class="tag" data-i18n="designHint" style="margin:-6px 0 12px;"></div>
+          <div class="ed-head" id="ed-head"></div>
+          <div id="editors" class="editors"></div>
+          <div class="planhint" id="plan-hint"></div>
+          <div style="display:flex;gap:8px;margin-top:14px;">
+            <button class="btn sm ghost" id="btn-auto" data-i18n="autoBtn"></button>
+            <button class="btn sm ghost" id="btn-clear" data-i18n="clearBtn"></button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2 data-i18n="orgTitle"></h2>
+          <div class="tag" data-i18n="orgHint" style="margin:-6px 0 12px;"></div>
+          <div id="org" class="org"></div>
+        </div>
+
+        <div class="card">
+          <h2 data-i18n="mcTitle"></h2>
+          <div class="tag" data-i18n="mcHint" style="margin:-6px 0 12px;"></div>
+          <div id="mission-control" class="mission-control"></div>
+        </div>
+
+        <div class="card canvascard">
+          <div class="goalrow">
+            <div class="goalbig" data-i18n="canvasTitle"></div>
+            <div class="goaldesc"><b id="c-name"></b></div>
+          </div>
+          <div class="canvas-grid" id="canvas-grid"></div>
+          <div class="conds" id="c-conds"></div>
+        </div>
+
+        <div class="card">
+          <h2 data-i18n="timelineTitle"></h2>
+          <div id="timeline" class="timeline"></div>
+        </div>
+
+      </div><!-- /.all-settings-body -->
+    </div><!-- /.all-settings -->
+
+    <!-- day-drawer shell (WA ships it; WB animates open/close). #fd-card lives permanently in #dd-body. -->
+    <div class="day-drawer" id="day-drawer" aria-hidden="true">
+      <div class="dd-head" id="dd-head">
+        <h2 id="dd-title"></h2>
+        <button class="btn sm ghost" id="dd-close" type="button" data-i18n="ddClose"></button>
+      </div>
+      <div class="dd-body" id="dd-body">
+        <div class="card hidden" id="fd-card">
+          <div class="fd-card-head">
+            <h2 id="fd-title" data-i18n="fdTitle"></h2>
+            <button class="btn sm ghost" id="fd-clear-day" data-i18n="clearDayBtn"></button>
+          </div>
+          <div class="tag" id="fd-hint" data-i18n="fdHint" style="margin:-6px 0 12px;"></div>
+          <div class="fd-wrap" id="fd-wrap">
+            <div class="fd-deck" id="fd-deck"></div>
+            <div class="fd-scroll" id="fd-scroll"><div class="fd-canvas" id="fd-canvas"></div></div>
+          </div>
+          <div class="dash-lbl" id="fd-arrows-lbl" data-i18n="fdArrowsLbl" style="margin-top:12px;"></div>
+          <div class="fd-arrowlist" id="fd-arrowlist"></div>
+          <div class="planready" id="fd-ready"></div>
+        </div>
       </div>
     </div>
 
-    <div class="card hidden" id="fd-card">
-      <div class="fd-card-head">
-        <h2 id="fd-title" data-i18n="fdTitle"></h2>
-        <button class="btn sm ghost" id="fd-clear-day" data-i18n="clearDayBtn"></button>
-      </div>
-      <div class="tag" id="fd-hint" data-i18n="fdHint" style="margin:-6px 0 12px;"></div>
-      <div class="fd-wrap" id="fd-wrap">
-        <div class="fd-deck" id="fd-deck"></div>
-        <div class="fd-scroll" id="fd-scroll"><div class="fd-canvas" id="fd-canvas"></div></div>
-      </div>
-      <div class="dash-lbl" id="fd-arrows-lbl" data-i18n="fdArrowsLbl" style="margin-top:12px;"></div>
-      <div class="fd-arrowlist" id="fd-arrowlist"></div>
-      <div class="planready" id="fd-ready"></div>
-    </div>
     </div><!-- /.setup-main -->
   </section>
 
@@ -224,6 +270,9 @@
   </section>
 </div>
 
+<!-- ============ TRAY TEACHING TOAST (wrong-target rejection copy) ============ -->
+<div class="tray-toast hidden" id="tray-toast" role="status" aria-live="assertive"></div>
+
 <!-- ============ PROBLEM DETAIL PANEL ============ -->
 <div class="modal" id="detail-modal">
   <div class="sheet inspect-sheet" role="dialog" aria-modal="true" aria-labelledby="detail-title">
@@ -259,6 +308,16 @@
 
 <!-- ============ PAWN INSPECTION POPOVER (W3 §3) — non-modal, anchored near a pawn ============ -->
 <div class="pawn-card hidden" id="pawn-card" role="dialog" aria-labelledby="pc-name" tabindex="-1"></div>
+
+<!-- ============ TRAY TARGET PICKER (keyboard placement) ============ -->
+<div class="modal" id="pick-modal">
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="pick-title">
+    <h2 id="pick-title"></h2>
+    <div class="tag" id="pick-sub" style="margin-bottom:12px;"></div>
+    <div id="pick-body" class="pick-body"></div>
+    <div class="foot"><button class="btn" id="pick-close" data-i18n="closeBtn"></button></div>
+  </div>
+</div>
 
 <!-- ============ RULES ============ -->
 <div class="modal" id="rules-modal">

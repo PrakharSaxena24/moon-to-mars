@@ -947,3 +947,109 @@ body.canvas-stage .sitemap::after{display:none;} /* vignette is drawn on the can
   #intro-start.vig-pulse{animation:none;}
   .cc-duty{transition:none;}
 }
+
+/* ============================================================================
+ * PLAN-ON-THE-HARBOR (WA) — the pre-dawn plan stage + the command tray.
+ * z-index discipline: tray/tokens/halos/chip ≤ 40 (drawer 45, arrow-modal 50,
+ * drag-ghost + pawn popover 60, toast 70).
+ * ==========================================================================*/
+.plan-stage-panel{margin-bottom:14px;}
+.plan-stage-wrap{position:relative;height:46vh;min-height:300px;max-height:560px;border-radius:var(--r-lg);
+  overflow:hidden;background:var(--indigo-deep);border:1px solid var(--line2);box-shadow:var(--shadow2);}
+#plan-stage{position:absolute;inset:0;width:100%;height:100%;display:block;border-radius:var(--r-lg);z-index:1;}
+.plan-chip{position:absolute;left:10px;top:10px;z-index:5;font-family:var(--serif);font-size:12px;font-weight:700;
+  background:rgba(20,27,34,.72);border:1px solid var(--indigo-line);color:var(--accent-light);
+  padding:4px 12px;border-radius:var(--r-sm);box-shadow:0 3px 10px rgba(0,0,0,.4);letter-spacing:.4px;}
+.plan-chip::before{content:"◷ ";opacity:.85;}
+.plan-halos{position:absolute;inset:0;z-index:2;pointer-events:none;}
+.plan-tokens{position:absolute;inset:0;z-index:6;pointer-events:none;}
+.plan-stage-wrap.pawn-hover{cursor:pointer;}
+.plan-stage-wrap.placing{cursor:copy;}
+/* a gold ring at a valid target pawn's feet while an object is lifted */
+.pawn-halo{position:absolute;width:46px;height:46px;margin:-23px 0 0 -23px;border-radius:50%;
+  border:2px solid var(--accent-light);background:radial-gradient(circle,rgba(227,196,107,.28),rgba(227,196,107,0) 70%);
+  box-shadow:0 0 12px 2px rgba(227,196,107,.5);animation:haloPulse 1.3s ease-in-out infinite;}
+@keyframes haloPulse{0%,100%{transform:scale(.92);opacity:.8;}50%{transform:scale(1.08);opacity:1;}}
+/* a placed decision object, resting at the holder's feet */
+.plan-token{position:absolute;transform:translate(-50%,0);pointer-events:auto;cursor:pointer;
+  width:30px;height:30px;padding:0;border-radius:50%;border:1.5px solid var(--accent);
+  background:var(--bg1);box-shadow:0 3px 8px rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;
+  font-size:15px;line-height:1;transition:transform .12s,box-shadow .12s;}
+.plan-token:hover,.plan-token:focus-visible{transform:translate(-50%,-2px);box-shadow:0 0 0 3px rgba(227,196,107,.5),0 4px 10px rgba(0,0,0,.5);outline:none;}
+.plan-token .pt-ic{pointer-events:none;}
+
+/* the command tray */
+.cmd-tray{margin-top:10px;background:var(--panel);border:1px solid var(--line2);border-radius:var(--r-lg);
+  padding:10px 12px;box-shadow:var(--shadow);position:relative;z-index:10;}
+.tray-hint{display:flex;align-items:center;gap:10px;font-family:var(--serif);font-size:13px;color:var(--ink2);
+  background:rgba(184,137,43,.08);border:1px dashed var(--line2);border-radius:var(--r-sm);padding:6px 10px;margin-bottom:9px;}
+.tray-hint-x{margin-left:auto;flex-shrink:0;border:none;background:transparent;color:var(--ink3);font-size:15px;line-height:1;cursor:pointer;padding:2px 6px;border-radius:var(--r-sm);}
+.tray-hint-x::before{content:"×";}
+.tray-hint-x:hover{background:var(--bg2);color:var(--ink);}
+.tray-count{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--ink3);margin-bottom:6px;}
+.tray-row{display:flex;flex-wrap:wrap;gap:7px;}
+.tray-dutychips{margin-top:8px;padding-top:8px;border-top:1px solid var(--line);}
+.tray-obj,.tray-duty{display:inline-flex;align-items:center;gap:6px;font-family:var(--font);font-size:12.5px;font-weight:600;
+  color:var(--ink);background:var(--bg1);border:1px solid var(--line2);border-radius:var(--r-sm);
+  padding:6px 10px;cursor:pointer;touch-action:none;transition:border-color .12s,box-shadow .12s,background .12s;position:relative;}
+.tray-obj.drag,.tray-duty{cursor:grab;}
+.tray-obj:hover,.tray-duty:hover{border-color:var(--accent);background:var(--bg2);}
+.tray-obj:focus-visible,.tray-duty:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
+.tray-obj.sel,.tray-duty.sel{border-color:var(--accent);box-shadow:0 0 0 2px rgba(227,196,107,.55);background:rgba(227,196,107,.14);}
+.tray-obj .to-ic{font-size:15px;line-height:1;}
+.tray-obj.dock{border-style:dashed;color:var(--ink2);}
+.tray-obj.dock .to-ic{opacity:.9;}
+.tray-obj.done{opacity:.72;border-color:var(--build);color:var(--build-dark);background:rgba(91,107,69,.08);}
+.to-prize{font-weight:800;color:var(--accent-dark);background:rgba(227,196,107,.2);border-radius:var(--r-sm);padding:1px 5px;font-size:11px;}
+.to-done{color:var(--build-dark);font-weight:800;}
+.td-ic{width:20px;height:20px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:12px;color:#fff;flex-shrink:0;}
+/* the drag ghost following the pointer */
+.tray-ghost{position:fixed;z-index:60;transform:translate(-50%,-50%);pointer-events:none;font-size:24px;
+  filter:drop-shadow(0 3px 6px rgba(0,0,0,.5));}
+/* wrong-target teaching toast */
+.tray-toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(8px);z-index:70;max-width:520px;
+  width:calc(100vw - 32px);background:var(--indigo);color:#f6efdc;border:1px solid var(--accent);border-radius:var(--r-md);
+  padding:11px 16px;font-size:13.5px;font-weight:600;line-height:1.4;box-shadow:var(--shadow2);opacity:0;transition:opacity .2s,transform .2s;}
+.tray-toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
+
+/* keyboard target picker rows */
+.pick-body{display:flex;flex-direction:column;gap:6px;}
+.pick-row{display:flex;align-items:center;gap:9px;flex-wrap:wrap;width:100%;text-align:left;font-family:var(--font);
+  font-size:13px;padding:9px 11px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--bg1);color:var(--ink);cursor:pointer;}
+.pick-row:hover{background:var(--bg2);border-color:var(--line2);}
+.pick-row:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
+.pick-row .pick-nm{font-weight:700;}
+.pick-row .pick-role{color:var(--ink3);font-size:12px;}
+.pick-row.bad{opacity:.6;cursor:not-allowed;background:rgba(161,61,47,.06);border-color:rgba(161,61,47,.3);}
+.pick-row .pick-why{flex-basis:100%;font-size:11.5px;color:var(--wait-dark);font-weight:600;}
+
+/* the day-tab strip stays visible in the top ~15vh a bottom drawer leaves free */
+.day-bar{margin-bottom:14px;}
+.day-bar-h{font-family:var(--serif);font-size:15px;font-weight:700;margin-bottom:8px;}
+
+/* §4 "All settings" — the receipt/org/finance fallback (collapsed ≥1180px, expanded below) */
+.all-settings{margin-top:6px;}
+.all-settings-toggle{display:flex;align-items:center;justify-content:space-between;width:100%;font-family:var(--serif);
+  font-size:14px;font-weight:700;color:var(--ink);background:var(--panel);border:1px solid var(--line2);
+  border-radius:var(--r-sm);padding:10px 14px;cursor:pointer;}
+.all-settings-toggle:hover{background:var(--bg2);}
+.all-settings-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
+.as-caret{transition:transform .18s;font-size:12px;color:var(--ink3);}
+.all-settings.collapsed .as-caret{transform:rotate(-90deg);}
+.all-settings.collapsed .all-settings-body{display:none;}
+.all-settings-body{display:flex;flex-direction:column;gap:14px;margin-top:12px;}
+
+/* day drawer shell: hidden until WB's openDayDrawer flips aria-hidden (WB owns the slide-up styling) */
+.day-drawer[aria-hidden="true"]{display:none;}
+
+@media(max-width:640px){
+  .plan-stage-wrap{height:38vh;min-height:230px;}
+  .tray-obj,.tray-duty{font-size:12px;padding:5px 8px;}
+  .tray-obj .to-nm{display:none;}   /* icon-only objects on narrow screens; names via aria-label + picker */
+}
+@media(prefers-reduced-motion:reduce){
+  .pawn-halo{animation:none;transform:scale(1);}
+  .plan-token{transition:none;}
+  .tray-toast{transition:none;}
+  .as-caret{transition:none;}
+}

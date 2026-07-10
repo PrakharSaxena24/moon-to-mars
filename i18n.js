@@ -333,7 +333,29 @@
       vgPrompt: 'Hand him the card',
       vgSkip: 'Skip',
       vgReplay: 'Replay ▶',
-      vgAria: 'Intro vignette: at dawn the crew walk to their stations; one crewmate freezes, waiting for information; handing over the card unfreezes him and the score rises.'
+      vgAria: 'Intro vignette: at dawn the crew walk to their stations; one crewmate freezes, waiting for information; handing over the card unfreezes him and the score rises.',
+
+      // --- plan-on-the-harbor: the plan stage + command tray (WA) ---
+      planChip: 'Planning',
+      planStageAria: 'The harbor before dawn — the eleven duty-holders at their stations. Drag a decision object from the tray onto the right person.',
+      planSeat: function (role) { return 'Currently the ' + role + '.'; },
+      trayTitle: 'Command tray',
+      trayCount: function (n) { return n === 0 ? 'All placed ✓' : n + ' to place'; },
+      grammarHint: 'You never move people — you hand things to them.',
+      trayHintClose: 'Dismiss hint',
+      allSettings: 'All settings',
+      // decision objects
+      objFlag: 'Abort authority', objSeal: 'Budget seal', objFerry: 'Ferry info card',
+      objRoute: 'Illness report route', objRelief: 'Load relief', objParcel: 'Return shipping',
+      objStrongbox: 'Cash strongbox', objSatchel: 'The info arrows',
+      objSatchelCta: 'Open the Fishing Day',
+      // placement grammar
+      rejLine: function (name, role, obj, needed) { return name + ' is ' + role + '. ' + obj + ' → ' + needed + '.'; },
+      trayOrganizer: 'an AIBOS organizer (chefs & guests hold no duties)',
+      trayFerryNeeded: 'a ferry recipient (site / angler / chef / logistics / safety)',
+      pickTitle: function (obj) { return 'Hand off: ' + obj; },
+      pickValidNote: 'Choose who receives it — valid recipients are listed first.',
+      tokenAria: function (obj, name) { return obj + ' — held by ' + name; }
     },
 
     ja: {
@@ -662,7 +684,29 @@
       vgPrompt: 'カードを渡す',
       vgSkip: 'スキップ',
       vgReplay: 'もう一度見る ▶',
-      vgAria: '導入ビネット：夜明けの港でクルーが持ち場へ歩き出す。一人が情報待ちで止まり、カードを渡すと再び動き出してスコアが上がる。'
+      vgAria: '導入ビネット：夜明けの港でクルーが持ち場へ歩き出す。一人が情報待ちで止まり、カードを渡すと再び動き出してスコアが上がる。',
+
+      // --- 港上での計画：計画ステージ＋指示トレイ（WA） ---
+      planChip: '計画中',
+      planStageAria: '夜明け前の港——11名の担当者が持ち場に。トレイの判断オブジェクトを正しい相手にドラッグしてください。',
+      planSeat: function (role) { return '現在の担当：' + role + '。'; },
+      trayTitle: '指示トレイ',
+      trayCount: function (n) { return n === 0 ? 'すべて配置済 ✓' : '未配置 ' + n + ' 件'; },
+      grammarHint: '人は動かせない——物を手渡すだけ。',
+      trayHintClose: 'ヒントを閉じる',
+      allSettings: '詳細設定',
+      // 判断オブジェクト
+      objFlag: '中止権限の旗', objSeal: '予算の判子', objFerry: '船便情報カード',
+      objRoute: '体調報告ルート', objRelief: '負荷分散トークン', objParcel: '返送手配の小包',
+      objStrongbox: '現金金庫', objSatchel: '情報の矢筒',
+      objSatchelCta: '釣行日を開く',
+      // 受け渡しの文法
+      rejLine: function (name, role, obj, needed) { return name + 'は' + role + '。' + obj + ' → ' + needed + '。'; },
+      trayOrganizer: '運営メンバー（料理長・ゲストは担当なし）',
+      trayFerryNeeded: '船便の受け取り役（船・釣り・料理・調達・安全のいずれか）',
+      pickTitle: function (obj) { return obj + ' の受け渡し'; },
+      pickValidNote: '受け取る相手を選択——有効な相手が上に表示されます。',
+      tokenAria: function (obj, name) { return obj + '——' + name + 'が保持'; }
     }
   };
 
