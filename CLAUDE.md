@@ -1200,3 +1200,41 @@ architecture verdict (one persistent harbor stage carrying plan/run/report — P
   `8b56b69` · P1a `3f566a1` · P1b-1 `6dc1c47` · P1b-2 `76158a9` · QA `a480a58`.
 - **Deferred:** plan-on-the-harbor (command tray, physical decision objects, day drawers) — owner decides
   after playing this phase; guests-visible-by-default; the Ambient-Live-Peek intro variant.
+
+## 26. Plan-on-the-Harbor — planning becomes the stage (SHIPPED 2026-07-10)
+The Fable unifier architecture's Phase 3, owner-greenlit after playing Phase 1 ("proceed to build"). Spec
+`docs/superpowers/specs/2026-07-10-plan-on-harbor-design.md` · plan `docs/superpowers/plans/2026-07-10-plan-on-harbor.md`.
+The §25 receipt rows remain as the complete "All settings / 詳細設定" fallback (collapsed ≥1180px) — the
+reversibility clause holds.
+- **The plan stage.** `#setup` is stage-first: a pre-dawn harbor canvas (`#plan-stage`, vignette-pattern
+  fake-sim at 04:00 held un-ticked, per-role podium positions, Phase-1 idle gestures, RM = one still, lifecycle
+  via the new `enterScreen(name)` consolidation) with a "Planning · 計画中" chip; pawns hover/click-inspectable
+  (degraded card: name/role/duty/seat).
+- **The command tray.** 6 draggable decision objects (abort flag ⛑️, budget seal, ferry card, illness route,
+  relief token, shipping parcel) + 2 dock objects (strongbox → finance panel with a one-tap "Close this gap
+  (+N)" reserve fill; satchel → the Fishing-Day drawer, +18 prize, never a one-click) + 8 duty chips (drop on a
+  pawn = bijective orgOv seat swap). Three input modes ship together: pointer drag (ghost + threshold), tap-tap,
+  and a keyboard target-picker (valid-first, invalid rows disabled with the teaching line). Wrong-target drops
+  toast `rejLine(name, role, obj, neededRole)` ("Kaito is a chef — the abort flag needs the Safety Lead"). The
+  tray is a pure VIEW of `fixed[]`/`orgOv` — tray, tokens at holders' feet (fanned when co-located), receipt
+  rows and rail always agree; ferry recipients read live off the engine's shareInfo fix diff.
+- **Day drawers.** Day tabs slide the existing deck→arrange→connect editor up as an ~85vh drawer over the
+  stage (`#day-drawer`, `#fd-card` hosted in `#dd-body` permanently); the rail stays visible ≥1180px; drawing
+  an arrow floats +N onto the rail; Escape yields to modals and beats the pawn popover; focus in/out per §18.
+- **Integration seams (found by driving the merged UI, all fixed):** WB's `.open` vs WA's `aria-hidden`
+  display guard left the drawer permanently invisible post-merge; the `.open` rule needed an explicit
+  zero-delay visibility transition; `#dd-close` carried `.btn`'s `transition:all` which delayed INHERITED
+  visibility and silently no-opped the open-time `focus()` (WB's worktree shell used a transition-free class —
+  why it passed in isolation). Close-out lenses added: drawer title + plan pawn-card re-localize on language
+  switch; co-located tokens fan apart; the strongbox one-tap.
+- **Verified:** `node verify.js` **258/258** (engine/verify byte-untouched, `git diff -- engine.js verify.js`
+  empty) · smoke 22/22 · a new committed-in-spirit **52-check plan-harbor E2E** (per-object place/undo via all
+  three input modes, rejection toasts EN/JP, seat-swap bijection under rapid swaps, three-way sync, Live
+  regression, RM/touch/JP contexts) · zero JS errors throughout. rAF-leak measured stable across 6 mode cycles.
+- **Execution:** WA plan-stage+tray (Opus retry at high effort after the Fable worker hit its session limit
+  pre-edit; enriched brief carried WB's integration contracts) ∥ WB drawers (Opus, worktree, 3-way merged) ∥
+  WC E2E authoring (Sonnet) — integrated, seam-fixed and QA-gated by the tech lead. Commits: docs `1fc6d97` ·
+  P3a `201a6ee` · P3b `136222f` · QA `4c654c8`.
+- **Deferred:** Phase 4 report-on-stage (dusk, stall markers as click-through fixes, hanko grade stamp);
+  wrong-holder placement consequences (engine work); pawn at-rest name legibility at the pre-dawn zoom
+  (hover/click covers it); guests on the plan stage.
