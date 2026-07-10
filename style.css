@@ -808,6 +808,42 @@ body.canvas-stage .station .st-nm,
 body.canvas-stage .station .st-ring{visibility:hidden;}
 body.canvas-stage .sitemap::after{display:none;} /* vignette is drawn on the canvas */
 
+/* ===== W3 inspectable cast: hover cursor + the washi click popover (§3) ===== */
+.sitemap.pawn-hover{cursor:pointer;}
+.pawn-card{position:fixed;z-index:60;width:250px;max-width:calc(100vw - 16px);
+  background:var(--bg1);border:1px solid var(--line2);border-radius:var(--r-lg);
+  padding:13px 14px 12px;box-shadow:var(--shadow2);color:var(--ink);
+  animation:pcIn .13s ease;}
+.pawn-card::before{content:"";position:absolute;inset:5px;border:1px solid rgba(184,137,43,.18);border-radius:2px;pointer-events:none;}
+.pawn-card.hidden{display:none;}
+@keyframes pcIn{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:none;}}
+.pc-x{position:absolute;top:6px;right:7px;width:22px;height:22px;line-height:20px;text-align:center;
+  border:1px solid var(--line);border-radius:var(--r-sm);background:var(--bg2);color:var(--ink2);
+  font-size:15px;cursor:pointer;padding:0;font-family:inherit;}
+.pc-x:hover{background:var(--bg0);color:var(--ink);}
+.pc-head{display:flex;gap:9px;align-items:flex-start;margin:0 22px 8px 0;}
+.pc-ic{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  font-size:15px;flex-shrink:0;box-shadow:0 0 0 2px var(--bg1),0 0 0 3px rgba(184,137,43,.4);}
+.pc-id{min-width:0;}
+.pc-id b{display:block;font-size:14px;line-height:1.2;}
+.pc-jp{display:block;font-size:11px;color:var(--ink3);margin-top:1px;}
+.pc-role{display:block;font-size:11px;color:var(--ink2);margin-top:2px;}
+.pc-state{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--ink);
+  padding:5px 8px;border-radius:var(--r-sm);background:var(--bg2);border:1px solid var(--line);margin-bottom:9px;}
+.pc-bub:empty{display:none;}
+.pc-state.pc-s-confused,.pc-state.pc-s-onFire{color:var(--wait-dark);border-color:rgba(161,61,47,.4);background:rgba(161,61,47,.08);}
+.pc-state.pc-s-waiting,.pc-state.pc-s-waitInfo{color:var(--idle-dark);border-color:rgba(193,122,31,.4);background:rgba(193,122,31,.08);}
+.pc-state.pc-s-rework,.pc-state.pc-s-meeting{color:#3f5b72;border-color:rgba(92,127,146,.4);background:rgba(92,127,146,.08);}
+.pc-sec{margin-bottom:8px;}
+.pc-h{display:block;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent-dark);font-weight:700;margin-bottom:4px;}
+.pc-free{font-size:11.5px;color:var(--ink3);}
+.pc-tasks{border-top:1px solid var(--line);padding-top:7px;margin-top:2px;}
+.pc-line{font-size:11.5px;color:var(--ink2);margin-top:2px;}
+.pc-duty{font-size:12px;color:var(--ink2);line-height:1.5;margin-bottom:7px;}
+.pc-note{font-size:11px;color:var(--ink3);font-style:italic;}
+.pawn-card .ins-card i{font-style:normal;opacity:.8;}
+@media(prefers-reduced-motion:reduce){ .pawn-card{animation:none;} }
+
 /* ============================================================================
    INTRO / CAST — graphic onboarding screen (title, loop, playable cast).
    Cast pawns reuse the in-game .astro .fig art, scaled up inside .ipawn.

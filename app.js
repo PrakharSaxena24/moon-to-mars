@@ -97,6 +97,10 @@
   var finishTimer = null;                  // finish()'s 700ms report reveal — cleared on any screen change
   var morningSnap = null;                  // the Morning-authored plan, preserved across a Live detour
   var lastDetailStation = null;            // so a language switch can re-render an open problem panel
+  // W3 pawn inspection: hover feeds the canvas name chip; the click popover is anchored near a pawn
+  var hoverPid = null;                     // nearest pawn under the pointer -> view.hoverPid (canvas name chip)
+  var pawnCardPid = null;                  // the pawn whose popover is open (null = closed)
+  var pawnCardInvoker = null;              // element focus is restored to when the popover closes
   var RM = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : { matches: false };
   function tickMs() { return Math.round(BASE_TICK / speedMult); }
   function clearFinishTimer() { if (finishTimer) { clearTimeout(finishTimer); finishTimer = null; } }
@@ -115,7 +119,7 @@
     paintSetup(); buildRules(); buildLegend();
     if (!$('intro').classList.contains('hidden')) renderIntro();   // intro-how (HTML) + cast grid re-render in the new language
     // mid-run: rebuild station labels but keep every walker where it stands (no teleport)
-    if (!$('run').classList.contains('hidden') && sim && anim) { buildSitemap(true); renderSim(sim); }
+    if (!$('run').classList.contains('hidden') && sim && anim) { buildSitemap(true); renderSim(sim); if (pawnCardPid && pawnCardOpen()) openPawnCard(pawnCardPid); }
     if (appMode === 'live' && liveState && !$('run').classList.contains('hidden')) {
       renderLivePanel();
       if (livePausedForFix && liveState.currentGap) paintGapFocus(liveState.currentGap);   // keep the freeze visuals
@@ -1322,7 +1326,7 @@
         w: anim.w, h: anim.h, scale: stageScaleNow(), lang: L, rm: RM.matches,
         night: sim.mode === 'minute' && (sim.clockMin < 330 || sim.clockMin >= 1110),
         speedMult: speedMult, guestsVisible: guestsVisible,
-        hoverPid: null, spotlightPid: stageSpotPid, tintMap: stageTint, gapState: stageGapState,
+        hoverPid: hoverPid, spotlightPid: stageSpotPid, tintMap: stageTint, gapState: stageGapState,
         fig: anim.fig, guest: anim.guest, boat: anim.boat, wakes: anim.wakes,
         motes: anim.motes, cascade: anim.cascade,
         ghost: stageGhost, trail: stageTrail, chain: stageChain, hotPts: anim.hotPts,
@@ -1513,12 +1517,14 @@
     var lines = s.participants.map(function (p) {
       // §21.4: during a Live freeze the canvas shows the gap taxonomy on the spotlighted crewmate — mirror it to AT
       var pst = (stageGapState && stageGapState.pid === p.id) ? stageGapState.state : p.state;
-      return P.role(p.roleId).icon + ' ' + nm(p.name) + ' — ' + (t[STATE_KEY[pst]] || pst);
+      // W3 a11y: each row is a button opening the same popover (the keyboard path to inspection)
+      return '<li><button type="button" class="sr-pawn" data-pid="' + p.id + '">' +
+        P.role(p.roleId).icon + ' ' + nm(p.name) + ' — ' + (t[STATE_KEY[pst]] || pst) + '</button></li>';
     });
     var sig = L + '|' + lines.join('¦');
     if (el._sig === sig) return;
     el._sig = sig;
-    el.innerHTML = '<h2>' + t.rosterHeading + '</h2><ul>' + lines.map(function (ln) { return '<li>' + ln + '</li>'; }).join('') + '</ul>';
+    el.innerHTML = '<h2>' + t.rosterHeading + '</h2><ul>' + lines.join('') + '</ul>';
   }
 
   // minute-mode pressure: a live countdown to the 18:00 dinner + the fanfare payoff
@@ -1679,6 +1685,112 @@
   }
   function closeInspector() { $('inspect-modal').classList.remove('show'); if (sim && sim.paused) P.resume(sim); modalClosed(); }
 
+  // =========================================================================
+  // W3 — inspectable cast: click / tap / roster any duty-holder -> washi popover
+  // (hover feeds the canvas name chip via hoverPid; click opens P.memberInfo).
+  // The sim NEVER pauses; one popover at a time; Escape / click-away closes.
+  // =========================================================================
+  // pointer px (client) -> the anim.fig cache space (CSS px inside #sitemap)
+  function sitemapPt(e) {
+    var map = $('sitemap'); if (!map) return null;
+    var r = map.getBoundingClientRect();
+    var sw = r.width || anim.w || 1, sh = r.height || anim.h || 1;
+    return { x: (e.clientX - r.left) * ((anim.w || sw) / sw), y: (e.clientY - r.top) * ((anim.h || sh) / sh) };
+  }
+  // nearest duty-holder whose cached feet position is within the hit radius (cache, not the wandered pixel)
+  function pawnAt(e) {
+    if (!sim || !anim) return null;
+    var pt = sitemapPt(e); if (!pt) return null;
+    var R = 26 * (USE_CANVAS ? stageScaleNow() : 1), best = null, bestD = R * R;
+    sim.participants.forEach(function (p) {
+      var f = anim.fig[p.id]; if (!f) return;
+      var dx = f.cx - pt.x, dy = f.cy - pt.y, d = dx * dx + dy * dy;
+      if (d <= bestD) { bestD = d; best = p.id; }
+    });
+    return best;
+  }
+  function shortCard(id) { var c = byId(sim.plan.infoCards, id); return nm(c ? c.name : id).split('：')[0].split(':')[0]; }
+
+  function pawnCardHTML(p) {
+    var t = T(), rr = P.role(p.roleId), mi = P.memberInfo(sim, p.id);
+    // §21.4 parity: during a Live freeze the taxonomy state the app painted wins over the raw engine state
+    var pst = (stageGapState && stageGapState.pid === p.id) ? stageGapState.state : (mi ? mi.state : p.state);
+    var jp = (p.name && p.name.jp) ? p.name.jp : '';
+    var head = '<button class="pc-x" id="pc-close" aria-label="' + t.closeBtn + '">×</button>' +
+      '<div class="pc-head"><span class="pc-ic" style="background:' + rr.color + '">' + rr.icon + '</span>' +
+      '<div class="pc-id"><b id="pc-name">' + nm(p.name) + '</b>' +
+      (jp && jp !== nm(p.name) ? '<span class="pc-jp">' + jp + '</span>' : '') +
+      '<span class="pc-role">' + rr.icon + ' ' + nm(rr.name) + '</span></div></div>';
+    // the 迷い/手待ち/手戻り taxonomy line = state bubble + the st* word (already carries the taxonomy)
+    var stateRow = '<div class="pc-state pc-s-' + pst + '"><span class="pc-bub">' + (BUB[pst] || '') + '</span>' +
+      '<span class="pc-sw">' + t.pcState + ': ' + (t[STATE_KEY[pst]] || pst) + '</span></div>';
+    if (!mi) {   // whole-trip classic clock: no minute schedule -> name / role / duty / state only
+      return head + stateRow + '<div class="pc-duty">' + (t['duty_' + p.roleId] || '') + '</div>' +
+        '<div class="pc-note">' + t.pcNoMinute + '</div>';
+    }
+    var now = sim.clockMin || 0;
+    var held = mi.held.map(function (hc) {
+      return '<span class="ins-card ok">' + shortCard(hc.cardId) + ' <i>' + (hc.own ? '◉' : hhmm(hc.atMin)) + '</i></span>';
+    }).join('');
+    var seen = {};
+    var waits = mi.waiting.map(function (w) {
+      seen[w.cardId] = 1;
+      var idle = Math.max(0, Math.round(w.etaMin - now));
+      return '<span class="ins-card wait">⏳ ' + shortCard(w.cardId) + ' <i>' + t.pcEta(hhmm(w.etaMin)) + (idle > 0 ? ' · ' + t.pcIdle(idle) : '') + '</i></span>';
+    }).join('');
+    waits += mi.waitsOn.filter(function (w) { return w.cardId && !seen[w.cardId]; }).map(function (w) {
+      return '<span class="ins-card wait">⏳ ' + shortCard(w.cardId) + ' <i>' + (w.missing ? t.inspMissing : t.pcEta(hhmm(w.until))) + '</i></span>';
+    }).join('');
+    var ctk = mi.currentTaskId ? byId(sim.tasks, mi.currentTaskId) : null;
+    var ntk = mi.nextTaskId ? byId(sim.tasks, mi.nextTaskId) : null;
+    var cur = ctk ? nm(ctk.name) : '—';
+    var nxt = ntk ? nm(ntk.name) + (mi.nextAtMin != null ? ' (' + hhmm(mi.nextAtMin) + ')' : '') : '—';
+    return head + stateRow +
+      '<div class="pc-sec"><span class="pc-h">' + t.pcHeld + '</span><div class="ins-cards">' + (held || '<span class="ins-none">—</span>') + '</div></div>' +
+      (waits ? '<div class="pc-sec"><span class="pc-h">' + t.pcWaiting + '</span><div class="ins-cards">' + waits + '</div></div>'
+             : '<div class="pc-sec pc-free">' + t.inspIdleFree + '</div>') +
+      '<div class="pc-tasks"><div class="pc-line">' + t.inspNowDoing + ': ' + cur + '</div>' +
+      '<div class="pc-line">' + t.pcNext + ': ' + nxt + '</div></div>';
+  }
+
+  function positionPawnCard(pid) {
+    var card = $('pawn-card'), f = anim && anim.fig[pid], map = $('sitemap'); if (!f || !map) return;
+    var r = map.getBoundingClientRect();
+    var sc = USE_CANVAS ? stageScaleNow() : 1;
+    var sx = r.left + f.cx * (r.width / (anim.w || r.width));
+    var sy = r.top + f.cy * (r.height / (anim.h || r.height));   // feet
+    card.style.left = '0px'; card.style.top = '0px';             // measure at origin
+    var cw = card.offsetWidth, ch = card.offsetHeight, M = 8;
+    var headY = sy - 40 * sc;                                    // roughly the pawn's head
+    var left = sx - cw / 2, top = headY - ch - 10;               // default: above the head
+    if (top < M) top = sy + 14 * sc;                             // flip below if there's no room above
+    if (left < M) left = M;
+    if (left + cw > window.innerWidth - M) left = window.innerWidth - M - cw;
+    if (top + ch > window.innerHeight - M) top = window.innerHeight - M - ch;
+    card.style.left = Math.round(left) + 'px'; card.style.top = Math.round(top) + 'px';
+  }
+
+  function openPawnCard(pid) {
+    if (!sim) return;
+    var p = byId(sim.participants, pid); if (!p) return;
+    var card = $('pawn-card'); if (!card) return;
+    var freshOpen = card.classList.contains('hidden');
+    if (freshOpen) { var a = document.activeElement; pawnCardInvoker = (a && a !== document.body) ? a : null; }
+    pawnCardPid = pid;
+    card.innerHTML = pawnCardHTML(p);
+    card.setAttribute('aria-label', nm(p.name) + ' · ' + nm(P.role(p.roleId).name));
+    card.classList.remove('hidden');
+    positionPawnCard(pid);
+    if (freshOpen) { try { card.focus(); } catch (e) { } }       // don't steal focus on a live re-render
+  }
+  function closePawnCard() {
+    var card = $('pawn-card'); if (!card || card.classList.contains('hidden')) return;
+    card.classList.add('hidden'); card.innerHTML = '';
+    var inv = pawnCardInvoker; pawnCardPid = null; pawnCardInvoker = null;
+    if (inv && document.body.contains(inv)) { try { inv.focus(); } catch (e) { } }
+  }
+  function pawnCardOpen() { var c = $('pawn-card'); return c && !c.classList.contains('hidden'); }
+
   // ---- problem detail panel ----
   function openProblemPanel(stationId) {
     if (!sim) return;
@@ -1741,6 +1853,7 @@
     finishTimer = setTimeout(function () {
       finishTimer = null;
       if (sim !== simAt) return;      // a mode/screen change won the race — don't pop the report over it
+      closePawnCard();
       stopAnim(); document.body.classList.remove('running'); $('run').classList.add('hidden'); $('report').classList.remove('hidden'); renderReport(lastResult);
     }, 700);
   }
@@ -2156,6 +2269,38 @@
       var sec = e.target.closest('.sec-hot'); if (sec) { openSectionPanel(sec.getAttribute('data-sec')); return; }
       var st = e.target.closest('.station'); if (st) openProblemPanel(st.id.replace('st-', ''));
     });
+    // W3 inspectable cast — hover feeds the canvas name chip; click/tap opens the popover.
+    // .station / .sec-hot sit above and keep first claim: only background/pawn targets are ours.
+    (function () {
+      var map = $('sitemap');
+      map.addEventListener('pointermove', function (e) {
+        if (!sim || $('run').classList.contains('hidden')) return;
+        var pid = pawnAt(e);
+        if (pid !== hoverPid) { hoverPid = pid; map.classList.toggle('pawn-hover', !!pid); }
+      });
+      map.addEventListener('pointerleave', function () { if (hoverPid) { hoverPid = null; map.classList.remove('pawn-hover'); } });
+      map.addEventListener('click', function (e) {
+        if (!sim) return;
+        if (e.target.closest('.station') || e.target.closest('.sec-hot')) return;   // hotspots keep first claim
+        var astro = e.target.closest && e.target.closest('.astro[data-pid]');       // DOM-stage pawn (?dom)
+        var pid = astro ? astro.getAttribute('data-pid') : pawnAt(e);               // canvas: hit-test the cache
+        if (pid) openPawnCard(pid); else closePawnCard();                           // background click closes
+      });
+    })();
+    // the offscreen a11y roster: each row-button opens the same popover (keyboard path)
+    $('stage-roster').addEventListener('click', function (e) {
+      var b = e.target.closest('.sr-pawn'); if (b) openPawnCard(b.getAttribute('data-pid'));
+    });
+    // popover: its own close button; Escape; and click-away (clicks inside #sitemap/#stage-roster
+    // are owned by their handlers above, which switch or close the popover themselves)
+    $('pawn-card').addEventListener('click', function (e) { if (e.target.closest('#pc-close')) closePawnCard(); });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && pawnCardOpen()) closePawnCard(); });
+    document.addEventListener('pointerdown', function (e) {
+      if (!pawnCardOpen()) return;
+      if (e.target.closest('#pawn-card') || e.target.closest('#sitemap') || e.target.closest('#stage-roster')) return;
+      closePawnCard();
+    });
+    window.addEventListener('resize', function () { if (pawnCardOpen()) positionPawnCard(pawnCardPid); });
     $('dash-warnings').addEventListener('click', function (e) { var w = e.target.closest('.warn'); if (w && w.dataset.station) openProblemPanel(w.dataset.station); });
     $('detail-close').addEventListener('click', closeDetail);
     $('detail-modal').addEventListener('click', function (e) { if (e.target === $('detail-modal')) closeDetail(); });
@@ -2243,7 +2388,7 @@
   // =========================================================================
   var LIVE_CH = ['board', 'chat', 'radio', 'faceToFace'];
   function ldPanel(id) { ['ld-brief', 'ld-prompt', 'ld-spot', 'ld-result'].forEach(function (p) { var e = $(p); if (e) e.classList.toggle('on', p === id); }); }
-  function closeModals() { ['detail-modal', 'inspect-modal', 'arrow-modal', 'rules-modal'].forEach(function (m) { var e = $(m); if (e) e.classList.remove('show'); }); lastFocus = null; }
+  function closeModals() { ['detail-modal', 'inspect-modal', 'arrow-modal', 'rules-modal'].forEach(function (m) { var e = $(m); if (e) e.classList.remove('show'); }); closePawnCard(); lastFocus = null; }
   function clearStationTints() { P.STATIONS.forEach(function (s) { var n = $('st-' + s.id); if (n) n.classList.remove('terr-green', 'terr-amber', 'terr-red'); }); stageTint = null; }
   function chIcon(ch) { return { board: '📋', chat: '💬', radio: '📻', phone: '📞', faceToFace: '🤝' }[ch] || '•'; }
   function personName(task) { var pid = task.assignedIds[0], p = pid && byId(currentPlan().participants, pid); return p ? nm(p.name) : nm(P.role(task.ownerRoleId).name); }

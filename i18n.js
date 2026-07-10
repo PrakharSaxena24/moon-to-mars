@@ -182,6 +182,15 @@
       sendNow: 'Send now', inspResume: 'Resume ▶',
       handFedNote: function (n) { return 'hand-fed ' + n + '× this run (plan unchanged)'; },
 
+      // --- W3 pawn inspection popover (§3) ---
+      pcState: 'State',
+      pcHeld: 'Holds',
+      pcWaiting: 'Waiting on',
+      pcEta: function (hm) { return 'ETA ' + hm; },
+      pcIdle: function (n) { return '+' + n + ' min idle'; },
+      pcNext: 'Next',
+      pcNoMinute: 'Live status (held cards, waits, next task) shows during a timed day run.',
+
       // --- fishday report chips ---
       rcEff: function (e) { return 'Efficiency ' + e + '%'; },
       rcIdle: function (n) { return 'Idle ' + n + ' min'; },
@@ -494,6 +503,15 @@
       inspNowDoing: '現在', inspNext: '次', inspIdleFree: '待ち情報なし', inspMissing: '矢印未設定',
       sendNow: '今すぐ渡す', inspResume: '再開 ▶',
       handFedNote: function (n) { return 'この実行で手渡し' + n + '回（計画は未修正）'; },
+
+      // --- W3 pawn inspection popover (§3) ---
+      pcState: '状態',
+      pcHeld: '保有情報',
+      pcWaiting: '待ち情報',
+      pcEta: function (hm) { return hm + ' 到着予定'; },
+      pcIdle: function (n) { return '手待ち +' + n + '分'; },
+      pcNext: '次のタスク',
+      pcNoMinute: 'ライブ状況（保有カード・待ち・次のタスク）は分刻みの当日進行中に表示されます。',
 
       // --- fishday report chips ---
       rcEff: function (e) { return '稼働効率 ' + e + '%'; },
