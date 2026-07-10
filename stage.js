@@ -572,6 +572,18 @@
     _canvas = canvasEl;
     _ctx = canvasEl.getContext('2d');
     resizeStage(dims, window.devicePixelRatio || 1);
+    // Harbor Complete §1: kick the sprite atelier's decode the first time any
+    // stage boots. init(cb) is idempotent (sprites.js settles once and replays
+    // late callbacks), so every initStage caller (run stage, plan stage, report
+    // stage, vignette) can call it blindly. No callback needed: scene()
+    // re-resolves the provider every frame, so the moment `ready` flips the
+    // pawns become sprites seamlessly — until then the procedural pawns render.
+    // A throwing provider is disarmed for the session (fallback contract).
+    if (!_sprBroken && typeof window !== 'undefined' && window.PRS_SPRITES &&
+        typeof window.PRS_SPRITES.init === 'function') {
+      try { window.PRS_SPRITES.init(); }
+      catch (e) { _sprBroken = true; SPR = null; }
+    }
     return _ctx;
   }
   function resizeStage(dims, dpr) {
@@ -1725,6 +1737,12 @@ function drawGuests(ctx, sim, t, view) {
   var w = view.w, h = view.h;
   var hot = view.hotPts || [];
   var n = (typeof P !== 'undefined' && P.GUESTS) ? P.GUESTS : 13;
+  // §2 pawn scale rides along for the guests so the world keeps one proportion
+  // system. DELIBERATELY procedural (no sprite consumption here): the atelier's
+  // single generic guest body would flatten the 13 seeded yukata colours + the
+  // cast-lean/rod interplay into identical clones — the varied hand-drawn crowd
+  // is the higher-craft read for background ambience.
+  figs = scale * FIG_SCALE;
 
   for (var i = 0; i < n; i++) {
     var id = 'g' + i;
@@ -1746,7 +1764,7 @@ function drawGuests(ctx, sim, t, view) {
     if (!view.rm && !hushed) {
       var period = (gs.act === 'chat') ? 2600 : 1700;
       var phase = (t * 1000 % period) / period;
-      bobY = -2.5 * scale * (1 - Math.cos(phase * 2 * Math.PI)) / 2;
+      bobY = -2.5 * figs * (1 - Math.cos(phase * 2 * Math.PI)) / 2;
     }
     var fy = cy + bobY;                       // this frame's feet/body-anchor line
     var col = YUKATA[i % YUKATA.length];
@@ -1756,7 +1774,8 @@ function drawGuests(ctx, sim, t, view) {
     ctx.globalAlpha = hushed ? 0.3 : 1;        // .guest.hushed{opacity:.3}
 
     // soft contact shadow — grounded on the feet line, ignores bob, drawn before the caster
-    contactShadow(ctx, cx, cy + 1 * scale, 15 * scale, 5 * scale, 0.4);
+    contactShadow(ctx, cx, cy + 1 * scale, 15 * figs, 5 * figs, 0.4);
+    longShadow(ctx, cx, cy + 1 * scale, 8 * figs, 0.5);   // low-sun cast (spec §2), gentler than a duty-holder's
 
     // a fixed shore caster leans very slightly toward the water — a nicer, more purposeful stance
     // than standing bolt upright; the whole pawn (body/head/rod) rotates as one group about its feet.
@@ -1771,7 +1790,7 @@ function drawGuests(ctx, sim, t, view) {
     // yukata body — 8x11 rounded rect, feet at fy, centred on cx (style.css .g-body), now a
     // top-lit lacquer bevel (liftRGB) instead of a flat fill, plus a washi sash and an upper-left
     // rim-light lick (non-circular shape -> a light stroke along the edge, per the key-light rule)
-    var bw = 8 * scale, bh = 11 * scale, br = 3.5 * scale;
+    var bw = 8 * figs, bh = 11 * figs, br = 3.5 * figs;
     var bx = cx - bw / 2, by = fy - bh;
     roundRect(ctx, bx, by, bw, bh, br);
     var bodyGrad = ctx.createLinearGradient(bx, by, bx, by + bh);
@@ -1780,7 +1799,7 @@ function drawGuests(ctx, sim, t, view) {
     bodyGrad.addColorStop(1, rgba(liftRGB(colRGB, -24), 1));
     ctx.fillStyle = bodyGrad;
     ctx.fill();
-    ctx.lineWidth = 1 * scale;
+    ctx.lineWidth = 1 * figs;
     ctx.strokeStyle = rgba(PAL.indigoDeep, 0.4);
     ctx.stroke();
 
@@ -1788,13 +1807,13 @@ function drawGuests(ctx, sim, t, view) {
     ctx.save();
     roundRect(ctx, bx, by, bw, bh, br); ctx.clip();
     ctx.fillStyle = rgba(PAL.washiWarm, 0.55);
-    ctx.fillRect(bx, by + bh - 4 * scale, bw, 1.4 * scale);
+    ctx.fillRect(bx, by + bh - 4 * figs, bw, 1.4 * figs);
     ctx.restore();
 
     ctx.save();
     roundRect(ctx, bx, by, bw, bh, br); ctx.clip();
     ctx.strokeStyle = rgba(PAL.rimWhite, 0.24);
-    ctx.lineWidth = 1.3 * scale;
+    ctx.lineWidth = 1.3 * figs;
     ctx.beginPath();
     ctx.moveTo(bx + bw * 0.12, by + bh * 0.05);
     ctx.lineTo(bx + bw * 0.02, by + bh * 0.62);
@@ -1802,13 +1821,13 @@ function drawGuests(ctx, sim, t, view) {
     ctx.restore();
 
     // head dot (::before): 5px circle, centred (cx, fy-12.5), now with a key-light rim arc
-    var headR = 2.5 * scale;
-    var headCx = cx, headCy = fy - bh - 1.5 * scale;
+    var headR = 2.5 * figs;
+    var headCx = cx, headCy = fy - bh - 1.5 * figs;
     ctx.beginPath();
     ctx.arc(headCx, headCy, headR, 0, Math.PI * 2);
     ctx.fillStyle = rgba(PAL.skin, 1);
     ctx.fill();
-    ctx.lineWidth = 1 * scale;
+    ctx.lineWidth = 1 * figs;
     ctx.strokeStyle = rgba(PAL.indigoDeep, 0.35);
     ctx.stroke();
     rimLightArc(ctx, headCx, headCy, headR, 0.32);
@@ -1816,8 +1835,8 @@ function drawGuests(ctx, sim, t, view) {
     // fishing rod for the fixed shore casters (::after on .g-cast .g-body) — bent, gold-lit,
     // with a drooping line + tiny glinting lure (drawGuests_rod above)
     if (gs.cast) {
-      var px0 = cx + 2 * scale, py0 = fy - 16.5 * scale;
-      drawGuests_rod(ctx, px0, py0, scale, view.rm);
+      var px0 = cx + 2 * figs, py0 = fy - 16.5 * figs;
+      drawGuests_rod(ctx, px0, py0, figs, view.rm);
     }
 
     if (leaning) ctx.restore();  // end lean rotation
@@ -2732,7 +2751,11 @@ function drawStamp(ctx, t, view) {
   var y = (typeof s.y === 'number') ? s.y : view.h - size * 0.5 - 22 * scale;
   var k = 1;
   if (!view.rm && typeof s.at === 'number' && s.at > 0) {
-    k = (t * 1000 - s.at) / 620;
+    // `at` rides the same rAF clock as t, in SECONDS (the app stamps
+    // performance.now()/1000 — app.js bootReportStage). Values that can only
+    // be milliseconds (a raw performance.now()) are normalized defensively.
+    var at0 = s.at > 1e5 ? s.at / 1000 : s.at;
+    k = (t - at0) / 0.62;
     if (k < 0) return;                                      // not landed yet
     k = clamp(k, 0, 1);
   }
@@ -2931,13 +2954,24 @@ var GESTURE = {
   logi: gestureCrate, budgetLead: gestureTally, pm: gestureBeckon, siteLead: gestureSurvey, owner: gestureSurvey
 };
 
+// sprite pose selection (spec §1): walking wins (legs must move), then the
+// stall family (the slumped diagnostic star), then the work gesture, else idle.
+function drawFigures_pose(f, state) {
+  if (f.walking) return 'walk';
+  if (STALL_STATES[state]) return 'stall';
+  if (state === 'working') return 'work';
+  return 'idle';
+}
+
 function drawFigures(ctx, sim, t, view) {
   if (!sim || !sim.participants || !view || !view.fig) return;
   var ts = t * 1000;
   var rm = !!view.rm;
+  figs = scale * FIG_SCALE;   // §2 pawn scale +30% — every pawn-body size below
   // state -> bubble/border tint (mirrors style.css .astro.s-* .bub border-color groups; resolved/idle/tired/working keep the chip default)
   var BTINT = { confused: '217,83,79', onFire: '217,83,79', waiting: '193,122,31', waitInfo: '193,122,31', meeting: '92,127,146', rework: '92,127,146' };
-  // scaled chip geometry, shared by the speech bubble + name chip (chip() never auto-scales)
+  // scaled chip geometry, shared by the speech bubble + name chip (chip() never
+  // auto-scales). Text stays at HUD scale — chips are labels, not body parts.
   var chipFont = '600 ' + Math.round(10 * scale) + 'px system-ui,sans-serif';
   var chipPad = 4 * scale, chipH = 14 * scale, chipR = 2 * scale, chipTail = 4 * scale;
 
@@ -2967,97 +3001,132 @@ function drawFigures(ctx, sim, t, view) {
     ctx.save();
     ctx.globalAlpha = dim;
 
+    // ---- sprite lookup (spec §1) — resolved BEFORE any transform so a null
+    // falls through to the full procedural pawn with zero drift. Facing -1
+    // canvases are PRE-MIRRORED by the atelier: the sprite path must never
+    // also ctx.scale(-1,1). frame 0 under RM (one static pose).
+    var pose = drawFigures_pose(f, state);
+    var sprFrame = 0;
+    if (!rm) {
+      if (pose === 'walk') {
+        sprFrame = ((t % 0.38) / 0.38) < 0.5 ? 0 : 1;            // rides the same 0.38s cycle as the bob
+      } else if (pose === 'work') {
+        var sgPeriod = 0.8 + workFrac(p.id + '#gp') * 0.8;       // the gesture's own seeded cadence
+        sprFrame = gesturePhase(t, sgPeriod, workFrac(p.id + '#ga')) < 0.5 ? 0 : 1;
+      }
+    }
+    var spr = sprGet(p.roleId, pose, sprFrame, f.faceL ? -1 : 1);
+
     // ---- shadow + pawn body (flip + walk-bob live in here; shadow ignores bob) ----
     ctx.save();
-    if (f.faceL) { ctx.translate(cx, 0); ctx.scale(-1, 1); ctx.translate(-cx, 0); }
+    if (!spr && f.faceL) { ctx.translate(cx, 0); ctx.scale(-1, 1); ctx.translate(-cx, 0); }
 
     var shRx = (f.walking && !rm) ? 6 : 7.5;
-    contactShadow(ctx, cx, feetY + 3 * scale, shRx * 2 * scale, 5 * scale, 0.42);
+    contactShadow(ctx, cx, feetY + 3 * scale, shRx * 2 * figs, 5 * figs, 0.42);
+    // low-sun long cast shadow (spec §2 lighting) — same rig as the stations',
+    // so at dawn every pawn stretches the same way; no-op at midday/night.
+    // Pawns get a stronger mul than stations: a small caster needs the darker
+    // core for the stretch to read at all (the 07:00 departure is the money shot).
+    longShadow(ctx, cx, feetY + 2 * scale, 11 * figs, 1.2);
 
     // walk trot / working idle-breath bob (t-driven ambience per contract §2); none under rm
     var bobOffset = 0, swayX = 0;
     if (!rm) {
       if (state === 'working') {
         var ph2 = (t % 1.15) / 1.15;
-        bobOffset = -1.25 * scale * (1 - Math.cos(2 * Math.PI * ph2));
+        bobOffset = -1.25 * figs * (1 - Math.cos(2 * Math.PI * ph2));
       } else if (f.walking) {
         var ph1 = (t % 0.38) / 0.38;
-        bobOffset = -0.8 * scale * (1 - Math.cos(2 * Math.PI * ph1));
+        bobOffset = -0.8 * figs * (1 - Math.cos(2 * Math.PI * ph1));
       } else if (state === 'idle') {
         // ---- W2 idle fidget: a subtle weight-shift sway, seeded per pid, every few seconds
         var fPeriod = 3.4 + workFrac(p.id + '#fp') * 1.6;
         var fPhase = workFrac(p.id + '#fa');
-        swayX = Math.sin(gesturePhase(t, fPeriod, fPhase) * Math.PI * 2) * 1.6 * scale;
+        swayX = Math.sin(gesturePhase(t, fPeriod, fPhase) * Math.PI * 2) * 1.6 * figs;
       }
-    }
-    // leg swing (independent of the bob rule above — CSS keeps legswing tied purely to .walking)
-    var angL = 0, angR = 0;
-    if (f.walking && !rm) {
-      var phL = (t % 0.38) / 0.38;
-      angL = -26 * Math.cos(2 * Math.PI * phL);
-      angR = -angL;
     }
 
     ctx.save();
     ctx.translate(swayX, bobOffset);
 
-    drawFigures_leg(ctx, cx - 2 * scale, feetY - 7.5 * scale, 3 * scale, 7.5 * scale, 1.5 * scale, angL, '#2b241c');
-    drawFigures_leg(ctx, cx + 2 * scale, feetY - 7.5 * scale, 3 * scale, 7.5 * scale, 1.5 * scale, angR, '#2b241c');
+    if (spr) {
+      // ---- SPRITE PAWN (spec §1): feet-centre anchor at meta (24,52) of a
+      // 48×56 box, display scale = figs so the sprite torso (~12-15 units wide)
+      // lands exactly where the procedural coat (12*figs) stood. The sprite
+      // carries its own legs/arms/tool/face — the procedural limb + gesture
+      // overlays are suppressed; the shadow/aura/bubble/name stack (below,
+      // outside this block) and the wander/bob offsets are kept.
+      var sm = (SPR && SPR.meta) ? SPR.meta : { w: 48, h: 56, feetX: 24, feetY: 52 };
+      ctx.drawImage(spr, cx - sm.feetX * figs, feetY - sm.feetY * figs, sm.w * figs, sm.h * figs);
+    } else {
+      // ---- PROCEDURAL PAWN (the permanent fallback — byte-equivalent art,
+      // sized by figs): legs, coat, head, cap, work gesture. ----
+      // leg swing (independent of the bob rule above — CSS keeps legswing tied purely to .walking)
+      var angL = 0, angR = 0;
+      if (f.walking && !rm) {
+        var phL = (t % 0.38) / 0.38;
+        angL = -26 * Math.cos(2 * Math.PI * phL);
+        angR = -angL;
+      }
 
-    // torso (coat) — role-colour lacquer bevel (liftRGB top/bottom), ink outline, washi sash, upper-left rim light
-    var trX = cx - 6 * scale, trY = feetY - 18 * scale, trW = 12 * scale, trH = 12.5 * scale, trR = 3.5 * scale;
-    var torsoGrad = ctx.createLinearGradient(trX, trY, trX, trY + trH);
-    torsoGrad.addColorStop(0, 'rgb(' + liftRGB(roleRGB, 24) + ')');
-    torsoGrad.addColorStop(1, 'rgb(' + liftRGB(roleRGB, -18) + ')');
-    ctx.fillStyle = torsoGrad;
-    roundRect(ctx, trX, trY, trW, trH, trR);
-    ctx.fill();
-    ctx.lineWidth = 1 * scale;
-    ctx.strokeStyle = rgba(PAL.ink, 0.35);
-    roundRect(ctx, trX, trY, trW, trH, trR);
-    ctx.stroke();
-    ctx.fillStyle = rgba(PAL.washi, 0.7);
-    ctx.fillRect(trX, trY + trH - 5 * scale, trW, 2 * scale);
-    // upper-left key-light lick along the coat's shoulder/collar edge
-    ctx.save();
-    ctx.strokeStyle = rgba(PAL.rimWhite, 0.3);
-    ctx.lineWidth = 1.3 * scale;
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.moveTo(trX + 1.2 * scale, trY + trH * 0.62);
-    ctx.lineTo(trX + 1.2 * scale, trY + 1.4 * scale);
-    ctx.quadraticCurveTo(trX + 1.2 * scale, trY + 0.8 * scale, trX + trW * 0.5, trY + 0.8 * scale);
-    ctx.stroke();
-    ctx.restore();
+      drawFigures_leg(ctx, cx - 2 * figs, feetY - 7.5 * figs, 3 * figs, 7.5 * figs, 1.5 * figs, angL, '#2b241c');
+      drawFigures_leg(ctx, cx + 2 * figs, feetY - 7.5 * figs, 3 * figs, 7.5 * figs, 1.5 * figs, angR, '#2b241c');
 
-    // head — skin tone, soft ink outline, upper-left rim-light arc
-    var headR = 4 * scale, headCy = feetY - 19.5 * scale;
-    ctx.beginPath();
-    ctx.fillStyle = rgba(PAL.skin, 1);
-    ctx.arc(cx, headCy, headR, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.lineWidth = 1 * scale;
-    ctx.strokeStyle = rgba(PAL.ink, 0.3);
-    ctx.stroke();
-    rimLightArc(ctx, cx, headCy, headR, 0.4);
+      // torso (coat) — role-colour lacquer bevel (liftRGB top/bottom), ink outline, washi sash, upper-left rim light
+      var trX = cx - 6 * figs, trY = feetY - 18 * figs, trW = 12 * figs, trH = 12.5 * figs, trR = 3.5 * figs;
+      var torsoGrad = ctx.createLinearGradient(trX, trY, trX, trY + trH);
+      torsoGrad.addColorStop(0, 'rgb(' + liftRGB(roleRGB, 24) + ')');
+      torsoGrad.addColorStop(1, 'rgb(' + liftRGB(roleRGB, -18) + ')');
+      ctx.fillStyle = torsoGrad;
+      roundRect(ctx, trX, trY, trW, trH, trR);
+      ctx.fill();
+      ctx.lineWidth = 1 * figs;
+      ctx.strokeStyle = rgba(PAL.ink, 0.35);
+      roundRect(ctx, trX, trY, trW, trH, trR);
+      ctx.stroke();
+      ctx.fillStyle = rgba(PAL.washi, 0.7);
+      ctx.fillRect(trX, trY + trH - 5 * figs, trW, 2 * figs);
+      // upper-left key-light lick along the coat's shoulder/collar edge
+      ctx.save();
+      ctx.strokeStyle = rgba(PAL.rimWhite, 0.3);
+      ctx.lineWidth = 1.3 * figs;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(trX + 1.2 * figs, trY + trH * 0.62);
+      ctx.lineTo(trX + 1.2 * figs, trY + 1.4 * figs);
+      ctx.quadraticCurveTo(trX + 1.2 * figs, trY + 0.8 * figs, trX + trW * 0.5, trY + 0.8 * figs);
+      ctx.stroke();
+      ctx.restore();
 
-    // cap — role colour, small bevel, left-biased warm rim-light band + washi trim
-    var hX = cx - 5 * scale, hY = feetY - 26 * scale, hW = 10 * scale, hH = 5 * scale, hR = 2.2 * scale;
-    ctx.fillStyle = role.color;
-    roundRect(ctx, hX, hY, hW, hH, hR);
-    ctx.fill();
-    ctx.fillStyle = rgba(PAL.rimWhite, 0.34);
-    ctx.fillRect(hX, hY, hW * 0.6, 1.5 * scale);
-    ctx.fillStyle = rgba(PAL.washi, 0.75);
-    ctx.fillRect(hX, hY + hH - 1 * scale, hW, 1 * scale);
+      // head — skin tone, soft ink outline, upper-left rim-light arc
+      var headR = 4 * figs, headCy = feetY - 19.5 * figs;
+      ctx.beginPath();
+      ctx.fillStyle = rgba(PAL.skin, 1);
+      ctx.arc(cx, headCy, headR, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.lineWidth = 1 * figs;
+      ctx.strokeStyle = rgba(PAL.ink, 0.3);
+      ctx.stroke();
+      rimLightArc(ctx, cx, headCy, headR, 0.4);
 
-    // ---- W2 role work-gesture overlay: small, seeded, only while actually working ----
-    if (!rm && state === 'working') {
-      var gfn = GESTURE[p.roleId];
-      if (gfn) {
-        var gPeriod = 0.8 + workFrac(p.id + '#gp') * 0.8;
-        var gPhase = workFrac(p.id + '#ga');
-        gfn(ctx, cx, feetY, headCy, gesturePhase(t, gPeriod, gPhase));
+      // cap — role colour, small bevel, left-biased warm rim-light band + washi trim
+      var hX = cx - 5 * figs, hY = feetY - 26 * figs, hW = 10 * figs, hH = 5 * figs, hR = 2.2 * figs;
+      ctx.fillStyle = role.color;
+      roundRect(ctx, hX, hY, hW, hH, hR);
+      ctx.fill();
+      ctx.fillStyle = rgba(PAL.rimWhite, 0.34);
+      ctx.fillRect(hX, hY, hW * 0.6, 1.5 * figs);
+      ctx.fillStyle = rgba(PAL.washi, 0.75);
+      ctx.fillRect(hX, hY + hH - 1 * figs, hW, 1 * figs);
+
+      // ---- W2 role work-gesture overlay: small, seeded, only while actually working ----
+      if (!rm && state === 'working') {
+        var gfn = GESTURE[p.roleId];
+        if (gfn) {
+          var gPeriod = 0.8 + workFrac(p.id + '#gp') * 0.8;
+          var gPhase = workFrac(p.id + '#ga');
+          gfn(ctx, cx, feetY, headCy, gesturePhase(t, gPeriod, gPhase));
+        }
       }
     }
 
@@ -3073,7 +3142,7 @@ function drawFigures(ctx, sim, t, view) {
       ctx.globalAlpha = op;
       ctx.translate(cx, feetY + 1 * scale);
       ctx.scale(1, 10 / 26);
-      radialGlow(ctx, 0, 0, 13 * scale, aura.rgb, aura.a);
+      radialGlow(ctx, 0, 0, 13 * figs, aura.rgb, aura.a);
       ctx.restore();
     }
 
@@ -3082,23 +3151,23 @@ function drawFigures(ctx, sim, t, view) {
       var pf = rm ? 1 : drawFigures_pulse(t, 1.2, 0.6, 1);
       ctx.save();
       ctx.globalAlpha = 0.4 * pf;
-      radialGlow(ctx, cx, feetY + 3 * scale, 16 * scale, PAL.gold, 0.5);
+      radialGlow(ctx, cx, feetY + 3 * scale, 16 * figs, PAL.gold, 0.5);
       ctx.restore();
       ctx.save();
       ctx.globalAlpha = 0.75 * pf;
       ctx.lineWidth = 2 * scale;
       ctx.strokeStyle = rgba(PAL.gold, 1);
       ctx.beginPath();
-      ctx.arc(cx, feetY + 3 * scale, 9 * scale, 0, Math.PI * 2);
+      ctx.arc(cx, feetY + 3 * scale, 9 * figs, 0, Math.PI * 2);
       ctx.stroke();
       ctx.restore();
-      if (!rm) sparkle(ctx, cx + 8 * scale, feetY - 4 * scale, 3 * scale, 0.85 * pf);
+      if (!rm) sparkle(ctx, cx + 8 * figs, feetY - 4 * figs, 3 * scale, 0.85 * pf);
     }
 
     // ---- speech-bubble chip (BUB map; '' = none) — pops on state change ----
     var bubTxt = BUB[state] || '';
     if (bubTxt) {
-      var bubY = feetY - 46 * scale; // top-centre; tail:'down' lands the tail near the cap
+      var bubY = feetY - 46 * figs; // top-centre; tail:'down' lands the tail over the pawn's hat
       var bubScale = 1;
       if (!rm && f.bubT0) {
         var kk = (ts - f.bubT0) / DUR.bubpop;
@@ -3129,7 +3198,7 @@ function drawFigures(ctx, sim, t, view) {
       var label = (role.icon ? role.icon + ' ' : '') + nm(p.name);
       // hovered pawn: append the localized state word (supplied by app.js via view.hoverWord)
       if (p.id === view.hoverPid && view.hoverWord) label += ' · ' + view.hoverWord;
-      chip(ctx, cx, feetY + 5 * scale, label, { font: chipFont, pad: chipPad, h: chipH, r: chipR });
+      chip(ctx, cx, feetY + 5 * figs, label, { font: chipFont, pad: chipPad, h: chipH, r: chipR });
     }
 
     ctx.restore(); // end dim alpha
@@ -3418,5 +3487,12 @@ function drawCascade(ctx, sim, t, view) {
 }
 
 
-  window.PRS_STAGE = { initStage: initStage, resizeStage: resizeStage, scene: scene, hubSections: hubSections };
+  // Public surface. camTo/camReset (spec §3) are the S5 cinematic triggers'
+  // entry points — eased inside scene()'s camFrame, identity under reduced
+  // motion, never moved by the stage itself. camState lets the app hide/re-sync
+  // DOM hotspot overlays while the camera is away from identity. FIG_SCALE is
+  // exported so the app layer plumbs the SAME +30% factor into its fan spacing
+  // and pawn hit radius (app.js pawnAt: 26px → 26×FIG_SCALE ≈ 34px).
+  window.PRS_STAGE = { initStage: initStage, resizeStage: resizeStage, scene: scene, hubSections: hubSections,
+                       camTo: camTo, camReset: camReset, camState: camState, FIG_SCALE: FIG_SCALE };
 })();
