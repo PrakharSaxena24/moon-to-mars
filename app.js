@@ -118,7 +118,13 @@
     updateRunButtons();   // keep the pause/guests/drawer imperative labels (and aria-labels) in sync with the language
     paintSetup(); buildRules(); buildLegend();
     if (!$('intro').classList.contains('hidden')) { renderIntro(); bootVignette(vigLastAuto); }   // cast grid re-render + vignette re-boot (§W4 lifecycle) in the new language
-    if (!$('setup').classList.contains('hidden')) bootPlanStage();   // re-mount the plan stage (chip/aria in the new language); paintSetup above already repainted the tray
+    if (!$('setup').classList.contains('hidden')) {
+      bootPlanStage();   // re-mount the plan stage (chip/aria in the new language); paintSetup above already repainted the tray
+      // §18 parity: imperatively-written surfaces re-render in the new language too —
+      // the open drawer's title (its accessible name) and an open plan-stage pawn card
+      if (drawerSeg) { var ddl = $('dd-title'); if (ddl) ddl.textContent = T().ddTitle(dayLabel(drawerSeg)); var ddc = $('dd-close'); if (ddc) ddc.setAttribute('aria-label', T().ddClose); }
+      if (pawnCardPid && pawnCardOpen()) openPlanPawnCard(pawnCardPid);
+    }
     // mid-run: rebuild station labels but keep every walker where it stands (no teleport)
     if (!$('run').classList.contains('hidden') && sim && anim) { buildSitemap(true); renderSim(sim); if (pawnCardPid && pawnCardOpen()) openPawnCard(pawnCardPid); }
     if (appMode === 'live' && liveState && !$('run').classList.contains('hidden')) {
@@ -252,9 +258,12 @@
     }).join('');
     var resources = br.resources.map(function (r) {
       var pct = Math.max(0, Math.min(100, Math.round(r.planned / Math.max(1, r.target) * 100)));
+      // spec §2: the strongbox's one-tap "fill the reserve" lives on the cash row itself
+      var fill = (r.id === 'res_cash' && !fixed.fixReserve)
+        ? '<button type="button" class="btn sm primary mc-fill-reserve">' + t.rcClose(Math.max(0, receiptAltTotal('reserve') - P.scoreTrip(P.mergePlan(buildCfg())).total)) + '</button>' : '';
       return '<div class="mc-res' + (r.ok ? '' : ' bad') + '"><div class="mc-res-top"><b>' + nm(r.name) + '</b><span>' + nf(r.planned) + ' / ' + nf(r.target) + ' ' + nm(r.unit) + '</span></div>' +
         '<input class="mc-range" type="range" min="0" max="' + Math.max(r.target * 2, r.planned, 1) + '" step="' + (r.unit.en === 'yen' ? 10000 : 1) + '" value="' + r.planned + '" data-mc="resource" data-resource="' + r.id + '">' +
-        '<div class="mc-res-bar"><i style="width:' + pct + '%"></i></div></div>';
+        '<div class="mc-res-bar"><i style="width:' + pct + '%"></i></div>' + fill + '</div>';
     }).join('');
     var events = br.events.map(function (ev) {
       var line = br.envelopes.filter(function (ln) { return ln.id === ev.lineId; })[0];
@@ -2315,6 +2324,9 @@
         updatePlanUI();
       }
     });
+    $('mission-control').addEventListener('click', function (e) {
+      if (e.target.closest('.mc-fill-reserve')) applyReceiptFix('reserve', true);
+    });
     $('mission-control').addEventListener('input', function (e) {
       var el = e.target;
       if (el.dataset.mc === 'resource') {
@@ -3283,7 +3295,15 @@
       if (!tk) { tk = document.createElement('button'); tk.type = 'button'; tk.className = 'plan-token'; tk.setAttribute('data-det', o.det); tokens.appendChild(tk); }
       tk.innerHTML = '<span class="pt-ic">' + o.ic + '</span>';
       tk.setAttribute('aria-label', t.tokenAria(t[o.key], p ? nm(p.name) : ''));
-      var f2 = PSTG.fig[pid2]; if (f2) { tk.style.left = Math.round(f2.cx) + 'px'; tk.style.top = Math.round(f2.cy + 8 * PSTG.sc) + 'px'; }
+      var f2 = PSTG.fig[pid2];
+      if (f2) {
+        // co-located tokens (e.g. abort flag + illness route both on the Safety Lead) fan
+        // horizontally so every token stays visible and click-to-undo reachable
+        var stackN = 0, det2;
+        for (det2 in placed) { if (placed[det2] === pid2 && det2 !== o.det) stackN++; }
+        tk.style.left = Math.round(f2.cx + stackN * 20 * PSTG.sc) + 'px';
+        tk.style.top = Math.round(f2.cy + 8 * PSTG.sc) + 'px';
+      }
     });
     var tks = tokens.querySelectorAll('.plan-token');
     for (var j = 0; j < tks.length; j++) { if (!placed[tks[j].getAttribute('data-det')]) tks[j].parentNode.removeChild(tks[j]); }
