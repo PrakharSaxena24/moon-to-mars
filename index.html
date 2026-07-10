@@ -250,6 +250,20 @@
 
   <!-- ============ REPORT ============ -->
   <section id="report" class="hidden">
+    <!-- §HarborComplete S3: report-on-stage — the same harbor at dusk. Stall markers glow where the
+         day actually lost time (each is a click-through to the fixing surface); the grade lands as a
+         hanko stamp. #report-stage's canvas + local rAF are created by bootReportStage() and
+         DESTROYED by killReportStage() (enterScreen), never merely hidden. -->
+    <div class="report-stage-panel" id="report-stage-panel">
+      <div class="report-stage-wrap" id="report-stage-wrap">
+        <canvas id="report-stage" role="img"></canvas>
+        <div class="plan-chip rs-chip" id="rs-chip"></div>
+        <div class="rs-note hidden" id="rs-note"></div>
+        <div class="rs-markers" id="rs-markers"></div>
+        <div class="rs-stamp hidden" id="rs-stamp" role="img"></div>
+      </div>
+      <div id="rs-roster" class="sr-only"></div>
+    </div>
     <div class="card report">
       <div class="grade-wrap">
         <div class="muted" data-i18n="gradeLbl"></div>
@@ -330,6 +344,7 @@
 
 <script src="engine.js"></script>
 <script src="i18n.js"></script>
+<script src="sprites.js"></script>
 <script src="stage.js"></script>
 <script src="app.js"></script>
 </body>

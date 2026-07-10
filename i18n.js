@@ -84,6 +84,23 @@
       applyFixBtn: 'Apply fix & re-run',
       editBtn: 'Edit plan', againBtn: 'Run again',
 
+      // --- §HarborComplete S3: report-on-stage (dusk harbor + stall markers + hanko stamp) ---
+      rsChip: 'Dusk — where the day lost time',
+      rsWholeTrip: 'Whole-trip run — showing Day 3, the minute-modeled day (a per-day view is planned)',
+      rsClean: 'No stalls — nobody waited today',
+      rsMin: function (n) { return n + ' min'; },
+      rsMarkerAria: function (st, n, gap) { return st + ' — ' + n + ' person-minutes lost: ' + gap + '. Opens the fix.'; },
+      rsGapMissing: function (c) { return 'the “' + c + '” hand-off was never designed'; },
+      rsGapLate: function (c) { return 'the “' + c + '” hand-off arrived late'; },
+      rsGapFrame: function (l) { return 'design gap: ' + l; },
+      rsGapDep: 'held up by an upstream delay',
+      rsStampAria: function (g, tot) { return 'Grade seal: ' + g + ' — ' + tot + ' of 100'; },
+      rsPawnDay: 'Day’s account',
+      rsPawnIdle: function (n) { return 'idle ' + n + ' min'; },
+      rsPawnRework: function (n) { return 'rework ' + n + ' min'; },
+      rsPawnWaited: 'Waited on',
+      rsPawnClean: 'No time lost',
+
       // --- 8 categories (spec §16) ---
       catObjective: 'Goal achievement', catSchedule: 'Schedule', catRoles: 'Roles & authority', catInfo: 'Info & comms',
       catBudget: 'Budget & resources', catSafety: 'Safety & risk', catQuality: 'Quality & satisfaction', catHealth: 'Team health',
@@ -437,6 +454,23 @@
       individualsTitle: '個別パフォーマンス値',
       applyFixBtn: '修正して再実行',
       editBtn: '計画を編集', againBtn: 'もう一度',
+
+      // --- §HarborComplete S3: report-on-stage（夕景の港＋停滞マーカー＋評価印） ---
+      rsChip: '夕景 — 時間が失われた場所',
+      rsWholeTrip: '全行程の実行 — 表示は3日目（分刻みでモデル化した代表日）。日別表示は今後対応予定です。',
+      rsClean: '停滞なし — 本日は誰も待ちませんでした',
+      rsMin: function (n) { return n + '分'; },
+      rsMarkerAria: function (st, n, gap) { return st + ' — 損失 ' + n + ' 人・分：' + gap + '。修正箇所を開きます。'; },
+      rsGapMissing: function (c) { return '「' + c + '」の受け渡しが未設計でした'; },
+      rsGapLate: function (c) { return '「' + c + '」の到着が遅れました'; },
+      rsGapFrame: function (l) { return '設計ギャップ：' + l; },
+      rsGapDep: '前工程の遅れによる待ち',
+      rsStampAria: function (g, tot) { return '評価印：' + g + '（100点中 ' + tot + ' 点）'; },
+      rsPawnDay: '当日の記録',
+      rsPawnIdle: function (n) { return '手待ち ' + n + '分'; },
+      rsPawnRework: function (n) { return '手戻り ' + n + '分'; },
+      rsPawnWaited: '待っていた情報',
+      rsPawnClean: '時間損失なし',
 
       // --- 8 categories ---
       catObjective: '目的達成度', catSchedule: 'スケジュール', catRoles: '役割・権限', catInfo: '情報・報連相',

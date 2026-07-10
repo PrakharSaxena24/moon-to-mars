@@ -131,7 +131,10 @@
       renderLivePanel();
       if (livePausedForFix && liveState.currentGap) paintGapFocus(liveState.currentGap);   // keep the freeze visuals
     }
-    if (!$('report').classList.contains('hidden') && lastResult) renderReport(lastResult);
+    if (!$('report').classList.contains('hidden') && lastResult) {
+      renderReport(lastResult);   // re-boots the report stage (chip/markers/stamp aria) in the new language
+      if (pawnCardPid && pawnCardOpen() && RSTG.sim) openReportPawnCard(pawnCardPid);
+    }
     // open modals re-render in the new language (their content is built, not data-i18n)
     if ($('inspect-modal').classList.contains('show')) openInspector();
     if ($('arrow-modal').classList.contains('show') && arrowEdit) openArrowPanel(arrowEdit);
@@ -148,6 +151,8 @@
     var screens = ['intro', 'setup', 'run', 'report'], i;
     killVignette();                                                  // the intro vignette dies on every transition (idempotent)
     killPlanStage();                                                 // ...as does the plan-stage rAF (idempotent)
+    killReportStage();                                               // ...and the report-stage rAF (§S3; renderReport re-boots it)
+    if (name !== 'report') rsStampKey = null;                        // leaving the report re-arms the hanko thock for the NEXT report
     if (typeof closeDayDrawer === 'function') closeDayDrawer();      // the drawer worker asked for a clean reset when leaving setup
     for (i = 0; i < screens.length; i++) $(screens[i]).classList.toggle('hidden', screens[i] !== name);
     if (name !== 'run') $('live-dock').classList.add('hidden');      // the live dock only ever shows INSIDE run (callers show it)
@@ -2078,6 +2083,7 @@
     $('individuals').innerHTML = th + rows;
     renderRail('report', trip);
     renderLedger(trip, res.segment);
+    bootReportStage(res, trip);   // §S3 report-on-stage: the harbor at dusk above the cards
   }
 
   // §20 Phase 5: coarse-day (arrival/ops/return) report — scored straight off the authored
@@ -2129,6 +2135,7 @@
     $('individuals').innerHTML = '';
     renderRail('report', trip);
     renderLedger(trip, seg);
+    bootReportStage(res, trip);   // §S3 report-on-stage (coarse animated day): same dusk harbor
   }
 
   // "Auto-arrange the arrows ▶" — the coarse-day analogue of the fishday fix-pack: heal this
@@ -2155,6 +2162,356 @@
       daySel = 'fishday';
       launchLive();
     } else launch();
+  }
+
+  // =========================================================================
+  // §HarborComplete S3 — REPORT-ON-STAGE: after a run the report opens with the
+  // SAME harbor at dusk. Stall markers (DOM hotspots) glow at the stations where
+  // idle/rework actually accrued — each click-through routes to the surface that
+  // fixes it (frame gap → its receipt row; day gap → the day drawer, pre-scrolled
+  // to the hollow socket). The grade lands as a hanko stamp. Pawns stand at their
+  // end-of-day stations, inspectable via the shared #pawn-card (memberInfo at the
+  // final minute). Pure presentation: reads the finished sim / daySchedule
+  // read-offs, never writes to sim state. Lifecycle mirrors the plan stage:
+  // bootReportStage() creates the canvas ctx + local rAF, killReportStage()
+  // (enterScreen, idempotent) destroys them — never merely hidden.
+  // view.dusk / view.stallMarkers / view.stamp are the S2 render contracts; the
+  // canvas dusk grade no-ops until stage.js's layers land (DOM overlays carry
+  // the feature on their own until then).
+  // =========================================================================
+  var RSTG = { raf: null, sim: null, ctx: null, cv: null, host: null, w: 0, h: 0, sc: 1,
+    fig: {}, boat: null, hoverPid: null, last: 0, markers: [], seg: 'fishday', stamp: null };
+  var rsStampKey = null;   // grade|total|segment of the last stamped report — a language re-render never re-thocks
+
+  function rsDims() {
+    var host = $('report-stage-wrap');
+    var w = (host && host.clientWidth) || 900;
+    var h = (host && host.clientHeight) || 340;
+    return { w: w, h: h };
+  }
+  // the visible anchor for a task's station: the hidden stations (command/finance/clinic)
+  // are folded into the Hinata hub on the map, so their stalls glow there too
+  function rsAnchorStation(stId) {
+    var st = P.station(stId);
+    return (st && st.hidden) ? 'mess' : (st ? st.id : 'mess');
+  }
+  function rsShortCard(cid) {
+    var c = RSTG.sim ? byId(RSTG.sim.plan.infoCards, cid) : null;
+    return nm(c ? c.name : cid).split('：')[0].split(':')[0];
+  }
+  // ---- stall aggregation: daySchedule byTask idle/rework → task.station (sev by person-minutes);
+  // classic frame gaps (t.problem → hard stall) count their whole blocked block ----
+  function rsStalls() {
+    var s = RSTG.sim, agg = {}, order = [], i, j;
+    if (!s) return [];
+    var sch = s.sched || null;
+    // primary pick = the marker's click-through target: a NAMEABLE gap (an info card socket or
+    // a frame decision) always outranks a bare dep-chain wait — the drawer-with-socket / receipt
+    // row is the fixing surface, "upstream delay" is only a fallback. Minutes break ties in rank.
+    function itemRank(it) { return (it.kind === 'frame' || it.cardId) ? 1 : 0; }
+    function add(stId, min, item) {
+      var a = agg[stId];
+      if (!a) { a = agg[stId] = { stationId: stId, min: 0, primary: null, _pMin: -1, _pRank: -1 }; order.push(a); }
+      a.min += min;
+      if (item) {
+        var rk = itemRank(item);
+        if (rk > a._pRank || (rk === a._pRank && min > a._pMin)) { a._pRank = rk; a._pMin = min; a.primary = item; }
+      }
+    }
+    for (i = 0; i < s.tasks.length; i++) {
+      var t = s.tasks[i];
+      if (t.scope !== 'in') continue;
+      var n = Math.max(1, (t.assignedIds || []).length);
+      var anchor = rsAnchorStation(t.station);
+      if (t.problem) {   // classic design gap: the task never completes — bill its whole block
+        var bm = Math.round((t.durMin || 60) * n);
+        add(anchor, bm, { kind: 'frame', det: t.problem.id, taskId: t.id });
+        continue;
+      }
+      var e = sch && sch.byTask[t.id]; if (!e) continue;
+      var lost = Math.round((e.idleMin + e.extension) * n);
+      if (lost <= 0 && !e.wrongFish) continue;
+      var item = null, w;
+      for (j = 0; j < (e.waits || []).length; j++) {
+        w = e.waits[j];
+        if (w.cardId) { item = { kind: 'day', taskId: t.id, cardId: w.cardId, late: !w.missing }; break; }
+      }
+      if (!item && e.wrongFish && sch) {   // a wrong-assumption task: the fix is the arrow that should have fed it
+        for (j = 0; j < sch.missing.length; j++) if (sch.missing[j].taskId === t.id) { item = { kind: 'day', taskId: t.id, cardId: sch.missing[j].cardId, late: false }; break; }
+        if (!item) for (j = 0; j < sch.late.length; j++) if (sch.late[j].taskId === t.id) { item = { kind: 'day', taskId: t.id, cardId: sch.late[j].cardId, late: true }; break; }
+      }
+      if (!item) item = { kind: 'day', taskId: t.id, cardId: null };   // dep-chain wait: route to the day drawer itself
+      if (lost <= 0) lost = 15;   // a wrong-fish source with no local minutes still deserves a visible marker
+      add(anchor, lost, item);
+    }
+    var out = [];
+    for (i = 0; i < order.length; i++) {
+      var a = order[i];
+      a.sev = a.min >= 120 ? 'high' : (a.min >= 45 ? 'mid' : 'low');
+      out.push(a);
+    }
+    return out;
+  }
+  function rsGapText(it) {
+    var t = T();
+    if (!it) return '';
+    if (it.kind === 'frame') return t.rsGapFrame(t['e_' + it.det + '_label'] || it.det);
+    if (it.cardId) return it.late ? t.rsGapLate(rsShortCard(it.cardId)) : t.rsGapMissing(rsShortCard(it.cardId));
+    return t.rsGapDep;
+  }
+  // ---- pawn end-of-day placement: fan-stack per station (figTargets' rule on RSTG dims) ----
+  function rsTargets(s) {
+    var pos = {}, bucket = {};
+    s.stations.forEach(function (st) { bucket[st.id] = []; });
+    s.participants.forEach(function (p) { if (bucket[p.station]) bucket[p.station].push(p); });
+    var colGap = 23 * RSTG.sc, rowGap = 24 * RSTG.sc, feet = 36 * RSTG.sc;
+    s.stations.forEach(function (st) {
+      var sd = P.station(st.id), n = bucket[st.id].length;
+      bucket[st.id].forEach(function (p, i2) {
+        var col = i2 % 4, row = Math.floor(i2 / 4), rowN = Math.min(4, n - row * 4);
+        pos[p.id] = { x: sd.x * RSTG.w + (col - (rowN - 1) / 2) * colGap, y: sd.y * RSTG.h + feet + row * rowGap };
+      });
+    });
+    return pos;
+  }
+  function rsSyncFigs() {
+    if (!RSTG.sim) return;
+    var pos = rsTargets(RSTG.sim);
+    RSTG.sim.participants.forEach(function (p) {
+      var t2 = pos[p.id]; if (!t2) return;
+      RSTG.fig[p.id] = { pid: p.id, cx: t2.x, cy: t2.y, tx: t2.x, ty: t2.y, walking: false, faceL: false, spdMul: figSpeedMul(p.id) };
+    });
+  }
+  // the per-frame view bundle (mirrors psView) + the S2 render contracts
+  function rsView(rm) {
+    var s = RSTG.sim, hw = '';
+    if (RSTG.hoverPid) { var hp = byId(s.participants, RSTG.hoverPid); if (hp) hw = T()[STATE_KEY[hp.state]] || hp.state; }
+    return { w: RSTG.w, h: RSTG.h, scale: RSTG.sc, lang: L, rm: !!rm,
+      night: s.mode === 'minute' && (s.clockMin < 330 || s.clockMin >= 1110),
+      speedMult: 1, guestsVisible: false, hoverPid: RSTG.hoverPid, hoverWord: hw,
+      spotlightPid: null, tintMap: null, gapState: null,
+      fig: RSTG.fig, guest: {}, boat: RSTG.boat, wakes: [],
+      motes: [], cascade: { hops: [], has: false },
+      ghost: [{}, {}, {}], trail: [], chain: [], hotPts: [], frozen: false,
+      // S2 contracts (spec §4): harmless extras until stage.js's dusk/marker/stamp layers merge
+      dusk: 1,
+      stallMarkers: RSTG.markers.map(function (m) { return { stationId: m.stationId, sev: m.sev }; }),
+      stamp: RSTG.stamp };
+  }
+  function bootReportStage(res, trip) {
+    killReportStage();
+    if (!window.PRS_STAGE || $('report').classList.contains('hidden')) return;
+    var cv = $('report-stage'), host = $('report-stage-wrap'); if (!cv || !host) return;
+    var t = T(), d = rsDims();
+    RSTG.host = host; RSTG.cv = cv; RSTG.w = d.w; RSTG.h = d.h;
+    RSTG.sc = clamp(Math.min(d.w / 1000, d.h / 520), 0.6, 1.25);
+    RSTG.boat = { cx: DOCK.x * d.w, cy: DOCK.y * d.h };
+    // which day stands on the stage: the run's own minute-modeled day. A whole-trip ('all')
+    // run has no minute sim — show the fishday (THE minute-modeled day) rebuilt headlessly
+    // from the current plan and ticked to its end; a per-day picker is deferred (spec §4).
+    var wholeTrip = false;
+    if (sim && sim.mode === 'minute' && sim.sched) { RSTG.sim = sim; RSTG.seg = sim.segment; }
+    else {
+      wholeTrip = true; RSTG.seg = 'fishday';
+      var s = P.createSim({ seed: 1, overrides: buildCfg().overrides }, 'fishday'), g = 0;
+      while (!s.finished && g++ < 600) { if (s.paused) { s.paused = false; s.checkpoint = null; } P.tick(s); }
+      RSTG.sim = s;
+    }
+    cv.setAttribute('aria-label', t.rsChip);
+    RSTG.ctx = PRS_STAGE.initStage(cv, { w: d.w, h: d.h });
+    RSTG.fig = {}; rsSyncFigs();
+    RSTG.markers = rsStalls();
+    $('rs-chip').textContent = t.rsChip;
+    var note = $('rs-note');
+    if (note) {
+      if (wholeTrip) { note.textContent = t.rsWholeTrip; note.classList.remove('hidden'); note.classList.remove('good'); }
+      else if (!RSTG.markers.length) { note.textContent = t.rsClean; note.classList.remove('hidden'); note.classList.add('good'); }
+      else { note.classList.add('hidden'); note.classList.remove('good'); }
+    }
+    rsBuildMarkers();
+    rsBuildRoster();
+    // hanko stamp: lands once per fresh report (thock); a re-render (language switch) keeps it seated
+    var stampEl = $('rs-stamp');
+    var key = trip.grade + '|' + trip.total + '|' + (res.segment || '') + (res.coarse ? '|c' : '');
+    var fresh = key !== rsStampKey;
+    rsStampKey = key;
+    if (stampEl) {
+      stampEl.textContent = trip.grade;
+      stampEl.setAttribute('aria-label', t.rsStampAria(trip.grade, trip.total));
+      stampEl.classList.remove('hidden');
+      stampEl.classList.remove('thock');
+      if (fresh && !RM.matches) { void stampEl.offsetWidth; stampEl.classList.add('thock'); }
+    }
+    RSTG.stamp = { grade: trip.grade, at: fresh ? (window.performance ? performance.now() : 0) / 1000 : 0 };
+    if (RM.matches) { PRS_STAGE.scene(RSTG.ctx, RSTG.sim, 1, rsView(true)); rsPositionOverlays(); return; }
+    RSTG.last = 0; RSTG.raf = requestAnimationFrame(rsFrame);
+  }
+  function killReportStage() {
+    if (RSTG.raf) cancelAnimationFrame(RSTG.raf);
+    RSTG.raf = null; RSTG.sim = null; RSTG.ctx = null; RSTG.cv = null; RSTG.host = null;
+    RSTG.fig = {}; RSTG.boat = null; RSTG.hoverPid = null; RSTG.last = 0;
+    RSTG.markers = []; RSTG.stamp = null;
+    var mk = $('rs-markers'); if (mk) mk.innerHTML = '';
+    var ro = $('rs-roster'); if (ro) ro.innerHTML = '';
+    var w = $('report-stage-wrap'); if (w) w.classList.remove('pawn-hover');
+  }
+  function rsFrame(ts) {
+    if (!RSTG.raf) return;
+    RSTG.raf = requestAnimationFrame(rsFrame);
+    if ($('report').classList.contains('hidden') || !RSTG.sim) { killReportStage(); return; }
+    var host = $('report-stage-wrap');
+    if (host && host.clientWidth && Math.abs(host.clientWidth - RSTG.w) > 4) rsResize();
+    PRS_STAGE.scene(RSTG.ctx, RSTG.sim, ts / 1000, rsView(false));
+  }
+  function rsResize() {
+    var d = rsDims(); if (!RSTG.cv) return;
+    RSTG.w = d.w; RSTG.h = d.h;
+    RSTG.sc = clamp(Math.min(d.w / 1000, d.h / 520), 0.6, 1.25);
+    RSTG.boat = { cx: DOCK.x * d.w, cy: DOCK.y * d.h };
+    PRS_STAGE.initStage(RSTG.cv, { w: d.w, h: d.h });
+    rsSyncFigs();
+    rsPositionOverlays();
+    if (RM.matches && RSTG.ctx && RSTG.sim) PRS_STAGE.scene(RSTG.ctx, RSTG.sim, 1, rsView(true));
+  }
+  function rsBuildMarkers() {
+    var box = $('rs-markers'), t = T(); if (!box) return;
+    var html = '';
+    for (var i = 0; i < RSTG.markers.length; i++) {
+      var mk = RSTG.markers[i], st = P.station(mk.stationId);
+      var aria = t.rsMarkerAria(nm(st.name), mk.min, rsGapText(mk.primary)).replace(/"/g, '&quot;');
+      html += '<button type="button" class="rs-marker sev-' + mk.sev + '" data-idx="' + i + '" data-station="' + mk.stationId + '"' +
+        ' aria-label="' + aria + '" title="' + aria + '">' +
+        '<span class="rs-mk-min">' + t.rsMin(mk.min) + '</span></button>';
+    }
+    box.innerHTML = html;
+    rsPositionOverlays();
+  }
+  function rsPositionOverlays() {
+    var box = $('rs-markers'); if (!box) return;
+    var els = box.querySelectorAll('.rs-marker');
+    for (var i = 0; i < els.length; i++) {
+      var mk = RSTG.markers[parseInt(els[i].getAttribute('data-idx'), 10)]; if (!mk) continue;
+      var st = P.station(mk.stationId);
+      els[i].style.left = Math.round(st.x * RSTG.w) + 'px';
+      els[i].style.top = Math.round(st.y * RSTG.h) + 'px';
+    }
+    if (pawnCardOpen() && pawnCardPid && RSTG.fig[pawnCardPid] && !$('report').classList.contains('hidden')) positionReportPawnCard(pawnCardPid);
+  }
+  // the offscreen a11y roster (keyboard path to end-of-day pawn inspection)
+  function rsBuildRoster() {
+    var el = $('rs-roster'); if (!el || !RSTG.sim) return;
+    var t = T();
+    el.innerHTML = '<h2>' + t.rosterHeading + '</h2><ul>' + RSTG.sim.participants.map(function (p) {
+      return '<li><button type="button" class="sr-pawn" data-pid="' + p.id + '">' +
+        P.role(p.roleId).icon + ' ' + nm(p.name) + ' — ' + (t[STATE_KEY[p.state]] || p.state) + '</button></li>';
+    }).join('') + '</ul>';
+  }
+  // ---- marker click-through: reuse the rail jump machinery (frame → receipt row; day → drawer socket) ----
+  function reportMarkerJump(idx) {
+    var mk = RSTG.markers[idx]; if (!mk || !mk.primary) return;
+    var it = mk.primary, seg = RSTG.seg;
+    closePawnCard();
+    if (appMode === 'live') enterMode('morning'); else toSetup();   // the report's own btn-tweak routing
+    if (it.kind === 'frame') {
+      // frame gap → its receipt row (the rail's 'frame' jump-link pattern): the row may be
+      // filtered off the current day tab — fall back to the 'all' tab where every row exists
+      if (!$('ed-' + it.det)) { daySel = 'all'; placingChip = null; removeGhost(); removeDropSlot(); paintSetup(); }
+      expandAllSettings();
+      var card = $('ed-' + it.det);
+      if (card) {
+        if (card.scrollIntoView) card.scrollIntoView({ behavior: RM.matches ? 'auto' : 'smooth', block: 'center' });
+        var fb = card.querySelector('.rc-close, .rc-route, .rc-undo');
+        if (fb) { try { fb.focus({ preventScroll: true }); } catch (e2) { fb.focus(); } }
+      }
+    } else {
+      // day gap → the day's drawer, pre-scrolled to the hollow (or late) socket
+      openDayDrawer(seg, null);
+      var go = function () {
+        if (!it.cardId) return;   // dep-chain wait: the drawer itself is the fixing surface
+        var sock = document.querySelector('#fd-canvas .fd-socket[data-task="' + it.taskId + '"][data-card="' + it.cardId + '"]');
+        if (!sock) return;
+        if (sock.scrollIntoView) sock.scrollIntoView({ behavior: RM.matches ? 'auto' : 'smooth', block: 'center', inline: 'center' });
+        try { sock.focus({ preventScroll: true }); } catch (e3) { sock.focus(); }
+      };
+      if (RM.matches) go(); else setTimeout(go, 90);   // let the drawer's slide land before scrolling inside it
+    }
+  }
+  // ---- pawn hit-test + end-of-day inspection (shared #pawn-card) ----
+  function rsPawnAt(cx, cy) {
+    var wrap = $('report-stage-wrap'); if (!wrap || !RSTG.sim) return null;
+    var r = wrap.getBoundingClientRect(), x = cx - r.left, y = cy - r.top;
+    var R = 30 * RSTG.sc, best = null, bestD = R * R;
+    RSTG.sim.participants.forEach(function (p) {
+      var f = RSTG.fig[p.id]; if (!f) return;
+      var dx = f.cx - x, dy = (f.cy - 14 * RSTG.sc) - y, d = dx * dx + dy * dy;
+      if (d <= bestD) { bestD = d; best = p.id; }
+    });
+    return best;
+  }
+  // the day's account for one duty-holder: idle/rework person-minutes + the cards they waited on
+  function rsPidSummary(pid) {
+    var s = RSTG.sim, idle = 0, rework = 0, cards = {}, i, j;
+    if (!s || !s.sched) return null;
+    for (i = 0; i < s.tasks.length; i++) {
+      var t = s.tasks[i];
+      if (t.scope !== 'in' || t.assignedIds.indexOf(pid) < 0) continue;
+      var e = s.sched.byTask[t.id]; if (!e) continue;
+      idle += e.idleMin; rework += e.extension;
+      for (j = 0; j < (e.waits || []).length; j++) if (e.waits[j].cardId) cards[e.waits[j].cardId] = 1;
+    }
+    return { idle: Math.round(idle), rework: Math.round(rework), cards: Object.keys(cards) };
+  }
+  function rsPawnCardHTML(p) {
+    var t = T(), rr = P.role(p.roleId), jp = (p.name && p.name.jp) ? p.name.jp : '';
+    var head = '<button class="pc-x" id="pc-close" aria-label="' + t.closeBtn + '">×</button>' +
+      '<div class="pc-head"><span class="pc-ic" style="background:' + rr.color + '">' + rr.icon + '</span>' +
+      '<div class="pc-id"><b id="pc-name">' + nm(p.name) + '</b>' +
+      (jp && jp !== nm(p.name) ? '<span class="pc-jp">' + jp + '</span>' : '') +
+      '<span class="pc-role">' + rr.icon + ' ' + nm(rr.name) + '</span></div></div>';
+    var stateRow = '<div class="pc-state pc-s-' + p.state + '"><span class="pc-bub">' + (BUB[p.state] || '') + '</span>' +
+      '<span class="pc-sw">' + t.pcState + ': ' + (t[STATE_KEY[p.state]] || p.state) + '</span></div>';
+    var sum = rsPidSummary(p.id), chips = '';
+    if (sum) {
+      if (sum.idle > 0) chips += '<span class="ins-card wait">⏳ ' + t.rsPawnIdle(sum.idle) + '</span>';
+      if (sum.rework > 0) chips += '<span class="ins-card wait">🔁 ' + t.rsPawnRework(sum.rework) + '</span>';
+    }
+    var day = '<div class="pc-sec"><span class="pc-h">' + t.rsPawnDay + '</span><div class="ins-cards">' +
+      (chips || '<span class="ins-none">' + t.rsPawnClean + '</span>') + '</div></div>';
+    var waited = (sum && sum.cards.length) ? '<div class="pc-sec"><span class="pc-h">' + t.rsPawnWaited + '</span><div class="ins-cards">' +
+      sum.cards.map(function (cid) { return '<span class="ins-card wait">' + rsShortCard(cid) + '</span>'; }).join('') + '</div></div>' : '';
+    var mi = P.memberInfo(RSTG.sim, p.id);   // at the final minute: what they ended the day holding
+    var held = mi ? mi.held.map(function (hc) {
+      return '<span class="ins-card ok">' + rsShortCard(hc.cardId) + ' <i>' + (hc.own ? '◉' : hhmm(hc.atMin)) + '</i></span>';
+    }).join('') : '';
+    var holds = held ? '<div class="pc-sec"><span class="pc-h">' + t.pcHeld + '</span><div class="ins-cards">' + held + '</div></div>' : '';
+    return head + stateRow + day + waited + holds;
+  }
+  function positionReportPawnCard(pid) {
+    var card = $('pawn-card'), f = RSTG.fig[pid], wrap = $('report-stage-wrap'); if (!f || !wrap) return;
+    var r = wrap.getBoundingClientRect();
+    var sx = r.left + f.cx * (r.width / (RSTG.w || r.width));
+    var sy = r.top + f.cy * (r.height / (RSTG.h || r.height));
+    card.style.left = '0px'; card.style.top = '0px';
+    var cw = card.offsetWidth, ch = card.offsetHeight, M = 8;
+    var left = sx - cw / 2, top = sy - 44 * RSTG.sc - ch - 10;
+    if (top < M) top = sy + 14 * RSTG.sc;
+    if (left < M) left = M;
+    if (left + cw > window.innerWidth - M) left = window.innerWidth - M - cw;
+    if (top + ch > window.innerHeight - M) top = window.innerHeight - M - ch;
+    card.style.left = Math.round(left) + 'px'; card.style.top = Math.round(top) + 'px';
+  }
+  function openReportPawnCard(pid) {
+    if (!RSTG.sim) return;
+    var p = byId(RSTG.sim.participants, pid); if (!p) return;
+    var card = $('pawn-card'); if (!card) return;
+    var fresh = card.classList.contains('hidden');
+    if (fresh) { var a = document.activeElement; pawnCardInvoker = (a && a !== document.body) ? a : null; }
+    pawnCardPid = pid;
+    card.innerHTML = rsPawnCardHTML(p);
+    card.setAttribute('aria-label', nm(p.name) + ' · ' + nm(P.role(p.roleId).name));
+    card.classList.remove('hidden');
+    positionReportPawnCard(pid);
+    if (fresh) { try { card.focus(); } catch (e) { } }
   }
 
   // =========================================================================
@@ -2484,6 +2841,36 @@
     $('stage-roster').addEventListener('click', function (e) {
       var b = e.target.closest('.sr-pawn'); if (b) openPawnCard(b.getAttribute('data-pid'));
     });
+    // §S3 report-on-stage: hover feeds the canvas name chip; click inspects a pawn's day;
+    // markers keep first claim (they sit above the canvas) and route to their fixing surface
+    (function () {
+      var wrap = $('report-stage-wrap'); if (!wrap) return;
+      wrap.addEventListener('pointermove', function (e) {
+        if (!RSTG.sim || $('report').classList.contains('hidden')) return;
+        var pid = rsPawnAt(e.clientX, e.clientY);
+        if (pid !== RSTG.hoverPid) {
+          RSTG.hoverPid = pid; wrap.classList.toggle('pawn-hover', !!pid);
+          if (RM.matches && RSTG.ctx) PRS_STAGE.scene(RSTG.ctx, RSTG.sim, 1, rsView(true));   // no loop under RM — repaint the chip
+        }
+      });
+      wrap.addEventListener('pointerleave', function () {
+        if (!RSTG.hoverPid) return;
+        RSTG.hoverPid = null; wrap.classList.remove('pawn-hover');
+        if (RM.matches && RSTG.ctx && RSTG.sim) PRS_STAGE.scene(RSTG.ctx, RSTG.sim, 1, rsView(true));
+      });
+      wrap.addEventListener('click', function (e) {
+        if (!RSTG.sim) return;
+        if (e.target.closest('.rs-marker')) return;                       // markers keep first claim
+        var pid = rsPawnAt(e.clientX, e.clientY);
+        if (pid) openReportPawnCard(pid); else closePawnCard();           // background click closes
+      });
+      $('rs-markers').addEventListener('click', function (e) {
+        var b = e.target.closest('.rs-marker'); if (b) reportMarkerJump(parseInt(b.getAttribute('data-idx'), 10));
+      });
+      $('rs-roster').addEventListener('click', function (e) {
+        var b = e.target.closest('.sr-pawn'); if (b) openReportPawnCard(b.getAttribute('data-pid'));
+      });
+    })();
     // popover: its own close button; Escape; and click-away (clicks inside #sitemap/#stage-roster
     // are owned by their handlers above, which switch or close the popover themselves)
     $('pawn-card').addEventListener('click', function (e) { if (e.target.closest('#pc-close')) closePawnCard(); });
@@ -2492,10 +2879,10 @@
     document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && pawnCardOpen() && !topModal()) closePawnCard(); });
     document.addEventListener('pointerdown', function (e) {
       if (!pawnCardOpen()) return;
-      if (e.target.closest('#pawn-card') || e.target.closest('#sitemap') || e.target.closest('#stage-roster') || e.target.closest('#plan-stage-panel')) return;
+      if (e.target.closest('#pawn-card') || e.target.closest('#sitemap') || e.target.closest('#stage-roster') || e.target.closest('#plan-stage-panel') || e.target.closest('#report-stage-panel')) return;
       closePawnCard();
     });
-    window.addEventListener('resize', function () { if (pawnCardOpen()) { if (!$('setup').classList.contains('hidden') && PSTG.fig[pawnCardPid]) positionPlanPawnCard(pawnCardPid); else positionPawnCard(pawnCardPid); } });
+    window.addEventListener('resize', function () { if (pawnCardOpen()) { if (!$('setup').classList.contains('hidden') && PSTG.fig[pawnCardPid]) positionPlanPawnCard(pawnCardPid); else if (!$('report').classList.contains('hidden') && RSTG.fig[pawnCardPid]) positionReportPawnCard(pawnCardPid); else positionPawnCard(pawnCardPid); } });
     $('dash-warnings').addEventListener('click', function (e) { var w = e.target.closest('.warn'); if (w && w.dataset.station) openProblemPanel(w.dataset.station); });
     $('detail-close').addEventListener('click', closeDetail);
     $('detail-modal').addEventListener('click', function (e) { if (e.target === $('detail-modal')) closeDetail(); });
@@ -2576,6 +2963,8 @@
         rszT = null; refitStage();
         // the non-RM plan stage re-fits itself each frame; under RM (no loop) re-fit here
         if (RM.matches && PSTG.ctx && !$('setup').classList.contains('hidden')) { psResize(); psPositionOverlays(); }
+        // same for the report stage (its rAF loop self-resizes; RM has no loop)
+        if (RM.matches && RSTG.ctx && !$('report').classList.contains('hidden')) rsResize();
       }, 130);
     });
   }

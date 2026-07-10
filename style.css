@@ -1101,3 +1101,63 @@ body.canvas-stage .sitemap::after{display:none;} /* vignette is drawn on the can
   .tray-toast{transition:none;}
   .as-caret{transition:none;}
 }
+
+/* ============================================================================
+ * REPORT-ON-STAGE (§HarborComplete S3) — the harbor at dusk above the report
+ * cards: stall markers glow where the day lost time (click-through fixes),
+ * the grade lands as a hanko stamp. Mirrors the plan-stage z discipline:
+ * canvas 1 · markers 6 · stamp 7 · chips/notes 5 · pawn popover 60 (shared).
+ * ==========================================================================*/
+.report-stage-panel{margin-bottom:14px;}
+.report-stage-wrap{position:relative;height:44vh;min-height:280px;max-height:540px;border-radius:var(--r-lg);
+  overflow:hidden;background:var(--indigo-deep);border:1px solid var(--line2);box-shadow:var(--shadow2);}
+#report-stage{position:absolute;inset:0;width:100%;height:100%;display:block;border-radius:var(--r-lg);z-index:1;}
+.report-stage-wrap.pawn-hover{cursor:pointer;}
+.rs-note{position:absolute;right:10px;top:10px;z-index:5;max-width:46%;font-size:11.5px;font-weight:600;line-height:1.35;
+  background:rgba(20,27,34,.72);border:1px solid var(--indigo-line);color:#d9cdb1;
+  padding:4px 10px;border-radius:var(--r-sm);box-shadow:0 3px 10px rgba(0,0,0,.4);}
+.rs-note.good{color:#b9cf9d;border-color:rgba(124,143,92,.5);}
+/* stall markers: a glowing pulse anchored at the station where idle/rework accrued */
+.rs-markers{position:absolute;inset:0;z-index:6;pointer-events:none;}
+.rs-marker{position:absolute;transform:translate(-50%,-50%);pointer-events:auto;cursor:pointer;
+  width:52px;height:52px;padding:0;border:none;background:transparent;border-radius:50%;}
+.rs-marker::before{content:"";position:absolute;inset:6px;border-radius:50%;
+  border:2px solid var(--wait);background:radial-gradient(circle,rgba(161,61,47,.42),rgba(161,61,47,.06) 68%,rgba(161,61,47,0) 72%);
+  box-shadow:0 0 14px 3px rgba(161,61,47,.55);animation:rsPulse 1.7s ease-in-out infinite;}
+.rs-marker.sev-mid::before{box-shadow:0 0 11px 2px rgba(193,122,31,.55);border-color:var(--idle);
+  background:radial-gradient(circle,rgba(193,122,31,.4),rgba(193,122,31,.05) 68%,rgba(193,122,31,0) 72%);}
+.rs-marker.sev-low{width:42px;height:42px;}
+.rs-marker.sev-low::before{box-shadow:0 0 8px 1px rgba(193,122,31,.45);border-color:var(--idle);
+  background:radial-gradient(circle,rgba(193,122,31,.3),rgba(193,122,31,.04) 68%,rgba(193,122,31,0) 72%);}
+.rs-marker .rs-mk-min{position:absolute;left:50%;top:100%;transform:translate(-50%,-4px);white-space:nowrap;
+  font-size:10.5px;font-weight:800;letter-spacing:.3px;color:#f2d8c9;background:rgba(20,27,34,.78);
+  border:1px solid rgba(161,61,47,.55);border-radius:var(--r-sm);padding:1px 6px;pointer-events:none;}
+.rs-marker.sev-mid .rs-mk-min,.rs-marker.sev-low .rs-mk-min{color:#ecd9b8;border-color:rgba(193,122,31,.5);}
+.rs-marker:hover::before,.rs-marker:focus-visible::before{animation-duration:.9s;}
+.rs-marker:focus-visible{outline:2px solid var(--accent-light);outline-offset:2px;}
+@keyframes rsPulse{0%,100%{transform:scale(.86);opacity:.75;}50%{transform:scale(1.1);opacity:1;}}
+/* the hanko grade seal — stamped once (thock + slight ink bleed), then it sits */
+.rs-stamp{position:absolute;right:16px;bottom:14px;z-index:7;width:72px;height:72px;
+  display:flex;align-items:center;justify-content:center;transform:rotate(-6deg);
+  font-family:var(--serif);font-weight:800;font-size:46px;line-height:1;color:#c8452f;
+  border:3px solid rgba(200,69,47,.92);border-radius:8px;
+  background:radial-gradient(circle at 46% 52%,rgba(200,69,47,.2),rgba(200,69,47,.08) 62%,rgba(200,69,47,.16));
+  box-shadow:0 0 0 1px rgba(200,69,47,.28),inset 0 0 14px rgba(200,69,47,.4);
+  text-shadow:0 0 1px rgba(200,69,47,.85),0 0 7px rgba(200,69,47,.4);pointer-events:none;}
+.rs-stamp.thock{animation:rsThock .55s cubic-bezier(.18,1.35,.4,1) both;}
+@keyframes rsThock{
+  0%{transform:rotate(-15deg) scale(2.05);opacity:0;}
+  55%{transform:rotate(-6deg) scale(.94);opacity:1;}
+  75%{transform:rotate(-6.6deg) scale(1.04);}
+  100%{transform:rotate(-6deg) scale(1);}
+}
+@media(max-width:760px){
+  .report-stage-wrap{height:34vh;min-height:220px;}
+  .rs-stamp{width:56px;height:56px;font-size:36px;right:10px;bottom:10px;}
+  .rs-note{max-width:60%;}
+}
+@media(prefers-reduced-motion:reduce){
+  .rs-marker::before{animation:none;}
+  .rs-marker:hover::before,.rs-marker:focus-visible::before{animation:none;}
+  .rs-stamp.thock{animation:none;}
+}

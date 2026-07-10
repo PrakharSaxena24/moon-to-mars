@@ -32,6 +32,101 @@
   // already final CSS px. Layers must NOT declare a local `var scale`.
   var scale = 1;
 
+  // ---- Harbor Complete (spec §2) — pawn scale + sprite + lighting + camera state ----
+
+  // PAWN SCALE +30% (spec §2): multiplies every PAWN-BODY size (torso/head/cap/
+  // legs/aura/gesture anchors/bubble offsets) but never the world around them.
+  // `figs` is the resolved per-frame figure scale (= scale × FIG_SCALE), set by
+  // drawFigures/drawGuests before their body blocks; gesture/leg helpers read it.
+  // Exported on PRS_STAGE so the app layer can plumb the SAME factor into its
+  // fan spacing + pawn hit radius (app.js FAN_COL/FAN_ROW/FEET_BASE + pawnAt 26px).
+  var FIG_SCALE = 1.3;
+  var figs = 1;
+
+  // sprite provider (spec §1 pinned API) — re-resolved every frame in scene().
+  // null => full procedural fallback (the game must render perfectly without
+  // sprites.js loaded at all). A throwing provider is disarmed for the session.
+  var SPR = null, _sprBroken = false;
+  function sprGet(roleId, pose, frame, facing) {
+    if (!SPR) return null;
+    try { return SPR.get(roleId, pose, frame, facing) || null; }
+    catch (e) { _sprBroken = true; SPR = null; return null; }
+  }
+
+  // per-frame LIGHTING MODEL (spec §2: the SKY table becomes a true light rig).
+  // Resolved once per frame by lightFrame(); every layer reads LIGHT instead of
+  // re-deriving nightAmount()/isNight() locally, so the whole scene always
+  // agrees on the hour — and view.dusk (the §4 report-on-stage grade) can bend
+  // ALL of it at once. Fields:
+  //   night      0..1 smooth night factor (lanterns, moon glints, water dark)
+  //   dayK       0..1 position of the day (04:00→20:00), dusk-bent by view.dusk
+  //   sunX/sunY  the sun/moon glow anchor as FRACTIONS of w/h
+  //   shadowDirX +1 = shadows stretch right (dawn), -1 = left (dusk)
+  //   shadowLen  0..1 how stretched a long cast shadow is (low sun = long)
+  //   shadowA    peak alpha for long cast shadows (0 at night unless dusk-graded)
+  var LIGHT = { night: 0, dayK: 0.5, sunX: 0.5, sunY: 0.9, shadowDirX: 1, shadowLen: 0, shadowA: 0 };
+  var _dusk = 0;   // view.dusk resolved 0..1 (report-on-stage evening grade)
+  function lightFrame(sim, view) {
+    var minute = sim && sim.mode === 'minute' && typeof sim.clockMin === 'number';
+    _dusk = (view.dusk === true) ? 1 : (typeof view.dusk === 'number' ? clamp(view.dusk, 0, 1) : 0);
+    var n = minute ? nightAmount(sim.clockMin) : (view.night ? 1 : 0);
+    if (_dusk > 0) n = Math.max(n, 0.82 * _dusk);          // dusk floor: lanterns bloom, water moonlights
+    LIGHT.night = n;
+    var dayK = minute ? clamp((sim.clockMin - SKY_MIN) / (SKY_MAX - SKY_MIN), 0, 1) : 0.5;
+    if (_dusk > 0) dayK = lerp(dayK, 0.94, _dusk);         // pull the sun low over the ocean for the dusk grade
+    LIGHT.dayK = dayK;
+    var cosA = Math.cos(dayK * Math.PI);                   // +1 dawn → 0 noon → -1 dusk
+    LIGHT.shadowDirX = cosA >= 0 ? 1 : -1;
+    LIGHT.shadowLen = cosA * cosA;                         // long only when the sun sits low
+    LIGHT.shadowA = 0.16 * LIGHT.shadowLen * Math.max(1 - n, 0.6 * _dusk);
+    LIGHT.sunX = lerp(0.06, 0.94, dayK);
+    LIGHT.sunY = lerp(0.92, 0.8, Math.sin(dayK * Math.PI));
+  }
+
+  // AUTO-CINEMATIC CAMERA (spec §3) — module state driven by the exported
+  // camTo/camReset ease helpers; scene() resolves it once per frame. The
+  // transform wraps the WORLD layers only (HUD stamp/dusk-grade sit outside);
+  // identity while nothing is easing; reduced motion = identity ALWAYS (any
+  // pending/holding move is snapped away). t0 stamps on the first frame after
+  // a request so easing rides the same rAF clock scene() is called with.
+  var CAM = { x: 0, y: 0, zoom: 1, fx: 0, fy: 0, fz: 1, tx: 0, ty: 0, tz: 1,
+              t0: -1, dur: 0, easing: false, pend: null };
+  function camTo(target, ms) {
+    if (!target) return;
+    CAM.pend = { x: (typeof target.x === 'number') ? target.x : CAM.x,
+                 y: (typeof target.y === 'number') ? target.y : CAM.y,
+                 z: (typeof target.zoom === 'number' && target.zoom > 0) ? target.zoom : 1,
+                 ms: (typeof ms === 'number' && ms > 0) ? ms : 0 };
+  }
+  function camReset(ms) { camTo({ x: CAM.x, y: CAM.y, zoom: 1 }, ms); if (!(ms > 0)) { CAM.pend = null; CAM.easing = false; CAM.zoom = 1; CAM.fz = 1; CAM.tz = 1; } }
+  function camState() {
+    return { x: CAM.x, y: CAM.y, zoom: CAM.zoom,
+             active: !!CAM.easing || !!CAM.pend || Math.abs(CAM.zoom - 1) > 0.001 };
+  }
+  // per-frame resolve → null (identity) or {x, y, zoom} in canvas CSS px
+  function camFrame(t, view) {
+    if (view.rm) {                                        // RM: no camera, ever — snap all state to identity
+      CAM.pend = null; CAM.easing = false; CAM.zoom = 1; CAM.fz = 1; CAM.tz = 1;
+      return null;                                        // (an explicit view.cam is ignored under RM too)
+    }
+    if (CAM.pend) {
+      CAM.fx = CAM.x; CAM.fy = CAM.y; CAM.fz = CAM.zoom;
+      CAM.tx = CAM.pend.x; CAM.ty = CAM.pend.y; CAM.tz = CAM.pend.z;
+      CAM.dur = CAM.pend.ms / 1000; CAM.t0 = t; CAM.easing = true; CAM.pend = null;
+    }
+    if (CAM.easing) {
+      var k = CAM.dur > 0 ? clamp((t - CAM.t0) / CAM.dur, 0, 1) : 1;
+      var e = smoothstep(k);
+      CAM.x = lerp(CAM.fx, CAM.tx, e); CAM.y = lerp(CAM.fy, CAM.ty, e); CAM.zoom = lerp(CAM.fz, CAM.tz, e);
+      if (k >= 1) CAM.easing = false;
+    }
+    var cam = (view.cam && typeof view.cam.zoom === 'number' && view.cam.zoom > 0)
+      ? view.cam                                           // explicit per-frame override wins (contract: view.cam)
+      : { x: CAM.x, y: CAM.y, zoom: CAM.zoom };
+    if (Math.abs(cam.zoom - 1) < 0.0005) return null;
+    return cam;
+  }
+
   // =========================================================================
   // PORTED CONSTANTS — single source of truth for the canvas scene.
   // (Values ported verbatim from app.js / style.css; do NOT re-derive.)
@@ -389,14 +484,16 @@
   }
 
   // PAPER GRAIN — a subtle washi-fibre texture over a region. Builds a 96×96
-  // deterministic fleck/fibre tile once (cached pattern; Park–Miller LCG, no
-  // Math.random) and tiles it over (0,0,w,h) at the given alpha. Keep alpha
-  // LOW (0.03–0.08 over the ground; up to 0.12 inside a lit pool). Costs one
-  // fillRect per call after the first. No-ops outside a browser.
-  var _grainPat = null;
+  // deterministic fleck/fibre tile once (Park–Miller LCG, no Math.random) and
+  // tiles it over (0,0,w,h) at the given alpha. Keep alpha LOW (0.03–0.08 over
+  // the ground; up to 0.12 inside a lit pool). The TILE is cached module-wide
+  // and the CanvasPattern is cached PER CONTEXT (ctx._prsGrain) so the same
+  // helper serves both the live ctx and the offscreen ground-cache ctx.
+  // No-ops outside a browser.
+  var _grainTile = null;
   function paperTexture(ctx, w, h, alpha) {
     if (!(w > 0) || !(h > 0) || !(alpha > 0)) return;
-    if (!_grainPat) {
+    if (!_grainTile) {
       if (typeof document === 'undefined') return;
       var pc = document.createElement('canvas');
       pc.width = 96; pc.height = 96;
@@ -419,13 +516,39 @@
         g.moveTo(x0, y0 + 0.5); g.lineTo(x0 + len, y0 + 0.5);
         g.stroke();
       }
-      _grainPat = ctx.createPattern(pc, 'repeat');
-      if (!_grainPat) return;
+      _grainTile = pc;
     }
+    var pat = ctx._prsGrain || (ctx._prsGrain = ctx.createPattern(_grainTile, 'repeat'));
+    if (!pat) return;
     ctx.save();
     ctx.globalAlpha *= alpha;
-    ctx.fillStyle = _grainPat;
+    ctx.fillStyle = pat;
     ctx.fillRect(0, 0, w, h);
+    ctx.restore();
+  }
+
+  // LONG CAST SHADOW (spec §2 lighting) — a soft directional shadow stretching
+  // away from the low sun, drawn UNDER a pawn/station in addition to its round
+  // contact shadow. (x, y) = ground point; wpx = the caster's footprint width
+  // in FINAL px. Direction/length/alpha all come off the per-frame LIGHT rig,
+  // so every shadow in the scene always agrees; no-ops at midday and at night
+  // (unless the dusk grade keeps a low evening light alive). Pure light — safe
+  // under reduced motion (it doesn't move within a frame).
+  function longShadow(ctx, x, y, wpx, alphaMul) {
+    var a = LIGHT.shadowA * (alphaMul == null ? 1 : alphaMul);
+    if (a <= 0.004 || !(wpx > 0)) return;
+    var len = wpx * (0.8 + 2.4 * LIGHT.shadowLen);           // low sun = long stretch
+    var half = len * 0.5 + wpx * 0.35;
+    var cx2 = x + LIGHT.shadowDirX * len * 0.5;
+    ctx.save();
+    ctx.translate(cx2, y);
+    ctx.scale(1, clamp((wpx * 0.20) / half, 0.05, 0.6));     // flatten onto the ground
+    var g = ctx.createRadialGradient(0, 0, 0, 0, 0, half);
+    g.addColorStop(0, rgba(PAL.shadow, a));
+    g.addColorStop(0.6, rgba(PAL.shadow, a * 0.5));
+    g.addColorStop(1, rgba(PAL.shadow, 0));
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(0, 0, half, 0, 6.2832); ctx.fill();
     ctx.restore();
   }
 
@@ -480,18 +603,44 @@
     scale = (typeof view.scale === 'number' && view.scale > 0)
       ? view.scale
       : clamp(Math.min(view.w / 1000, view.h / 560), 1, 1.7);
+    // sprite provider (spec §1): consumed ONLY when present AND ready; a broken
+    // provider is disarmed once and the full procedural pawn path takes over.
+    SPR = (!_sprBroken && typeof window !== 'undefined' && window.PRS_SPRITES &&
+           window.PRS_SPRITES.ready && typeof window.PRS_SPRITES.get === 'function')
+      ? window.PRS_SPRITES : null;
+    lightFrame(sim, view);             // resolve the per-frame light rig (night/sun/shadows/dusk)
+    var cam = camFrame(t, view);       // resolve the auto-cinematic camera (null = identity)
+
     ctx.clearRect(0, 0, view.w, view.h);
-    drawGround(ctx, sim, t, view);     // 1  island base + grain + vignette + banner ring
-    drawSea(ctx, sim, t, view);        // 2  layered bay water band + foam + shimmer
-    drawSeaLife(ctx, sim, t, view);    // 3  gulls + jumping fish (deterministic from t)
-    drawRoads(ctx, sim, t, view);      // 4  8 dashed ADJ segments, marching dashes
-    drawSky(ctx, sim, t, view);        // 5  day-phase tint UNDER actors (minute-mode only)
-    drawGuests(ctx, sim, t, view);     // 6  13 yukata pawns (gated by view.guestsVisible)
-    drawBoat(ctx, sim, t, view);       // 7  skiff on the bay arc + pooled wakes
-    drawStations(ctx, sim, t, view);   // 8  7 landmarks: halo tint, bevel disc, name, rings, lanterns
-    drawFigures(ctx, sim, t, view);    // 9  11 duty-holders: shadow, pawn, aura, bubbles, chips
-    drawMotes(ctx, sim, t, view);      // 10 handoff dots A→B + arrival pings
-    drawCascade(ctx, sim, t, view);    // 11 red comet + ghosts + strikes (RM: static chain)
+    // letterbox base under any pull-back (zoom < 1): the world shrinks but the
+    // paper never shows a raw hole — drawn OUTSIDE the camera transform.
+    ctx.fillStyle = rgba(PAL.indigoDeep, 1);
+    ctx.fillRect(0, 0, view.w, view.h);
+
+    ctx.save();                        // ---- WORLD (inside the one camera transform, spec §3) ----
+    if (cam) {
+      ctx.translate(cam.x, cam.y);
+      ctx.scale(cam.zoom, cam.zoom);
+      ctx.translate(-cam.x, -cam.y);
+    }
+    drawGround(ctx, sim, t, view);       // 1  island base (offscreen-cached) + grass + vignette + banner
+    drawSea(ctx, sim, t, view);          // 2  living water: bands, crests, reflections, spray
+    drawSeaLife(ctx, sim, t, view);      // 3  gulls + jumping fish (deterministic from t)
+    drawRoads(ctx, sim, t, view);        // 4  dashed ADJ segments, marching dashes
+    drawCloudShadows(ctx, sim, t, view); // 4b drifting cloud shade over land+sea (day only)
+    drawSky(ctx, sim, t, view);          // 5  day-phase light grade UNDER actors
+    drawGuests(ctx, sim, t, view);       // 6  13 yukata pawns (gated by view.guestsVisible)
+    drawBoat(ctx, sim, t, view);         // 7  skiff on the bay arc + pooled wakes
+    drawStations(ctx, sim, t, view);     // 8  landmarks: halo tint, bevel disc, name, rings, lanterns
+    drawStallMarkers(ctx, sim, t, view); // 8b report-on-stage: glow pulses where idle/rework accrued
+    drawParticles(ctx, sim, t, view);    // 8c seasoning: chimney smoke, cook-steam, dusk fireflies
+    drawFigures(ctx, sim, t, view);      // 9  11 duty-holders: shadow, pawn/sprite, aura, bubbles, chips
+    drawMotes(ctx, sim, t, view);        // 10 handoff dots A→B + arrival pings
+    drawCascade(ctx, sim, t, view);      // 11 red comet + ghosts + strikes (RM: static chain)
+    ctx.restore();                       // ---- end WORLD / camera ----
+
+    drawDusk(ctx, view);               // HUD 1: full-canvas evening unifier (view.dusk, outside cam)
+    drawStamp(ctx, t, view);           // HUD 2: hanko grade stamp in the stage corner (view.stamp)
   }
 
   
@@ -628,10 +777,12 @@ function drawGround_landPath(ctx, w, h) {
 // LAND grass-fleck / mottling texture — a second deterministic cached tile (Park-Miller LCG, no
 // Math.random — same technique as paperTexture above) in earthy moss/mossLight/washiWarm dabs
 // instead of paper fibres. Caller must already be clipped to the land region. Alpha kept low.
-var _landGrainPat = null;
+// Tile cached module-wide; the pattern per CONTEXT (ctx._prsLand) so the offscreen ground
+// cache can build it too.
+var _landGrainTile = null;
 function drawGround_landTexture(ctx, w, h) {
   if (typeof document === 'undefined') return;
-  if (!_landGrainPat) {
+  if (!_landGrainTile) {
     var pc = document.createElement('canvas');
     pc.width = 110; pc.height = 110;
     var g = pc.getContext('2d');
@@ -644,12 +795,13 @@ function drawGround_landTexture(ctx, w, h) {
       g.fillStyle = pick < 45 ? rgba(PAL.mossLight, 0.5) : (pick < 80 ? rgba(PAL.moss, 0.45) : rgba(PAL.washiWarm, 0.4));
       g.beginPath(); g.arc(x0, y0, r, 0, 6.2832); g.fill();
     }
-    _landGrainPat = ctx.createPattern(pc, 'repeat');
-    if (!_landGrainPat) return;
+    _landGrainTile = pc;
   }
+  var pat = ctx._prsLand || (ctx._prsLand = ctx.createPattern(_landGrainTile, 'repeat'));
+  if (!pat) return;
   ctx.save();
   ctx.globalAlpha *= 0.16;
-  ctx.fillStyle = _landGrainPat;
+  ctx.fillStyle = pat;
   ctx.fillRect(0, 0, w, h);
   ctx.restore();
 }
@@ -699,44 +851,134 @@ function drawGround_landStrand(ctx, w, h) {
   ctx.restore();
 }
 
+// ELEVATION BANDS + INLAND SHADOW (spec §2 layered terrain) — two broad, soft
+// moss-dark diagonal bands across the land (higher ground reading as toned
+// washi ink) + a cool inland shadow deepening the far-left interior, so the
+// island rises toward the west instead of lying flat. Static — cached.
+function drawGround_elevation(ctx, w, h) {
+  ctx.save();
+  drawGround_landPath(ctx, w, h);
+  ctx.clip();
+  // band 1: upland ridge upper-left
+  var g1 = ctx.createLinearGradient(0, 0, w * 0.42, h * 0.55);
+  g1.addColorStop(0, rgba(liftRGB(PAL.moss, -34), 0.34));
+  g1.addColorStop(0.55, rgba(liftRGB(PAL.moss, -20), 0.12));
+  g1.addColorStop(1, rgba(PAL.moss, 0));
+  ctx.fillStyle = g1;
+  ctx.fillRect(0, 0, w, h);
+  // band 2: a softer mid-slope terrace across the lower land
+  var g2 = ctx.createLinearGradient(w * 0.05, h * 1.0, w * 0.5, h * 0.55);
+  g2.addColorStop(0, rgba(liftRGB(PAL.moss, -26), 0.22));
+  g2.addColorStop(0.6, rgba(liftRGB(PAL.moss, -12), 0.08));
+  g2.addColorStop(1, rgba(PAL.moss, 0));
+  ctx.fillStyle = g2;
+  ctx.fillRect(0, 0, w, h);
+  // inland shadow: the interior deepens away from the shore light
+  var g3 = ctx.createLinearGradient(0, 0, w * 0.3, 0);
+  g3.addColorStop(0, rgba(PAL.shadow, 0.20));
+  g3.addColorStop(1, rgba(PAL.shadow, 0));
+  ctx.fillStyle = g3;
+  ctx.fillRect(0, 0, w, h);
+  ctx.restore();
+}
+
+// WIND-BENT GRASS TUFTS (spec §2) — a dozen small sumi-stroke tufts at fixed
+// land positions (hand-placed clear of stations/roads), each 3 blades bending
+// on a slow shared wind with per-tuft phase. LIVE layer (not cached): the wind
+// is motion — under reduced motion the tufts hold one gently-bent pose.
+var GRASS = [
+  [0.06, 0.30], [0.10, 0.52], [0.05, 0.68], [0.20, 0.92], [0.36, 0.90],
+  [0.46, 0.76], [0.08, 0.13], [0.20, 0.18], [0.44, 0.30], [0.30, 0.68],
+  [0.50, 0.90], [0.40, 0.12]
+];
+function drawGround_grass(ctx, t, view) {
+  var i, b, gx, gy, hgt, bend, ph, blade, bx, tipX, tipY;
+  ctx.save();
+  ctx.lineCap = 'round';
+  for (i = 0; i < GRASS.length; i++) {
+    gx = px(GRASS[i][0], view); gy = py(GRASS[i][1], view);
+    ph = (i * 0.61803398875) % 1;                      // deterministic per-tuft phase, no RNG
+    bend = view.rm ? 0.4 : Math.sin(t * 0.9 + ph * 6.2832) * 0.55 + 0.25;   // wind: lean, never whip
+    hgt = (6 + 3 * ((i * 0.37) % 1)) * scale;
+    for (blade = -1; blade <= 1; blade++) {
+      bx = gx + blade * 1.6 * scale;
+      tipX = bx + (bend * 3.5 + blade * 0.9) * scale;
+      tipY = gy - hgt * (1 - Math.abs(blade) * 0.22);
+      ctx.beginPath();
+      ctx.moveTo(bx, gy);
+      ctx.quadraticCurveTo(bx + bend * 1.2 * scale, gy - hgt * 0.6, tipX, tipY);
+      ctx.strokeStyle = (blade === 0) ? rgba(PAL.mossLight, 0.55) : rgba(liftRGB(PAL.moss, 18), 0.45);
+      ctx.lineWidth = 1.1 * scale;
+      ctx.stroke();
+    }
+    // an occasional gold seed-head catching the light (every third tuft)
+    if (i % 3 === 0) {
+      ctx.beginPath();
+      ctx.arc(gx + bend * 3.5 * scale, gy - hgt, 0.9 * scale, 0, 6.2832);
+      ctx.fillStyle = rgba(PAL.goldDeep, 0.5);
+      ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+
+// STATIC GROUND CACHE (plan S2 step 6) — everything in the ground stack that
+// never changes between frames (base gradient, land fill, elevation, contours,
+// stipple rings, strand, paper grain) is rendered ONCE into an offscreen
+// canvas at the current dims×dpr and blitted per frame. Keyed on w/h/dpr/scale
+// so any resize or DPR change rebuilds it. The LIVE pieces (grass wind,
+// horizon glow, vignette, banner ring) stay per-frame on top.
+var _groundCache = null, _groundKey = '';
+function drawGround_static(gctx, w, h) {
+  drawGround_ellipseBase(gctx, w, h);
+  drawGround_landFill(gctx, w, h);
+  drawGround_elevation(gctx, w, h);
+  drawGround_contours(gctx, w, h);
+  drawGround_ringField(gctx, w, h, 0.22, 0.30, 90, 0.05 * 0.55);
+  drawGround_ringField(gctx, w, h, 0.28, 0.68, 110, 0.04 * 0.55);
+  drawGround_landStrand(gctx, w, h);
+  // grain lives in the cache (under the live glow/vignette — imperceptible at α.05)
+  paperTexture(gctx, w, h, 0.05);
+}
+
 function drawGround(ctx, sim, t, view) {
   if (!view || !(view.w > 0) || !(view.h > 0)) return;
   var w = view.w, h = view.h;
 
-  // 1. base island radial gradient — richer lacquer-depth stops (style.css .sitemap background, enriched)
-  drawGround_ellipseBase(ctx, w, h);
+  // 1. the static terrain stack — offscreen-cached (rebuilt on resize/DPR/scale change)
+  var key = w + 'x' + h + '@' + _dpr + '/' + scale.toFixed(4);
+  if (typeof document !== 'undefined') {
+    if (!_groundCache || _groundKey !== key) {
+      var oc = _groundCache || document.createElement('canvas');
+      oc.width = Math.max(1, Math.round(w * _dpr));
+      oc.height = Math.max(1, Math.round(h * _dpr));
+      var gctx = oc.getContext('2d');
+      if (gctx) {
+        gctx.setTransform(_dpr, 0, 0, _dpr, 0, 0);
+        gctx.clearRect(0, 0, w, h);
+        drawGround_static(gctx, w, h);
+        _groundCache = oc; _groundKey = key;
+      }
+    }
+    if (_groundCache) ctx.drawImage(_groundCache, 0, 0, w, h);
+    else drawGround_static(ctx, w, h);
+  } else {
+    drawGround_static(ctx, w, h);
+  }
 
-  // 1b. LAND — paint everything LEFT of the shoreline a warm moss/earth colour so land obviously
-  // reads as land, not water. The ocean itself is untouched; drawSea (below, its own clip) keeps
-  // the cool blue palette — this is the only place stage.js tints the land side of the map.
-  drawGround_landFill(ctx, w, h);
+  // 2. wind-bent grass tufts (live: the wind moves; RM holds a bent pose)
+  drawGround_grass(ctx, t, view);
 
-  // 2. faint topographic contour hints, laid over the land fill before the stipple/paper grain sit on top
-  drawGround_contours(ctx, w, h);
-
-  // 3. stipple / dot-noise texture, two overlapping ring fields (style.css .sitemap::before)
-  // NEW GEOGRAPHY: both fields biased onto the LEFT land half (the right side is ocean now)
-  drawGround_ringField(ctx, w, h, 0.22, 0.30, 90, 0.05 * 0.55);
-  drawGround_ringField(ctx, w, h, 0.28, 0.68, 110, 0.04 * 0.55);
-
-  // 3b. NEW GEOGRAPHY: a sandy strand hugging the shoreline curve — warm band on the land side of
-  // the same curve drawSea traces; the sea's own shallow-water fade covers the water side of it.
-  drawGround_landStrand(ctx, w, h);
-
-  // 4. subtle warm horizon glow, low on the map — an ambient light suggestion (not a lantern), centred
-  // just below the visible frame so only its upper arc grazes the shoreline. Graded by nightAmount(): a
+  // 3. subtle warm horizon glow, low on the map — an ambient light suggestion (not a lantern), centred
+  // just below the visible frame so only its upper arc grazes the shoreline. Graded by the LIGHT rig: a
   // quiet sunset/sunrise held-core warmth that peaks mid dawn/dusk transition, recedes at full day/night.
-  var nAmt = (sim && sim.mode === 'minute' && typeof sim.clockMin === 'number') ? nightAmount(sim.clockMin) : (view.night ? 1 : 0);
-  var duskDawn = Math.sin(clamp(nAmt, 0, 1) * Math.PI); // 0 at full day/full night, peaks mid-transition
+  var duskDawn = Math.sin(clamp(LIGHT.night, 0, 1) * Math.PI); // 0 at full day/full night, peaks mid-transition
   lightPool(ctx, w * 0.56, h * 1.03, 250 * scale, PAL.gold, 0.035 + 0.07 * duskDawn);
 
-  // 5. inner vignette, strengthened (style.css .sitemap::after)
+  // 4. inner vignette, strengthened (style.css .sitemap::after)
   drawGround_vignette(ctx, w, h);
 
-  // 6. washi paper grain wash over everything so the island reads as toned paper, not flat pixels
-  paperTexture(ctx, w, h, 0.05);
-
-  // 7. blocked-state inset ring (style.css .sitemap.blocked), gated on sim.bannerOn
+  // 5. blocked-state inset ring (style.css .sitemap.blocked), gated on sim.bannerOn
   if (sim && sim.bannerOn) {
     var lw = 3 * scale, inset = lw / 2;
     ctx.save();
@@ -794,6 +1036,68 @@ function drawSea_waveLine(ctx, x0, bw, baseY, amp, speed, phase, t, rgb, alpha, 
   ctx.stroke();
 }
 
+// FOAM CRESTS (spec §2 living water) — one or two short pale whitecap licks
+// drifting along a wave band, appearing where the band "crests" and fading
+// out. Deterministic from t; the caller skips the whole family under RM.
+function drawSea_crests(ctx, x0, bw, baseY, amp, speed, phase, t, alpha) {
+  var j, drift, cx2, cy2, a2;
+  for (j = 0; j < 2; j++) {
+    drift = ((t * 0.017 + j * 0.47 + phase * 0.11) % 1 + 1) % 1;
+    cx2 = x0 + bw * drift;
+    cy2 = baseY + Math.sin(t * speed + phase + drift * 6 * 0.85) * amp - 1.2 * scale;
+    a2 = alpha * Math.max(0, Math.sin((t * 0.55 + j * 2.3 + phase) % 6.2832));  // slow appear/fade
+    if (a2 <= 0.015) continue;
+    ctx.beginPath();
+    ctx.moveTo(cx2 - 5 * scale, cy2 + 1 * scale);
+    ctx.quadraticCurveTo(cx2, cy2 - 1.6 * scale, cx2 + 5 * scale, cy2 + 0.6 * scale);
+    ctx.strokeStyle = rgba(PAL.rimWhite, a2);
+    ctx.lineWidth = 1.2 * scale;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+  }
+}
+
+// LIGHT REFLECTION COLUMN (spec §2: station/lantern reflections that shimmer) —
+// a stack of short horizontal dashes descending from a light source at the
+// water's edge, widths thinning and alpha fading with depth, x wobbling on t.
+// Under RM the dashes hold still (the LIGHT stays; the shimmer motion stops).
+function drawSea_lightColumn(ctx, x, yTop, len, rgb, alpha, t, seedPh, rm) {
+  if (!(len > 0) || !(alpha > 0)) return;
+  var n = 7, i, kk, yy, ww, ax, wob;
+  ctx.save();
+  for (i = 0; i < n; i++) {
+    kk = i / (n - 1);
+    yy = yTop + len * kk + i * 0.6 * scale;
+    wob = rm ? 0 : Math.sin(t * 1.4 + seedPh + i * 1.9) * (1.5 + 2.5 * kk) * scale;
+    ww = (9 - 5 * kk) * scale * (0.75 + 0.35 * Math.sin(seedPh + i * 1.7 + (rm ? 0 : t * 1.1)));
+    ax = alpha * (1 - kk * 0.85) * (rm ? 0.8 : (0.65 + 0.35 * Math.sin(t * 1.7 + i * 2.3 + seedPh)));
+    if (ax <= 0.012 || ww <= 0) continue;
+    ctx.fillStyle = rgba(rgb, ax);
+    ctx.fillRect(x - ww / 2 + wob, yy, ww, 1.2 * scale);
+  }
+  ctx.restore();
+}
+
+// SEA SPRAY at the iso rock (spec §2 particles — seasoning, not weather):
+// three droplets per slow cycle arcing off the rock's seaward edge. Pure
+// function of t, fixed count. Skipped entirely under RM (pure motion).
+function drawSea_spray(ctx, t, view) {
+  var cx = px(0.82, view), cy = py(0.72, view);
+  var i, ph, k, sx, sy, a;
+  for (i = 0; i < 3; i++) {
+    ph = ((t / 3.7 + i * 0.333) % 1 + 1) % 1;
+    if (ph > 0.42) continue;                       // droplets live in the first 42% of each cycle
+    k = ph / 0.42;
+    sx = cx + (26 + i * 5) * scale + k * (8 + i * 3) * scale;
+    sy = cy - 2 * scale - Math.sin(k * Math.PI) * (9 + i * 2) * scale;
+    a = (1 - k) * 0.5;
+    ctx.beginPath();
+    ctx.arc(sx, sy, (1.4 - k * 0.7) * scale, 0, 6.2832);
+    ctx.fillStyle = rgba(PAL.seaGlint, a);
+    ctx.fill();
+  }
+}
+
 function drawSea(ctx, sim, t, view) {
   if (!view || !view.w || !view.h) return;
   var w = view.w, h = view.h;
@@ -801,11 +1105,9 @@ function drawSea(ctx, sim, t, view) {
   // right edge, full height — layout box, NOT scaled
   var x0 = 0.50 * w, y0 = -0.02 * h, bw = 0.57 * w, bh = 1.04 * h;
 
-  // graded night factor (dawn/dusk fade instead of a hard isNight() pop); falls back to the binary
-  // view.night flag outside minute mode, per the nightAmount() contract.
-  var nightK = (sim && sim.mode === 'minute' && typeof sim.clockMin === 'number')
-    ? nightAmount(sim.clockMin)
-    : (view.night ? 1 : 0);
+  // graded night factor off the shared per-frame LIGHT rig (dawn/dusk fade instead
+  // of a hard isNight() pop; also carries the view.dusk report-stage floor).
+  var nightK = LIGHT.night;
 
   ctx.save();
   drawSea_oceanPath(ctx, w, h);
@@ -874,12 +1176,33 @@ function drawSea(ctx, sim, t, view) {
   ctx.fillStyle = rimGrad;
   ctx.fillRect(x0, y0, bw, rimH);
 
-  // ---- NEW: two gentle wave lines drifting across the bay (skip under reduced motion) ----
+  // ---- living water (spec §2): three gentle wave bands drifting across the bay, each
+  // carrying an occasional pale foam crest (skip under reduced motion — pure wave motion) ----
   if (!view.rm) {
+    drawSea_waveLine(ctx, x0, bw, y0 + bh * 0.16, 2 * scale, 0.8, 3.1, t, PAL.gold, 0.04 * (1 - nightK * 0.6), 1 * scale);
+    drawSea_waveLine(ctx, x0, bw, y0 + bh * 0.16, 2 * scale, 0.8, 3.1, t, PAL.seaGlint, 0.05 * nightK, 1 * scale);
     drawSea_waveLine(ctx, x0, bw, y0 + bh * 0.34, 2.5 * scale, 0.7, 0, t, PAL.gold, 0.05 * (1 - nightK * 0.6), 1 * scale);
     drawSea_waveLine(ctx, x0, bw, y0 + bh * 0.34, 2.5 * scale, 0.7, 0, t, PAL.seaGlint, 0.06 * nightK, 1 * scale);
     drawSea_waveLine(ctx, x0, bw, y0 + bh * 0.62, 3 * scale, 0.55, 1.7, t, PAL.gold, 0.045 * (1 - nightK * 0.6), 1 * scale);
     drawSea_waveLine(ctx, x0, bw, y0 + bh * 0.62, 3 * scale, 0.55, 1.7, t, PAL.seaGlint, 0.05 * nightK, 1 * scale);
+    drawSea_crests(ctx, x0, bw, y0 + bh * 0.34, 2.5 * scale, 0.7, 0, t, 0.30);
+    drawSea_crests(ctx, x0, bw, y0 + bh * 0.62, 3 * scale, 0.55, 1.7, t, 0.26);
+  }
+
+  // ---- shore-light reflections shimmering on the water (spec §2). Columns descend from
+  // the lights that actually sit at the water's edge: the port lantern, the iso-rock
+  // station lantern (both graded by night), and the low sun/moon glow when it hangs over
+  // the ocean (dawn keeps it over land — nothing reflects; dusk pours gold on the water).
+  // Drawn inside the ocean clip so the land never catches a reflection. ----
+  var refA = 0.10 + 0.16 * nightK;
+  drawSea_lightColumn(ctx, px(0.52, view) + 10 * scale, py(0.56, view) + 12 * scale, 60 * scale,
+    nightK > 0.4 ? PAL.lantern : PAL.gold, refA, t, 0.7, view.rm);
+  drawSea_lightColumn(ctx, px(0.82, view), py(0.72, view) + 14 * scale, 46 * scale,
+    nightK > 0.4 ? PAL.lantern : PAL.gold, refA * 0.85, t, 2.9, view.rm);
+  if (LIGHT.sunX > 0.62) {
+    var glowRef = drawSky_mix(PAL.gold, PAL.seaGlint, nightK);
+    drawSea_lightColumn(ctx, LIGHT.sunX * w, y0 + bh * 0.30, bh * 0.5,
+      glowRef, 0.10 + 0.10 * LIGHT.shadowLen, t, 5.3, view.rm);
   }
 
   // ---- animated diagonal gold shimmer stripes (byte-faithful; sizes + march offset scaled together),
@@ -941,6 +1264,7 @@ function drawSea(ctx, sim, t, view) {
 
   // ---- NEW GEOGRAPHY ocean scenery: the iso rock islet + Kimura-san's jigging boat ----
   drawSea_isoRock(ctx, t, view, nightK);
+  if (!view.rm) drawSea_spray(ctx, t, view);   // sea spray licking off the rock (pure motion — RM skips)
   drawSea_kimura(ctx, t, view, nightK);
 }
 
@@ -1185,10 +1509,8 @@ function drawRoads(ctx, sim, t, view) {
   var dashLen = 7 * scale;
   offset = view.rm ? 0 : -(t * speed * scale);
 
-  // richer washi/lacquer: grade the lantern warmth smoothly instead of a hard night flip
-  var nightAmt = (sim && sim.mode === 'minute' && typeof sim.clockMin === 'number')
-    ? nightAmount(sim.clockMin)
-    : (view.night ? 1 : 0);
+  // richer washi/lacquer: grade the lantern warmth smoothly off the shared LIGHT rig
+  var nightAmt = LIGHT.night;
 
   // ---- 8 ADJ segments: warmer gold-leaf dash, marching, soft lantern-glow halo (native shadow blur) ----
   ctx.save();
@@ -1222,9 +1544,13 @@ function drawRoads(ctx, sim, t, view) {
   for (i = 0; i < ids.length; i++) {
     var sp = stationPx(P.station(ids[i]), view);
     // faint gold gather-point by day; blooms into a warm lantern pool by night — mostly veiled by the
-    // station disc drawn on top later, this is the wash that peeks softly around its rim
+    // station disc drawn on top later, this is the wash that peeks softly around its rim.
+    // The pool BREATHES at night (spec §2 "lantern pools that bloom") — RM holds the base radius.
     lightPool(ctx, sp.x, sp.y, 28 * scale, PAL.gold, 0.04);
-    if (nightAmt > 0.01) lightPool(ctx, sp.x, sp.y, 36 * scale, PAL.lantern, 0.16 * nightAmt);
+    if (nightAmt > 0.01) {
+      var bloom = view.rm ? 1 : 1 + 0.08 * Math.sin(t * 0.8 + i * 2.1);
+      lightPool(ctx, sp.x, sp.y, 36 * scale * bloom, PAL.lantern, 0.16 * nightAmt);
+    }
   }
 
   // ---- one slow gold-leaf glint travels junction to junction — sparingly, alive but never noisy ----
@@ -1252,12 +1578,20 @@ function drawSky_mix(aStr, bStr, k) {
 }
 
 function drawSky(ctx, sim, t, view) {
-  if (!sim || sim.mode !== 'minute') return;               // §21.3 self-gate: minute-mode only, stays under actors
+  // §21.3 self-gate: minute-mode only, stays under actors — EXCEPT when the §4
+  // report-on-stage dusk grade (view.dusk) asks for evening light on any sim.
+  var minute = sim && sim.mode === 'minute' && typeof sim.clockMin === 'number';
+  if (!minute && _dusk <= 0) return;
   var w = view.w, h = view.h;
-  var clockMin = sim.clockMin;
-  var sky = skyAt(clockMin);
+  var sky = minute ? skyAt(sim.clockMin) : skyAt(1140);
   var top = sky.top, hor = sky.hor, al = sky.alpha;
-  var nAmt = (typeof clockMin === 'number') ? nightAmount(clockMin) : (view.night ? 1 : 0);
+  if (_dusk > 0) {                                       // bend the hour toward the 19:00 dusk stop
+    var duskStop = skyAt(1140);
+    top = drawSky_mix(top, duskStop.top, _dusk);
+    hor = drawSky_mix(hor, duskStop.hor, _dusk);
+    al = lerp(al, duskStop.alpha, _dusk);
+  }
+  var nAmt = LIGHT.night;
 
   ctx.save();
 
@@ -1274,17 +1608,30 @@ function drawSky(ctx, sim, t, view) {
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, w, h);
 
+  // ---- global colour grade (spec §2 "true lighting model"): when the sun sits low, a
+  // whisper of the horizon colour is MULTIPLIED into the whole world so shadows deepen
+  // and everything keys to the same dawn/dusk warmth. Alpha is tiny and rides the same
+  // low-sun curve as the long shadows; skipped at night (the night wash above owns it).
+  var lowSun = LIGHT.shadowLen * (1 - nAmt * 0.55);
+  if (lowSun > 0.03) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'multiply';
+    ctx.fillStyle = rgba(drawSky_mix(hor, '255,236,210', 0.35), 0.10 * lowSun);
+    ctx.fillRect(0, 0, w, h);
+    ctx.restore();
+  }
+
   // ---- soft sun/moon glow, low near the horizon, sweeping dawn-side -> dusk-side with the clock.
-  // Colour blends continuously gold (day) <-> pale moon-glint (night) via nightAmount so it never
+  // Colour blends continuously gold (day) <-> pale moon-glint (night) via the LIGHT rig so it never
   // pops at the binary night threshold; alpha rides the SKY table's own alpha (already peaks at
   // dawn/dusk/night, dips at midday) so the glow stays a restrained washi/lacquer accent, not a
-  // literal sun disc. Position is frac*w / frac*h layout math — left unscaled per the SCALE contract;
-  // only the glow's radius/sparkle size are multiplied by `scale`. ----
-  var dayK = clamp((clockMin - SKY_MIN) / (SKY_MAX - SKY_MIN), 0, 1);
-  var glowX = w * lerp(0.06, 0.94, dayK);
-  var glowY = h * lerp(0.92, 0.8, Math.sin(dayK * Math.PI));   // lifts a touch toward local noon, stays low
+  // literal sun disc. Position comes off LIGHT.sunX/sunY (shared with the water's sun column) —
+  // frac*w / frac*h layout math, left unscaled per the SCALE contract; only the glow's radius /
+  // sparkle size are multiplied by `scale`. ----
+  var glowX = w * LIGHT.sunX;
+  var glowY = h * LIGHT.sunY;
   var glowRgb = drawSky_mix(PAL.gold, PAL.seaGlint, nAmt);
-  var glowR = (95 + 45 * Math.sin(dayK * Math.PI)) * scale;
+  var glowR = (95 + 45 * Math.sin(LIGHT.dayK * Math.PI)) * scale;
   var glowAlpha = clamp(al * 0.5, 0.05, 0.24);
   lightPool(ctx, glowX, glowY, glowR, glowRgb, glowAlpha);
   if (!view.rm && nAmt < 0.35) {
@@ -1292,6 +1639,34 @@ function drawSky(ctx, sim, t, view) {
   }
 
   ctx.restore();
+}
+
+// DRIFTING CLOUD SHADOWS (spec §2) — two huge, very soft shade blobs sliding
+// slowly across land and water (a ~95s crossing), day only (clouds cast no
+// shade under lantern light). Fixed count, pure function of t. Under RM the
+// clouds hold still at their seed positions — the shade (light) stays, the
+// drift (motion) stops.
+function drawCloudShadows(ctx, sim, t, view) {
+  var dayA = 0.055 * (1 - LIGHT.night);
+  if (dayA <= 0.006) return;
+  var w = view.w, h = view.h, i, kx, cx2, cy2, rx;
+  for (i = 0; i < 2; i++) {
+    kx = view.rm ? (0.28 + i * 0.45)
+                 : ((t / (95 + i * 22) + i * 0.5) % 1.3) - 0.15;   // -0.15 → 1.15: enters and leaves the frame
+    cx2 = w * kx;
+    cy2 = h * (0.22 + i * 0.42) + (view.rm ? 0 : Math.sin(t * 0.05 + i * 3) * h * 0.03);
+    rx = w * (0.20 + i * 0.05);
+    ctx.save();
+    ctx.translate(cx2, cy2);
+    ctx.scale(1, 0.42);
+    var g = ctx.createRadialGradient(0, 0, 0, 0, 0, rx);
+    g.addColorStop(0, rgba(PAL.shadow, dayA));
+    g.addColorStop(0.7, rgba(PAL.shadow, dayA * 0.5));
+    g.addColorStop(1, rgba(PAL.shadow, 0));
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(0, 0, rx, 0, 6.2832); ctx.fill();
+    ctx.restore();
+  }
 }
 
 
@@ -1492,9 +1867,9 @@ function drawBoat(ctx, sim, t, view) {
   var atSea = bs.atSea;
   var ts = t * 1000;
   var i, wk, age, wa;
-  var night = !!view.night;
-  // smooth night grade for the boat's own running lantern (falls back to the binary flag outside minute mode)
-  var nightAmt = (sim && typeof sim.clockMin === 'number') ? nightAmount(sim.clockMin) : (night ? 1 : 0);
+  // smooth night grade off the shared LIGHT rig (running lantern, reflection tint)
+  var nightAmt = LIGHT.night;
+  var night = nightAmt > 0.5;
 
   // ---- wake pool: pooled foam ellipses fading over 900ms, laid on the water behind the hull ----
   // (style.css .wk: 12x4 ellipse, rgba(227,196,107,.3) == PAL.gold; app.js frame() fades (1-age/900)*0.5 —
@@ -1519,6 +1894,31 @@ function drawBoat(ctx, sim, t, view) {
         sparkle(ctx, wk.x + 2 * scale, wk.y - 1 * scale, 2.2 * scale, (1 - age / 260) * 0.75);
       }
     }
+  }
+
+  // ---- V-wake (spec §2 "boat wake interacting"): two diverging foam lines peeling off the
+  // stern while under way, fading with distance — they thread through the pooled puffs so the
+  // wake reads as one system, not confetti. Motion-only: skipped under RM and at the dock. ----
+  if (!view.rm && atSea) {
+    var wdir = faceL ? 1 : -1;                 // faceL = bow seaward (+x) => wake trails -x… flipped below
+    var sternX = cx - wdir * 12 * scale;
+    ctx.save();
+    ctx.lineCap = 'round';
+    for (i = 0; i < 2; i++) {
+      var vy = (i === 0 ? -1 : 1);
+      var wsw = view.rm ? 0 : Math.sin(t * 2.1 + i * 2.6) * 1.2 * scale;
+      var grad2 = ctx.createLinearGradient(sternX, cy, sternX - wdir * 26 * scale, cy);
+      grad2.addColorStop(0, rgba(PAL.gold, 0.30));
+      grad2.addColorStop(1, rgba(PAL.gold, 0));
+      ctx.strokeStyle = grad2;
+      ctx.lineWidth = 1.4 * scale;
+      ctx.beginPath();
+      ctx.moveTo(sternX, cy + 2 * scale);
+      ctx.quadraticCurveTo(sternX - wdir * 13 * scale, cy + 2 * scale + vy * 3 * scale,
+                           sternX - wdir * 26 * scale, cy + 2 * scale + vy * (6 * scale) + wsw);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   // soft gradient contact shadow on the water beneath the hull (replaces the hard shadowEllipse)
@@ -1645,11 +2045,12 @@ function drawBoat(ctx, sim, t, view) {
 
 
   // ---- drawStations ----
-function drawStations_glyph(ctx, id, cx, cy, r, na) {
+function drawStations_glyph(ctx, id, cx, cy, r, na, t, rm) {
   // per-id landmark glyph: 'roof-like' ids sit just above the icon disc,
   // 'waterline' ids (port/vessel) sit just below it — mirrors the old
   // .st-arch top:/bottom: split (style.css:251-262). na = nightAmount(0..1),
   // used to grade the mess-awning lantern + the vessel wave-arc moonlit tint.
+  // t/rm drive the small living details (bobbing floats); rm holds them still.
   var topY = cy - r - 3 * scale, botY = cy + r + 3 * scale, i2;
   ctx.save();
   if (id === 'command') {
@@ -1677,6 +2078,19 @@ function drawStations_glyph(ctx, id, cx, cy, r, na) {
     ctx.closePath();
     ctx.fillStyle = '#34404c'; ctx.fill();
     ctx.lineWidth = 1 * scale; ctx.strokeStyle = 'rgba(227,196,107,.55)'; ctx.stroke();
+    // roof ridge cap + tile chords (spec §2 richer architecture — quiet ink, not literal tiles)
+    ctx.strokeStyle = rgba(PAL.ink, 0.35);
+    ctx.lineWidth = 0.8 * scale;
+    ctx.beginPath();
+    ctx.moveTo(cx - hw2 * 0.45, topY - h2 * 0.55); ctx.lineTo(cx + hw2 * 0.45, topY - h2 * 0.55);
+    ctx.moveTo(cx - hw2 * 0.75, topY - h2 * 0.25); ctx.lineTo(cx + hw2 * 0.75, topY - h2 * 0.25);
+    ctx.stroke();
+    ctx.strokeStyle = rgba(PAL.goldDeep, 0.55);
+    ctx.lineWidth = 1.6 * scale;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(cx - 2.4 * scale, topY - h2 + 0.6 * scale); ctx.lineTo(cx + 2.4 * scale, topY - h2 + 0.6 * scale);
+    ctx.stroke();
     ctx.beginPath();
     ctx.moveTo(cx, topY - h2);
     ctx.lineTo(cx - hw2, topY);
@@ -1735,6 +2149,44 @@ function drawStations_glyph(ctx, id, cx, cy, r, na) {
     ctx.beginPath();
     ctx.moveTo(pxx, botY - 1.5 * scale); ctx.lineTo(pxx + pw, botY - 1.5 * scale);
     ctx.stroke();
+    // NETS & FLOATS (spec §2 richer port): a drying net draped left of the disc —
+    // two catenary swags with vertical ties — and three glass floats hanging off
+    // the pier planks, bobbing gently on the water (still under reduced motion).
+    var netX = cx - r - 16 * scale, netY = cy - r * 0.55, netW = 13 * scale, ni;
+    ctx.strokeStyle = rgba(PAL.washiWarm, 0.4);
+    ctx.lineWidth = 0.9 * scale;
+    ctx.beginPath();
+    ctx.moveTo(netX - netW / 2, netY);
+    ctx.quadraticCurveTo(netX, netY + 6 * scale, netX + netW / 2, netY);
+    ctx.moveTo(netX - netW / 2, netY + 4 * scale);
+    ctx.quadraticCurveTo(netX, netY + 10 * scale, netX + netW / 2, netY + 4 * scale);
+    for (ni = 0; ni < 3; ni++) {
+      var nvx = netX - netW / 2 + (netW / 2) * ni;
+      ctx.moveTo(nvx, netY + (ni === 1 ? 6 : 0) * scale * 0.9);
+      ctx.lineTo(nvx, netY + (ni === 1 ? 10 : 4) * scale);
+    }
+    ctx.stroke();
+    // net posts
+    ctx.strokeStyle = rgba(PAL.ink, 0.5);
+    ctx.lineWidth = 1.2 * scale;
+    ctx.beginPath();
+    ctx.moveTo(netX - netW / 2, netY - 2 * scale); ctx.lineTo(netX - netW / 2, netY + 12 * scale);
+    ctx.moveTo(netX + netW / 2, netY - 2 * scale); ctx.lineTo(netX + netW / 2, netY + 12 * scale);
+    ctx.stroke();
+    for (ni = 0; ni < 3; ni++) {
+      var flx = pxx + (5 + ni * 10) * scale;
+      var fbob = rm ? 0 : Math.sin(t * 1.3 + ni * 2.2) * 1 * scale;
+      var fly = botY + 5 * scale + fbob;
+      ctx.beginPath();
+      ctx.moveTo(flx, botY + 2 * scale); ctx.lineTo(flx, fly - 2 * scale);
+      ctx.strokeStyle = rgba(PAL.ink, 0.4); ctx.lineWidth = 0.7 * scale; ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(flx, fly, 2 * scale, 0, 6.2832);
+      ctx.fillStyle = ni === 1 ? rgba(PAL.hanko, 0.85) : rgba(PAL.goldDeep, 0.9);
+      ctx.fill();
+      ctx.lineWidth = 0.6 * scale; ctx.strokeStyle = rgba(PAL.ink, 0.4); ctx.stroke();
+      rimLightArc(ctx, flx, fly, 2 * scale, 0.3);
+    }
   } else if (id === 'vessel') {
     var vw = 36 * scale, vx0 = cx - vw / 2, vy = botY + 2 * scale;
     ctx.strokeStyle = rgba(PAL.seaGlint, 0.32 + 0.25 * na); ctx.lineWidth = 2 * scale;
@@ -1791,7 +2243,24 @@ function hubSectionRects(hubCx, hubCy, footR) {
 // Transport, where the team actually eats, gears up, and moves. Reuses bevelDisc / roundRect /
 // chip / lightPool / rimLightArc / contactShadow — no new palette entries. `r` is the caller's
 // already-scaled footprint radius (HUB_FOOT_MULT × a normal station disc).
-function drawStations_hub(ctx, cx, cy, r, rimRgb, na, ic) {
+// HUB GEOMETRY — the compound's key points, derived the same way drawStations
+// derives them, so the particle layer (chimney smoke, cook-steam) anchors on
+// exactly what drawStations_hub drew. Returns null when there is no hub.
+function hubGeom(view) {
+  if (!P || !P.STATIONS) return null;
+  var hubSt = null, i;
+  for (i = 0; i < P.STATIONS.length; i++) if (P.STATIONS[i].hub) { hubSt = P.STATIONS[i]; break; }
+  if (!hubSt || hubSt.hidden) return null;
+  var p = stationPx(hubSt, view);
+  var discCy = p.y - 11 * scale;
+  var footR = 21 * scale * HUB_FOOT_MULT;
+  var roofW = footR * 0.92, roofH = footR * 0.62, roofY = discCy - footR * 0.55;
+  return { cx: p.x, cy: p.y, discCy: discCy, footR: footR,
+           roofW: roofW, roofH: roofH, roofY: roofY,
+           chimneyX: p.x + roofW * 0.52, chimneyMouthY: roofY - roofH * 0.48 - 9 * scale };
+}
+
+function drawStations_hub(ctx, cx, cy, r, rimRgb, na, ic, t, rm) {
   ctx.save();
 
   // wide lacquer platform — same bevel treatment as a normal station disc, just the big footprint
@@ -1806,6 +2275,35 @@ function drawStations_hub(ctx, cx, cy, r, rimRgb, na, ic) {
   ctx.closePath();
   ctx.fillStyle = '#2c3844'; ctx.fill();
   ctx.lineWidth = 1.4 * scale; ctx.strokeStyle = 'rgba(227,196,107,.85)'; ctx.stroke();
+
+  // GALLEY CHIMNEY (spec §2) — pokes through the right roof slope; the particle
+  // layer's smoke/cook-steam rises from its mouth (hubGeom keeps the two in sync)
+  var chX = cx + roofW * 0.52, chTop = roofY - roofH * 0.48 - 9 * scale, chW = 5 * scale;
+  ctx.fillStyle = '#222b34';
+  ctx.fillRect(chX - chW / 2, chTop, chW, roofY - roofH * 0.2 - chTop);
+  ctx.fillStyle = rgba(PAL.ink, 0.85);
+  ctx.fillRect(chX - chW / 2 - 1 * scale, chTop - 1.6 * scale, chW + 2 * scale, 2.2 * scale);
+  ctx.beginPath();                                        // upper-left light lick on the flue
+  ctx.moveTo(chX - chW / 2 + 0.8 * scale, chTop + 1.5 * scale);
+  ctx.lineTo(chX - chW / 2 + 0.8 * scale, roofY - roofH * 0.3);
+  ctx.strokeStyle = rgba(PAL.rimWhite, 0.18);
+  ctx.lineWidth = 1 * scale;
+  ctx.stroke();
+
+  // ROOF RIDGE (spec §2 "roof ridge lines"): a gold-capped ridge beam at the apex
+  // + two quiet ink tile chords following the slope
+  ctx.strokeStyle = rgba(PAL.goldDeep, 0.6);
+  ctx.lineWidth = 2 * scale;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(cx - r * 0.06, roofY - roofH + 1 * scale); ctx.lineTo(cx + r * 0.06, roofY - roofH + 1 * scale);
+  ctx.stroke();
+  ctx.strokeStyle = rgba(PAL.ink, 0.3);
+  ctx.lineWidth = 1 * scale;
+  ctx.beginPath();
+  ctx.moveTo(cx - roofW * 0.5, roofY - roofH * 0.5); ctx.lineTo(cx + roofW * 0.5, roofY - roofH * 0.5);
+  ctx.moveTo(cx - roofW * 0.78, roofY - roofH * 0.22); ctx.lineTo(cx + roofW * 0.78, roofY - roofH * 0.22);
+  ctx.stroke();
   // red-tile awning band along the roof's eave (mess motif, folded in)
   ctx.save();
   roundRect(ctx, cx - roofW, roofY - roofH * 0.24, roofW * 2, roofH * 0.24, 3 * scale);
@@ -1837,6 +2335,43 @@ function drawStations_hub(ctx, cx, cy, r, rimRgb, na, ic) {
   var doorW = wallW * 0.15, doorH = wallH * 0.82, doorX = cx - doorW / 2, doorY = wallY + wallH - doorH;
   roundRect(ctx, doorX, doorY, doorW, doorH, 2 * scale);
   ctx.fillStyle = rgba(PAL.ink, 0.72); ctx.fill();
+
+  // NOREN CURTAIN (spec §2 "noren at Hinata") — two indigo cloth panels hanging
+  // over the doorway's upper half, hems swaying gently in the harbor breeze
+  // (still under reduced motion), one panel carrying a small gold hanko circle.
+  var nrH = doorH * 0.52, nrGap = 1 * scale, nrW = (doorW - nrGap) / 2, np;
+  for (np = 0; np < 2; np++) {
+    var nrX = doorX + np * (nrW + nrGap);
+    var sway = rm ? 0.6 * scale : Math.sin(t * 1.1 + np * 2.4) * 1.3 * scale;
+    ctx.beginPath();
+    ctx.moveTo(nrX, doorY);
+    ctx.lineTo(nrX + nrW, doorY);
+    ctx.lineTo(nrX + nrW + sway * 0.7, doorY + nrH);
+    ctx.lineTo(nrX + sway, doorY + nrH);
+    ctx.closePath();
+    var ng = ctx.createLinearGradient(0, doorY, 0, doorY + nrH);
+    ng.addColorStop(0, rgba(liftRGB(PAL.indigo, 14), 0.96));
+    ng.addColorStop(1, rgba(PAL.indigo, 0.92));
+    ctx.fillStyle = ng;
+    ctx.fill();
+    ctx.lineWidth = 0.6 * scale;
+    ctx.strokeStyle = rgba(PAL.ink, 0.5);
+    ctx.stroke();
+    if (np === 1) {                                  // the gold mark, right panel
+      ctx.beginPath();
+      ctx.arc(nrX + nrW / 2 + sway * 0.4, doorY + nrH * 0.55, nrW * 0.24, 0, 6.2832);
+      ctx.strokeStyle = rgba(PAL.goldLeaf, 0.85);
+      ctx.lineWidth = 0.8 * scale;
+      ctx.stroke();
+    }
+  }
+  // hanging rail over the noren
+  ctx.beginPath();
+  ctx.moveTo(doorX - 1 * scale, doorY + 0.4 * scale);
+  ctx.lineTo(doorX + doorW + 1 * scale, doorY + 0.4 * scale);
+  ctx.strokeStyle = rgba(PAL.goldDeep, 0.55);
+  ctx.lineWidth = 1 * scale;
+  ctx.stroke();
   // two lit windows flanking the door
   var winW = wallW * 0.1, winH = wallH * 0.34, winY = wallY + wallH * 0.28, wi, winX, winOff = [-0.30, 0.30];
   for (wi = 0; wi < winOff.length; wi++) {
@@ -1894,9 +2429,8 @@ function drawStations_hub(ctx, cx, cy, r, rimRgb, na, ic) {
 function drawStations(ctx, sim, t, view) {
   if (!view || !P || !P.STATIONS) return;
   var terr = view.tintMap || P.stationReadiness(sim);
-  var night = !!view.night;
-  // nightAmount grades the lantern glow smoothly in minute mode; elsewhere fall back to the binary flag
-  var na = (sim && sim.mode === 'minute' && typeof sim.clockMin === 'number') ? nightAmount(sim.clockMin) : (night ? 1 : 0);
+  // the shared LIGHT rig grades the lantern glow smoothly (and carries the report dusk floor)
+  var na = LIGHT.night;
   var discR = 21 * scale;
   var simStations = (sim && sim.stations) ? sim.stations : null;
   var i, j;
@@ -1921,8 +2455,10 @@ function drawStations(ctx, sim, t, view) {
     var isHub = !!st.hub;
     var footR = isHub ? discR * HUB_FOOT_MULT : discR;
 
-    // wide, faint ground shadow under the whole disc block, resting on the station's ground point
+    // wide, faint ground shadow under the whole disc block, resting on the station's ground point,
+    // plus the low-sun LONG cast shadow (spec §2 lighting) stretching away from the dawn/dusk sun
     contactShadow(ctx, cx, cy, footR * 2.6, footR * 0.9, 0.2);
+    longShadow(ctx, cx, cy + footR * 0.15, footR * 1.5, isHub ? 0.8 : 1);
 
     // (c) territory halo — greens/ambers/reds the ground behind the icon (style.css:370-377)
     if (terrDef) {
@@ -1931,17 +2467,19 @@ function drawStations(ctx, sim, t, view) {
       radialGlow(ctx, cx, cy, footR * 1.3, terrDef.rgb, terrDef.a);
       ctx.restore();
     }
-    // (f) warm night lantern light-pool, graded by nightAmount — a stalled station's red warning
-    // always outranks the cozy lantern
+    // (f) warm night lantern light-pool, graded by the LIGHT rig — a stalled station's red warning
+    // always outranks the cozy lantern. The pool BREATHES slowly at night (spec §2 "lantern pools
+    // that bloom"); reduced motion holds the base radius (light stays, motion stops).
     if (!hot && na > 0.02) {
-      lightPool(ctx, cx, cy, footR * 1.7, PAL.lantern, 0.24 * na);
+      var lb = view.rm ? 1 : 1 + 0.07 * Math.sin(t * 0.7 + i * 1.9);
+      lightPool(ctx, cx, cy, footR * 1.7 * lb, PAL.lantern, 0.24 * na);
     }
 
     // (b) icon disc — full gold-leaf lacquer bevel (lacquer body + inner shadow + upper-left rim
     // light + gold-leaf rim stroke), territory-tinted when the station has a live tint
     var rimRgb = terrDef ? hexRGB(terrDef.border) : PAL.goldLeaf;
     if (isHub) {
-      drawStations_hub(ctx, cx, discCy, footR, rimRgb, na, st.icon);
+      drawStations_hub(ctx, cx, discCy, footR, rimRgb, na, st.icon, t, !!view.rm);
     } else {
       bevelDisc(ctx, cx, discCy, discR, PAL.indigo, rimRgb);
 
@@ -1963,7 +2501,7 @@ function drawStations(ctx, sim, t, view) {
       ctx.fillText(st.icon, cx, discCy + 1 * scale);
       ctx.restore();
       // (a) per-id landmark glyph, drawn resting against the disc
-      drawStations_glyph(ctx, st.id, cx, discCy, discR, na);
+      drawStations_glyph(ctx, st.id, cx, discCy, discR, na, t, !!view.rm);
     }
     // (e) pulsing red stalled ring — only when the station has a live problem AND crew
     if (hot) {
@@ -2037,6 +2575,212 @@ function hubSections(view) {
   return out;
 }
 
+// ---- drawStallMarkers (spec §4 report-on-stage, render side) ----
+// view.stallMarkers = [ { stationId, sev } ]: glow pulses at the stations where
+// idle/rework actually accrued during the run. sev is 0..1 severity (numbers
+// outside clamp; the strings 'idle'/'rework' are accepted defensively) — colour
+// grades amber → hanko red with it. Markers for the folded/hidden stations
+// (command/finance/clinic) land on the Hinata hub, mirroring the sim's own
+// folding. The DOM hotspot + aria label live on the app side (S3); this layer
+// is purely the light. RM: steady ring + glow, no pulse, no ripple.
+function drawStallMarkers(ctx, sim, t, view) {
+  var ms = view && view.stallMarkers;
+  if (!ms || !ms.length || !P) return;
+  var i, m, st, p, footR, discCy, sev, rgb, pulse, k2, hg;
+  for (i = 0; i < ms.length; i++) {
+    m = ms[i]; if (!m) continue;
+    st = P.station(m.stationId || m.station);
+    if (!st) continue;
+    if (st.hidden) {
+      hg = hubGeom(view); if (!hg) continue;
+      p = { x: hg.cx, y: hg.cy }; footR = hg.footR; discCy = hg.discCy;
+    } else {
+      p = stationPx(st, view);
+      footR = st.hub ? 21 * scale * HUB_FOOT_MULT : 21 * scale;
+      discCy = p.y - 11 * scale;
+    }
+    sev = (typeof m.sev === 'number') ? clamp(m.sev, 0, 1) : (m.sev === 'idle' ? 0.55 : 1);
+    rgb = drawSky_mix(PAL.amber, PAL.hanko, sev);
+    pulse = view.rm ? 0.8 : 0.65 + 0.35 * Math.sin(t * 6.2832 / 1.6 + i * 1.3);
+    // ground glow where the idle/rework burned
+    radialGlow(ctx, p.x, p.y, footR * (0.9 + 0.4 * sev), rgb, (0.20 + 0.16 * sev) * pulse);
+    // defining ring around the disc block
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(p.x, discCy, footR + 7 * scale, 0, 6.2832);
+    ctx.strokeStyle = rgba(rgb, (0.45 + 0.3 * sev) * pulse);
+    ctx.lineWidth = 2.5 * scale;
+    ctx.stroke();
+    ctx.restore();
+    // slow outbound ripple — pure motion, skipped under RM
+    if (!view.rm) {
+      k2 = ((t / 2.4 + i * 0.37) % 1 + 1) % 1;
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(p.x, discCy, footR + (7 + k2 * 18) * scale, 0, 6.2832);
+      ctx.strokeStyle = rgba(rgb, (1 - k2) * 0.28);
+      ctx.lineWidth = 1.5 * scale;
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+}
+
+// ---- drawParticles (spec §2 pooled particle system — seasoning, not weather) ----
+// Every particle is a pure function of (t, index): fixed counts (≤ 4 smoke +
+// 3 steam + 6 fireflies per frame), zero allocation, zero retained state — the
+// strictest possible "pool cap". Smoke rises from the hub's galley chimney
+// (denser during the fishday 16:00–17:30 cook block, when cook-steam also
+// puffs off the Food sub-zone); gold fireflies drift around the hub + lodging
+// lanterns once the evening light passes ~0.22. RM keeps a held wisp + held
+// glints (the light) and drops every drift (the motion).
+function drawParticles(ctx, sim, t, view) {
+  if (!view) return;
+  var rm = !!view.rm;
+  var hg = hubGeom(view);
+  var i, ph, sx, sy, a;
+  if (hg) {
+    var cook = !!(sim && sim.mode === 'minute' && sim.segment === 'fishday' &&
+                  sim.clockMin >= 960 && sim.clockMin < 1050);
+    if (rm) {
+      radialGlow(ctx, hg.chimneyX + 2 * scale, hg.chimneyMouthY - 8 * scale, 5 * scale, PAL.washiWarm, 0.10);
+      radialGlow(ctx, hg.chimneyX + 5 * scale, hg.chimneyMouthY - 17 * scale, 7 * scale, PAL.washiWarm, 0.07);
+    } else {
+      for (i = 0; i < 4; i++) {
+        ph = ((t / (cook ? 3.4 : 5.6) + i / 4) % 1 + 1) % 1;
+        sx = hg.chimneyX + Math.sin(t * 0.7 + i * 1.8 + ph * 3.2) * (2 + 6 * ph) * scale + ph * 7 * scale;
+        sy = hg.chimneyMouthY - ph * 42 * scale;
+        a = (1 - ph) * (cook ? 0.20 : 0.13);
+        radialGlow(ctx, sx, sy, (2 + 6.5 * ph) * scale, PAL.washiWarm, a);
+      }
+      if (cook) {
+        var rects = hubSectionRects(hg.cx, hg.discCy, hg.footR), fz = rects[0];
+        for (i = 0; i < 3; i++) {
+          ph = ((t / 1.6 + i / 3) % 1 + 1) % 1;
+          sx = fz.cx + Math.sin(t * 2.3 + i * 2.1) * 2 * scale;
+          sy = fz.cy - fz.r - ph * 14 * scale;
+          radialGlow(ctx, sx, sy, (1.5 + 2.5 * ph) * scale, PAL.rimWhite, (1 - ph) * 0.22);
+        }
+      }
+    }
+  }
+  if (LIGHT.night > 0.22 && P && P.station) {
+    var homes = [P.station('mess'), P.station('lodging')], si, fi2, lx, ly, fx, fy, fa, pph;
+    for (si = 0; si < homes.length; si++) {
+      if (!homes[si]) continue;
+      lx = px(homes[si].x, view); ly = py(homes[si].y, view) - 8 * scale;
+      for (fi2 = 0; fi2 < 3; fi2++) {
+        if (rm) {
+          fx = lx + (fi2 - 1) * 14 * scale; fy = ly - (6 + fi2 * 4) * scale;
+          radialGlow(ctx, fx, fy, 1.8 * scale, PAL.goldPale, 0.22 * LIGHT.night);
+        } else {
+          pph = t * 0.32 + fi2 * 2.1 + si * 3.7;
+          fx = lx + Math.cos(pph) * (16 + fi2 * 7) * scale;
+          fy = ly - 4 * scale + Math.sin(pph * 1.7 + fi2) * (5.5 + fi2 * 2) * scale;
+          fa = (0.14 + 0.22 * (0.5 + 0.5 * Math.sin(t * 2.4 + fi2 * 2.9 + si))) * LIGHT.night;
+          radialGlow(ctx, fx, fy, 1.8 * scale, PAL.goldPale, fa);
+        }
+      }
+    }
+  }
+}
+
+// ---- drawDusk (spec §4, HUD side) — the full-canvas evening unifier ----
+// A whisper-thin cool-to-warm grade laid over EVERYTHING (including any
+// pull-back letterbox margins — it sits outside the camera transform). The
+// heavy lifting of the dusk look happens inside the world layers via the
+// LIGHT rig's dusk floor + drawSky's dusk blend; this pass just marries the
+// frame together. Alpha stays low so pawn/state colours keep reading.
+function drawDusk(ctx, view) {
+  if (_dusk <= 0) return;
+  var g = ctx.createLinearGradient(0, 0, 0, view.h);
+  g.addColorStop(0, rgba('28,32,58', 0.14 * _dusk));
+  g.addColorStop(0.55, rgba('88,52,64', 0.08 * _dusk));
+  g.addColorStop(1, rgba('124,64,74', 0.14 * _dusk));
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, view.w, view.h);
+}
+
+// ---- drawStamp (spec §4) — the hanko grade seal, stage corner (HUD layer) ----
+// view.stamp = { grade, at, x?, y? }: `at` is the rAF-clock ms when the stamp
+// landed; the thock plays over ~620ms (drop 1.7×→0.94 squash→1 settle, with a
+// red shock ring at the moment of impact). Missing `at` — or reduced motion —
+// renders the final seated seal, one static frame. The seal edge carries a
+// deterministic harmonic wobble (ink bleed) + a few flecks seeded off the
+// grade letter; no RNG anywhere.
+function drawStamp_seal(ctx, r, alpha, wobMul) {
+  var steps = 30, i, a, ca, sa, mx, base, wob, rr;
+  ctx.beginPath();
+  for (i = 0; i <= steps; i++) {
+    a = (i / steps) * 6.2832;
+    ca = Math.cos(a); sa = Math.sin(a);
+    mx = Math.max(Math.abs(ca), Math.abs(sa));
+    base = Math.min(r / mx, r * 1.3);                       // square, corner-clipped → rounded seal
+    wob = 1 + wobMul * (0.022 * Math.sin(a * 5 + 1.3) + 0.016 * Math.cos(a * 8));
+    rr = base * wob;
+    if (i === 0) ctx.moveTo(ca * rr, sa * rr); else ctx.lineTo(ca * rr, sa * rr);
+  }
+  ctx.closePath();
+  ctx.fillStyle = rgba(PAL.hanko, alpha);
+  ctx.fill();
+}
+function drawStamp(ctx, t, view) {
+  var s = view && view.stamp;
+  if (!s || !s.grade) return;
+  var size = 66 * scale;
+  var x = (typeof s.x === 'number') ? s.x : view.w - size * 0.5 - 24 * scale;
+  var y = (typeof s.y === 'number') ? s.y : view.h - size * 0.5 - 22 * scale;
+  var k = 1;
+  if (!view.rm && typeof s.at === 'number' && s.at > 0) {
+    k = (t * 1000 - s.at) / 620;
+    if (k < 0) return;                                      // not landed yet
+    k = clamp(k, 0, 1);
+  }
+  var sc2 = (k < 0.5) ? lerp(1.7, 0.94, smoothstep(k / 0.5))
+                      : lerp(0.94, 1, smoothstep((k - 0.5) / 0.5));
+  var alpha = clamp(k * 3, 0, 1);
+  // impact shock ring (motion-only)
+  if (!view.rm && k > 0.42 && k < 0.9) {
+    var rk = (k - 0.42) / 0.48;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(x, y, size * (0.55 + rk * 0.5), 0, 6.2832);
+    ctx.strokeStyle = rgba(PAL.hanko, (1 - rk) * 0.4);
+    ctx.lineWidth = 2 * scale;
+    ctx.stroke();
+    ctx.restore();
+  }
+  ctx.save();
+  ctx.globalAlpha *= alpha;
+  ctx.translate(x, y);
+  ctx.rotate(-8 * Math.PI / 180);
+  ctx.scale(sc2, sc2);
+  // ink bleed halo under the body, then the seal itself
+  drawStamp_seal(ctx, size * 0.54, 0.30, 2.2);
+  drawStamp_seal(ctx, size * 0.5, 0.92, 1);
+  // inner seal border, washi
+  roundRect(ctx, -size * 0.36, -size * 0.36, size * 0.72, size * 0.72, size * 0.06);
+  ctx.strokeStyle = rgba(PAL.washi, 0.4);
+  ctx.lineWidth = 1.2 * scale;
+  ctx.stroke();
+  // the grade, brush-serif, washi on hanko red
+  ctx.fillStyle = rgba(PAL.washi, 0.96);
+  ctx.font = '700 ' + Math.round(size * 0.5) + 'px Georgia,"Hiragino Mincho ProN",serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(String(s.grade), 0, 1 * scale);
+  // deterministic ink flecks seeded off the grade letter
+  var seed = String(s.grade).charCodeAt(0) || 65, fi3, fa2, fr2;
+  for (fi3 = 0; fi3 < 4; fi3++) {
+    fa2 = ((seed * 2.399 + fi3 * 1.883) % 6.2832);
+    fr2 = size * (0.56 + 0.1 * (((seed + fi3 * 7) % 5) / 5));
+    ctx.beginPath();
+    ctx.arc(Math.cos(fa2) * fr2, Math.sin(fa2) * fr2, (0.9 + (fi3 % 2) * 0.5) * scale, 0, 6.2832);
+    ctx.fillStyle = rgba(PAL.hanko, 0.5);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
 
 
   // ---- drawFigures ----
@@ -2086,99 +2830,99 @@ function gesturePhase(t, period, offset) {                              // deter
 // phase in [0,1). Amplitudes stay in the 2-4px (unscaled) band per the brief;
 // every drawn SIZE still multiplies by the module `scale`, never a position.
 function gestureChef(ctx, cx, feetY, headCy, ph) {                      // chop/stir: knife flicks over a board
-  var handX = cx + 6.5 * scale, boardY = feetY - 8 * scale;
+  var handX = cx + 6.5 * figs, boardY = feetY - 8 * figs;
   var k = Math.abs(Math.sin(2 * Math.PI * ph));                        // 0..1, sharp at the down-chop
-  var bladeY = boardY - 5 * scale - k * 3 * scale;
+  var bladeY = boardY - 5 * figs - k * 3 * figs;
   ctx.save();
   ctx.strokeStyle = rgba(PAL.washi, 0.55);
-  ctx.lineWidth = 1.1 * scale;
+  ctx.lineWidth = 1.1 * figs;
   ctx.lineCap = 'round';
-  ctx.beginPath(); ctx.moveTo(handX - 4 * scale, boardY); ctx.lineTo(handX + 4 * scale, boardY); ctx.stroke();  // board
+  ctx.beginPath(); ctx.moveTo(handX - 4 * figs, boardY); ctx.lineTo(handX + 4 * figs, boardY); ctx.stroke();  // board
   ctx.strokeStyle = rgba(PAL.ink, 0.6);
-  ctx.lineWidth = 1.3 * scale;
-  ctx.beginPath(); ctx.moveTo(handX, bladeY); ctx.lineTo(handX, bladeY + 4 * scale); ctx.stroke();              // blade
+  ctx.lineWidth = 1.3 * figs;
+  ctx.beginPath(); ctx.moveTo(handX, bladeY); ctx.lineTo(handX, bladeY + 4 * figs); ctx.stroke();              // blade
   ctx.restore();
 }
 function gestureRod(ctx, cx, feetY, headCy, ph) {                       // specialist: rod-tip flick
-  var handX = cx + 6 * scale, handY = feetY - 13 * scale;
+  var handX = cx + 6 * figs, handY = feetY - 13 * figs;
   var ang = -34 + 16 * Math.sin(2 * Math.PI * ph);
   ctx.save();
   ctx.translate(handX, handY);
   ctx.rotate(ang * Math.PI / 180);
   ctx.strokeStyle = rgba(PAL.ink, 0.55);
-  ctx.lineWidth = 1 * scale;
+  ctx.lineWidth = 1 * figs;
   ctx.lineCap = 'round';
-  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(13 * scale, 0); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(13 * figs, 0); ctx.stroke();
   ctx.restore();
 }
 function gestureClipboard(ctx, cx, feetY, headCy, ph) {                 // comms: clipboard flip
-  var x = cx - 6 * scale, y = feetY - 14 * scale;
+  var x = cx - 6 * figs, y = feetY - 14 * figs;
   var tilt = 9 * Math.sin(2 * Math.PI * ph);
   ctx.save();
   ctx.translate(x, y);
   ctx.rotate(tilt * Math.PI / 180);
   ctx.fillStyle = rgba(PAL.washi, 0.82);
   ctx.strokeStyle = rgba(PAL.ink, 0.4);
-  ctx.lineWidth = 0.8 * scale;
-  roundRect(ctx, -2.4 * scale, -3.2 * scale, 4.8 * scale, 6.4 * scale, 0.8 * scale);
+  ctx.lineWidth = 0.8 * figs;
+  roundRect(ctx, -2.4 * figs, -3.2 * figs, 4.8 * figs, 6.4 * figs, 0.8 * figs);
   ctx.fill(); ctx.stroke();
   ctx.restore();
 }
 function gestureScan(ctx, cx, feetY, headCy, ph) {                      // safetyLead: horizon scan (hand-shade sweep)
-  var sweep = Math.sin(2 * Math.PI * ph) * 4 * scale;
+  var sweep = Math.sin(2 * Math.PI * ph) * 4 * figs;
   ctx.save();
   ctx.strokeStyle = rgba(PAL.ink, 0.5);
-  ctx.lineWidth = 1.1 * scale;
+  ctx.lineWidth = 1.1 * figs;
   ctx.lineCap = 'round';
   ctx.beginPath();
-  ctx.moveTo(cx - 3 * scale, headCy - 4.5 * scale);
-  ctx.lineTo(cx - 3 * scale + sweep, headCy - 6.2 * scale);
+  ctx.moveTo(cx - 3 * figs, headCy - 4.5 * figs);
+  ctx.lineTo(cx - 3 * figs + sweep, headCy - 6.2 * figs);
   ctx.stroke();
   ctx.restore();
 }
 function gestureCrate(ctx, cx, feetY, headCy, ph) {                     // logi: crate lift
   var liftK = (Math.sin(2 * Math.PI * ph) + 1) / 2;
-  var y = feetY - 7 * scale - liftK * 3 * scale;
+  var y = feetY - 7 * figs - liftK * 3 * figs;
   ctx.save();
   ctx.fillStyle = rgba(PAL.washiWarm, 0.5);
   ctx.strokeStyle = rgba(PAL.ink, 0.45);
-  ctx.lineWidth = 0.9 * scale;
-  roundRect(ctx, cx - 4 * scale, y - 3.5 * scale, 8 * scale, 5.5 * scale, 1 * scale);
+  ctx.lineWidth = 0.9 * figs;
+  roundRect(ctx, cx - 4 * figs, y - 3.5 * figs, 8 * figs, 5.5 * figs, 1 * figs);
   ctx.fill(); ctx.stroke();
   ctx.restore();
 }
 function gestureTally(ctx, cx, feetY, headCy, ph) {                    // budgetLead: tally count (tick at hand)
-  var x = cx + 6.5 * scale, y = feetY - 12 * scale + Math.sin(2 * Math.PI * ph) * 1.4 * scale;
+  var x = cx + 6.5 * figs, y = feetY - 12 * figs + Math.sin(2 * Math.PI * ph) * 1.4 * figs;
   ctx.save();
   ctx.strokeStyle = rgba(PAL.ink, 0.55);
-  ctx.lineWidth = 1 * scale;
+  ctx.lineWidth = 1 * figs;
   ctx.lineCap = 'round';
-  ctx.beginPath(); ctx.moveTo(x, y - 2 * scale); ctx.lineTo(x, y + 2 * scale); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(x, y - 2 * figs); ctx.lineTo(x, y + 2 * figs); ctx.stroke();
   ctx.restore();
 }
 function gestureBeckon(ctx, cx, feetY, headCy, ph) {                    // pm: beckon/point wave
-  var shX = cx + 6 * scale, shY = feetY - 15 * scale;
+  var shX = cx + 6 * figs, shY = feetY - 15 * figs;
   var ang = -18 + 26 * Math.sin(2 * Math.PI * ph);
   ctx.save();
   ctx.translate(shX, shY);
   ctx.rotate(ang * Math.PI / 180);
   ctx.strokeStyle = rgba(PAL.skin, 0.9);
-  ctx.lineWidth = 1.8 * scale;
+  ctx.lineWidth = 1.8 * figs;
   ctx.lineCap = 'round';
-  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(8 * scale, 1.5 * scale); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(8 * figs, 1.5 * figs); ctx.stroke();
   ctx.restore();
 }
 function gestureSurvey(ctx, cx, feetY, headCy, ph) {                    // siteLead/owner: broad survey stance sway
-  var sway = Math.sin(2 * Math.PI * ph) * 1.6 * scale;
+  var sway = Math.sin(2 * Math.PI * ph) * 1.6 * figs;
   ctx.save();
   ctx.strokeStyle = rgba(PAL.ink, 0.42);
-  ctx.lineWidth = 1 * scale;
+  ctx.lineWidth = 1 * figs;
   ctx.lineCap = 'round';
   ctx.beginPath();
-  ctx.moveTo(cx - 6 * scale, feetY - 14 * scale);
-  ctx.lineTo(cx - 8 * scale + sway, feetY - 9 * scale);
-  ctx.moveTo(cx + 6 * scale, feetY - 14 * scale);
-  ctx.lineTo(cx + 8 * scale + sway, feetY - 9 * scale);
+  ctx.moveTo(cx - 6 * figs, feetY - 14 * figs);
+  ctx.lineTo(cx - 8 * figs + sway, feetY - 9 * figs);
+  ctx.moveTo(cx + 6 * figs, feetY - 14 * figs);
+  ctx.lineTo(cx + 8 * figs + sway, feetY - 9 * figs);
   ctx.stroke();
   ctx.restore();
 }
