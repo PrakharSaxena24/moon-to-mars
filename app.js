@@ -117,7 +117,7 @@
     $('lang-en').classList.toggle('on', L === 'en'); $('lang-ja').classList.toggle('on', L === 'ja');
     updateRunButtons();   // keep the pause/guests/drawer imperative labels (and aria-labels) in sync with the language
     paintSetup(); buildRules(); buildLegend();
-    if (!$('intro').classList.contains('hidden')) renderIntro();   // intro-how (HTML) + cast grid re-render in the new language
+    if (!$('intro').classList.contains('hidden')) { renderIntro(); bootVignette(vigLastAuto); }   // cast grid re-render + vignette re-boot (§W4 lifecycle) in the new language
     // mid-run: rebuild station labels but keep every walker where it stands (no teleport)
     if (!$('run').classList.contains('hidden') && sim && anim) { buildSitemap(true); renderSim(sim); if (pawnCardPid && pawnCardOpen()) openPawnCard(pawnCardPid); }
     if (appMode === 'live' && liveState && !$('run').classList.contains('hidden')) {
@@ -1327,6 +1327,9 @@
         night: sim.mode === 'minute' && (sim.clockMin < 330 || sim.clockMin >= 1110),
         speedMult: speedMult, guestsVisible: guestsVisible,
         hoverPid: hoverPid, spotlightPid: stageSpotPid, tintMap: stageTint, gapState: stageGapState,
+        hoverWord: (function () { if (!hoverPid) return '';
+          var hp = null, hi; for (hi = 0; hi < sim.participants.length; hi++) if (sim.participants[hi].id === hoverPid) hp = sim.participants[hi];
+          return hp ? (T()[STATE_KEY[hp.state]] || hp.state) : ''; })(),
         fig: anim.fig, guest: anim.guest, boat: anim.boat, wakes: anim.wakes,
         motes: anim.motes, cascade: anim.cascade,
         ghost: stageGhost, trail: stageTrail, chain: stageChain, hotPts: anim.hotPts,
@@ -2139,8 +2142,9 @@
       if (m === 'live' && $('run').classList.contains('hidden')) enterMode('live');
       else if (m === 'morning' && $('setup').classList.contains('hidden')) enterMode('morning');
     });
-    $('cast-open').addEventListener('click', showIntro);
+    $('cast-open').addEventListener('click', function () { showIntro(false); });   // reopen -> Replay poster, never autoplay (§W4)
     $('intro-start').addEventListener('click', startFromIntro);
+    $('vig-skip').addEventListener('click', vigSkip);
     $('intro-how-btn').addEventListener('click', function () { modalOpening('rules-modal'); $('rules-modal').classList.add('show'); $('rules-close').focus(); });
     $('rules-open').addEventListener('click', function () { modalOpening('rules-modal'); $('rules-modal').classList.add('show'); $('rules-close').focus(); });
     $('rules-close').addEventListener('click', function () { $('rules-modal').classList.remove('show'); modalClosed(); });
@@ -2416,7 +2420,9 @@
   function markIntroSeen() { try { localStorage.setItem('prs_intro_seen', '1'); } catch (e) {} }
   function castCard(p) {
     var r = P.role(p.roleId), t = T(), primary = nm(p.name), alt = (L === 'ja') ? p.name.en : p.name.jp;
-    return '<div class="castcard" style="--rc:' + r.color + '">' +
+    // §W4 text diet: the one-line duty moves to a hover/tap reveal (tabindex -> :focus-within on touch;
+    // the text stays in the DOM, so screen readers keep reading it either way)
+    return '<div class="castcard" style="--rc:' + r.color + '" tabindex="0">' +
       '<div class="ipawn"><div class="astro" style="--rc:' + r.color + '"><div class="fig"><span class="sh"></span>' +
         '<div class="pw"><span class="lg l"></span><span class="lg r"></span><span class="tr"></span><span class="hd"></span><span class="hat"></span></div></div></div></div>' +
       '<div class="cc-name">' + primary + (alt && alt !== primary ? '<span class="cc-alt">' + alt + '</span>' : '') + '</div>' +
@@ -2425,7 +2431,6 @@
     '</div>';
   }
   function renderIntro() {
-    var how = $('intro-how'); if (how) how.innerHTML = T().introHow;    // has <b> markup -> innerHTML, not data-i18n
     var box = $('intro-cast'); if (!box) return;
     var t = T(), parts = P.mergePlan({ seed: 1, overrides: {} }).participants;
     var aibos = parts.filter(function (p) { return p.company !== 'co_chef'; });
@@ -2437,21 +2442,374 @@
         '<div class="castgrid">' + chefs.map(castCard).join('') + '</div></div>' +
       '<div class="guestcard"><div class="gc-ic" aria-hidden="true">👥</div><div class="gc-txt"><b>' + t.introGuestsT + '</b><p>' + t.introGuestsB + '</p></div></div>';
   }
-  function showIntro() {
+  // auto === true (first load only) autoplays the vignette; the Cast-button reopen
+  // gets a Replay ▶ poster instead (spec §5 returning-player behavior)
+  function showIntro(auto) {
     if (timer) { clearInterval(timer); timer = null; }
     stopAnim(); closeModals(); document.body.classList.remove('running');
     ['setup', 'run', 'report'].forEach(function (s) { $(s).classList.add('hidden'); });
     $('live-dock').classList.add('hidden');
     renderIntro();
     $('intro').classList.remove('hidden');
+    bootVignette(auto === true);
     if (window.scrollTo) window.scrollTo(0, 0);
     var s = $('intro-start'); if (s) s.focus();
   }
-  function startFromIntro() { markIntroSeen(); $('intro').classList.add('hidden'); enterMode('live'); }
+  function startFromIntro() { killVignette(); markIntroSeen(); $('intro').classList.add('hidden'); enterMode('live'); }
+
+  // =========================================================================
+  // §W4 COLD-OPEN VIGNETTE — a ~15s scripted, deterministic mini-run on the
+  // real stage renderer (spec §5), inside the intro hero. It drives its OWN
+  // P.createSim (the Live config: classic fixes sound, arrows gappy, seed 1)
+  // with a DEDICATED rAF loop and draws via PRS_STAGE.scene onto its own
+  // canvas — it never reads or writes the shared anim/sim/fixed/dayOv state.
+  // Beats: walk-in (caption 1) → the seed's first info gap freezes the
+  // consuming pawn ❓ (caption 2 + glowing "hand him the card" prompt,
+  // auto-fires after ~4s) → a real handoff edit on the vignette's own cfg
+  // (the same overrides.handoffs merge shape Live's commitChannel writes),
+  // gold motes fly, the mini rail row flips red→green with a +N float
+  // (caption 3) → hold, Start ▶ pulses.
+  // LIFECYCLE (the §18 rAF-leak class): ONE module-scoped handle
+  // {raf, sim, cv}; killVignette() runs on Start, Skip, enterMode and
+  // applyLang (which re-boots); boot always kills any prior instance; the
+  // loop self-kills if #run ever becomes visible. Canvas + loop are
+  // destroyed, never hidden. Reduced motion: three static captioned stills
+  // via one-shot scene() calls — no loop at all.
+  // =========================================================================
+  var VIG = { raf: null, sim: null, cv: null, ctx: null, host: null, prompt: null,
+    fig: {}, motes: [], boat: null, cfg: null, plan: null, trip1: null, trip2: null,
+    gap: null, gapPid: null, gapState: null, gapTint: null,
+    phase: '', last: 0, lastTick: 0, ticks: 0, promptAt: 0, fixAt: 0, holdMin: 0,
+    w: 0, h: 0, sc: 1 };
+  var vigLastAuto = true;              // last boot mode, so a language switch re-boots into the same face
+
+  // the Live config, scoped to the vignette (startLive's fixed[] pattern: every
+  // classic fix true, fixHandoffs false) — never touches the player's `fixed`/dayOv
+  function vigCfg() {
+    var cfg = { seed: 1, overrides: {} };
+    DETS.forEach(function (d) { if (DET_FIX[d] !== 'fixHandoffs') cfg = P.applyFix(cfg, DET_FIX[d]); });
+    return cfg;
+  }
+  // nextLiveGap's ordering logic against an explicit plan (no liveState involved)
+  function vigGaps(plan) {
+    var fd = P.fishdaySchedule(plan), out = [];
+    fd.missing.forEach(function (m) { out.push({ taskId: m.taskId, cardId: m.cardId, kind: 'missing' }); });
+    fd.late.forEach(function (l) { out.push({ taskId: l.taskId, cardId: l.cardId, kind: 'late' }); });
+    out.forEach(function (g) { var t = byId(plan.tasks, g.taskId); g.startMin = t ? t.startMin : 9999; });
+    out.sort(function (a, b) { return a.startMin - b.startMin; });
+    return out;
+  }
+  function vigBuildData() {
+    VIG.cfg = vigCfg(); VIG.plan = P.mergePlan(VIG.cfg);
+    VIG.trip1 = P.scoreTrip(VIG.plan); VIG.trip2 = null;
+    VIG.gap = vigGaps(VIG.plan)[0] || null;
+    VIG.gapPid = null; VIG.gapState = null; VIG.gapTint = null;
+    if (VIG.gap) {
+      var to = byId(VIG.plan.tasks, VIG.gap.taskId);
+      if (to) {
+        VIG.gapPid = (to.assignedIds || [])[0] || null;
+        if (VIG.gapPid) VIG.gapState = { pid: VIG.gapPid, state: gapKindState(VIG.gap, to) };
+        VIG.gapTint = {}; VIG.gapTint[to.station] = 'red';
+      }
+    }
+  }
+  // "hand him the card": commit face-to-face handoffs for EVERY open card of the frozen
+  // task (one gesture must truly unfreeze the pawn), through the same overrides.handoffs
+  // shape commitChannel writes — but into the vignette's own cfg only
+  function vigApplyFix() {
+    var plan = VIG.plan, to = byId(plan.tasks, VIG.gap.taskId), handed = [];
+    if (!to) return handed;
+    var all = vigGaps(plan).filter(function (g) { return g.taskId === VIG.gap.taskId; });
+    var o = VIG.cfg.overrides; o.handoffs = o.handoffs || {};
+    all.forEach(function (g) {
+      var from = producerOf(plan, g.cardId); if (!from) return;
+      var trig = { type: 'onTaskDone', taskId: from.id };
+      if (g.kind === 'late') {
+        var ex = plan.handoffs.filter(function (h) { return h.cardId === g.cardId && h.toRoleId === to.ownerRoleId; })[0];
+        if (ex) o.handoffs[ex.id] = Object.assign({}, ex, { channel: 'faceToFace', trigger: trig });
+      } else {
+        var assume = (to.assumeOn || []).indexOf(g.cardId) >= 0;
+        o.handoffs['hvig_' + g.cardId + '_' + to.ownerRoleId] = { cardId: g.cardId, fromRoleId: from.ownerRoleId, fromTaskId: from.id, toRoleId: to.ownerRoleId, toTaskId: to.id, trigger: trig, channel: 'faceToFace', ifLate: assume ? 'assume' : 'idle', reworkKind: assume ? 'wrongFish' : null, content: { en: '', jp: '' } };
+      }
+      handed.push({ fromPid: (from.assignedIds || [])[0] || null, fromSt: from.station, toSt: to.station });
+    });
+    return handed;
+  }
+  // fan-stacked px targets per duty-holder (figTargets' rule, on the vignette's own dims)
+  function vigTargets(s) {
+    var pos = {}, bucket = {};
+    s.stations.forEach(function (st) { bucket[st.id] = []; });
+    s.participants.forEach(function (p) { if (bucket[p.station]) bucket[p.station].push(p); });
+    var colGap = 23 * VIG.sc, rowGap = 24 * VIG.sc, feet = 36 * VIG.sc;
+    s.stations.forEach(function (st) {
+      var sd = P.station(st.id), n = bucket[st.id].length;
+      bucket[st.id].forEach(function (p, i) {
+        var col = i % 4, row = Math.floor(i / 4), rowN = Math.min(4, n - row * 4);
+        pos[p.id] = { x: sd.x * VIG.w + (col - (rowN - 1) / 2) * colGap, y: sd.y * VIG.h + feet + row * rowGap };
+      });
+    });
+    return pos;
+  }
+  function vigSyncFigs(snap) {
+    var pos = vigTargets(VIG.sim);
+    VIG.sim.participants.forEach(function (p) {
+      var t2 = pos[p.id]; if (!t2) return;
+      var f = VIG.fig[p.id];
+      if (!f) f = VIG.fig[p.id] = { pid: p.id, cx: t2.x, cy: t2.y, tx: t2.x, ty: t2.y, walking: false, faceL: false, spdMul: figSpeedMul(p.id) };
+      f.tx = t2.x; f.ty = t2.y;
+      if (snap) { f.cx = t2.x; f.cy = t2.y; f.walking = false; }
+    });
+  }
+  function vigWalk(dt) {
+    var speed = Math.max(70, VIG.w * 0.16);
+    for (var pid in VIG.fig) {
+      var f = VIG.fig[pid], dx = f.tx - f.cx, dy = f.ty - f.cy, d = Math.sqrt(dx * dx + dy * dy);
+      if (d < 1.2) { f.cx = f.tx; f.cy = f.ty; f.walking = false; continue; }
+      var stp = speed * f.spdMul * dt; if (stp > d) stp = d;
+      f.cx += dx / d * stp; f.cy += dy / d * stp;
+      f.walking = true; if (Math.abs(dx) > 2) f.faceL = dx < 0;
+    }
+  }
+  // the hand-built per-frame view bundle PRS_STAGE.scene needs (mirrors frame()'s stageView,
+  // minus everything the vignette doesn't stage: guests, wakes, cascade, hub hotspots)
+  function vigView(rm, showFreeze) {
+    return { w: VIG.w, h: VIG.h, scale: VIG.sc, lang: L, rm: !!rm,
+      night: VIG.sim.mode === 'minute' && (VIG.sim.clockMin < 330 || VIG.sim.clockMin >= 1110),
+      speedMult: 1, guestsVisible: false, hoverPid: null,
+      spotlightPid: showFreeze ? VIG.gapPid : null,
+      tintMap: showFreeze ? VIG.gapTint : null,
+      gapState: showFreeze ? VIG.gapState : null,
+      fig: VIG.fig, guest: {}, boat: VIG.boat, wakes: [],
+      motes: VIG.motes, cascade: { hops: [], has: false },
+      ghost: [{}, {}, {}], trail: [], chain: [], hotPts: [],
+      frozen: !!showFreeze };
+  }
+  function vigTickOnce() {   // Live ignores the fixed checkpoints — so does the vignette
+    if (VIG.sim.paused) { VIG.sim.paused = false; VIG.sim.checkpoint = null; }
+    P.tick(VIG.sim);
+  }
+  function vigCaption(n) {
+    var c = $('vig-caption'); if (!c) return;
+    c.textContent = T()['vg' + n] || '';
+    if (!RM.matches) { c.classList.remove('capin'); void c.offsetWidth; c.classList.add('capin'); }
+  }
+  // the MINI rail row in the caption strip: the Fishing-Day bucket, red while short,
+  // flipping green (+N float) when the card is handed — same ledger currency as the real rail
+  function vigRailRow(ok, withFloat) {
+    var el = $('vig-rail'); if (!el) return;
+    var t = T(), trip = ok ? VIG.trip2 : VIG.trip1; if (!trip) return;
+    var b = trip.byBucket.fishday || { earned: 0, maxPts: 0 };
+    el.classList.remove('hidden');
+    el.innerHTML = '<div class="vig-row ' + (ok ? 'ok' : 'short') + '"><span class="rail-nm">' + t.sb_fishday + '</span><span class="rail-pts">' + b.earned + ' / ' + b.maxPts + '</span></div>';
+    if (ok && withFloat && VIG.trip1) floatDelta(el, '+' + (VIG.trip2.total - VIG.trip1.total));
+  }
+  function vigMount(host) {
+    host.innerHTML = '';
+    var w = host.clientWidth || 820, h = Math.max(240, Math.min(430, Math.round(w * 0.5)));
+    VIG.host = host; VIG.w = w; VIG.h = h;
+    VIG.sc = clamp(Math.min(w / 1000, h / 560), 0.6, 1.2);
+    VIG.boat = { cx: DOCK.x * w, cy: DOCK.y * h };
+    var cv = document.createElement('canvas'); cv.id = 'vig-canvas';
+    cv.setAttribute('role', 'img'); cv.setAttribute('aria-label', T().vgAria);
+    host.appendChild(cv);
+    VIG.cv = cv; VIG.ctx = PRS_STAGE.initStage(cv, { w: w, h: h });
+    var pr = document.createElement('button'); pr.type = 'button';
+    pr.className = 'btn primary glow vig-prompt hidden'; pr.id = 'vig-prompt';
+    pr.textContent = T().vgPrompt;
+    pr.addEventListener('click', function () { vigFix(VIG.last || 0); });
+    host.appendChild(pr);
+    VIG.prompt = pr;
+  }
+  function vigStart() {
+    var host = $('vig-stage'); if (!host) return;
+    vigBuildData();
+    VIG.sim = P.createSim({ seed: 1, overrides: VIG.cfg.overrides }, 'fishday');
+    vigMount(host);
+    VIG.fig = {}; VIG.motes = [];
+    vigSyncFigs(true);                       // everyone starts on their pre-dawn station and walks out from there
+    vigCaption(1);
+    VIG.phase = 'walk'; VIG.last = 0; VIG.lastTick = 0; VIG.ticks = 0;
+    VIG.raf = requestAnimationFrame(vigFrame);
+  }
+  function vigFrame(ts) {
+    if (!VIG.raf) return;
+    VIG.raf = requestAnimationFrame(vigFrame);
+    // hard lifecycle guards: the vignette never runs while #run is visible, and dies with the intro
+    if ($('intro').classList.contains('hidden') || !$('run').classList.contains('hidden')) { killVignette(); return; }
+    if (!VIG.last) { VIG.last = ts; VIG.lastTick = ts; }
+    var dt = Math.min(0.1, (ts - VIG.last) / 1000); VIG.last = ts;
+    if (VIG.host && VIG.host.clientWidth && Math.abs(VIG.host.clientWidth - VIG.w) > 4) vigResize();
+    if (VIG.phase === 'walk') {
+      // beat 1 speed ramp: two slow establishing ticks, then brisk — the freeze lands ~4s in
+      var due = VIG.ticks < 2 ? 620 : 260;
+      if (ts - VIG.lastTick >= due) {
+        VIG.lastTick = ts; VIG.ticks++;
+        vigTickOnce();
+        if (VIG.gap && (VIG.sim.clockMin || 0) >= VIG.gap.startMin - 0.001) VIG.phase = 'freezing';
+        else if (!VIG.gap && (VIG.sim.clockMin || 0) >= 420) vigHold();   // defensive: gap-free seed -> just hold
+      }
+    } else if (VIG.phase === 'freezing') {
+      // beat 2 waits for the consuming pawn to actually reach the gap station before freezing
+      var ff = VIG.gapPid && VIG.fig[VIG.gapPid];
+      if (!ff || !ff.walking) {
+        VIG.phase = 'frozen'; VIG.promptAt = ts;
+        vigCaption(2); vigRailRow(false, false);
+        if (VIG.prompt) VIG.prompt.classList.remove('hidden');
+      }
+    } else if (VIG.phase === 'frozen') {
+      if (ts - VIG.promptAt > 4000) vigFix(ts);         // auto-advance if the player never clicks
+    } else if (VIG.phase === 'handoff') {
+      for (var mi = 0; mi < VIG.motes.length; mi++) { var m = VIG.motes[mi]; if (m.state === 0 && ts >= m.armAt) { m.state = 1; m.t0 = ts; } }
+      if (ts - VIG.fixAt > 1250) {                       // motes landed -> unfreeze, flip the rail, caption 3
+        VIG.phase = 'resume'; VIG.lastTick = ts;
+        VIG.holdMin = (VIG.sim.clockMin || 0) + 25;      // stop just before the seed's NEXT gap bites
+        vigCaption(3); vigRailRow(true, true);
+      }
+    } else if (VIG.phase === 'resume') {
+      if (ts - VIG.lastTick >= 420) {
+        VIG.lastTick = ts;
+        vigTickOnce();
+        if ((VIG.sim.clockMin || 0) >= VIG.holdMin) vigHold();
+      }
+    }
+    vigSyncFigs(false);
+    vigWalk(dt);
+    var showFreeze = VIG.phase === 'freezing' || VIG.phase === 'frozen' || VIG.phase === 'handoff';
+    if (VIG.prompt && !VIG.prompt.classList.contains('hidden') && VIG.gapPid) {
+      var fp = VIG.fig[VIG.gapPid];
+      if (fp) { VIG.prompt.style.left = Math.round(fp.cx) + 'px'; VIG.prompt.style.top = Math.round(fp.cy - 66 * VIG.sc) + 'px'; }
+    }
+    PRS_STAGE.scene(VIG.ctx, VIG.sim, ts / 1000, vigView(false, showFreeze));
+  }
+  // beat 3: apply the REAL handoff edit (vignette-scoped cfg), rebuild + fast-forward the sim
+  // to the current minute (commitChannel's pattern), and fly gold motes producer→consumer
+  function vigFix(ts) {
+    if (VIG.phase !== 'frozen' && VIG.phase !== 'freezing') return;
+    var handed = vigApplyFix();
+    var now = VIG.sim.clockMin || 0;
+    VIG.plan = P.mergePlan(VIG.cfg);
+    VIG.trip2 = P.scoreTrip(VIG.plan);
+    VIG.sim = P.createSim({ seed: 1, overrides: VIG.cfg.overrides }, 'fishday');
+    var guard = 0;
+    while ((VIG.sim.clockMin || 0) < now && !VIG.sim.finished && guard++ < 400) vigTickOnce();
+    var toF = VIG.gapPid && VIG.fig[VIG.gapPid];
+    VIG.motes = [];
+    for (var i = 0; i < handed.length; i++) {
+      var fromF = handed[i].fromPid && VIG.fig[handed[i].fromPid];
+      var fs = P.station(handed[i].fromSt), tn = P.station(handed[i].toSt);
+      VIG.motes.push({ state: i === 0 ? 1 : 0, t0: ts, armAt: ts + i * 300, late: false, noPing: false,
+        ax: fromF ? fromF.cx / VIG.w : fs.x, ay: fromF ? (fromF.cy - 20 * VIG.sc) / VIG.h : fs.y,
+        bx: toF ? toF.cx / VIG.w : tn.x, by: toF ? (toF.cy - 20 * VIG.sc) / VIG.h : tn.y,
+        toSt: handed[i].toSt, dur: 1000 });
+    }
+    VIG.fixAt = ts; VIG.phase = 'handoff';
+    if (VIG.prompt) VIG.prompt.classList.add('hidden');
+  }
+  function vigHold() {
+    VIG.phase = 'hold';                                   // ambience keeps breathing; the clock rests
+    var st = $('intro-start'); if (st && !RM.matches) st.classList.add('vig-pulse');
+  }
+  function vigResize() {
+    var host = VIG.host; if (!host || !VIG.cv) return;
+    var w = host.clientWidth || VIG.w, h = Math.max(240, Math.min(430, Math.round(w * 0.5)));
+    var sx = VIG.w ? w / VIG.w : 1, sy = VIG.h ? h / VIG.h : 1;
+    VIG.w = w; VIG.h = h; VIG.sc = clamp(Math.min(w / 1000, h / 560), 0.6, 1.2);
+    VIG.boat = { cx: DOCK.x * w, cy: DOCK.y * h };
+    PRS_STAGE.initStage(VIG.cv, { w: w, h: h });
+    for (var pid in VIG.fig) { var f = VIG.fig[pid]; f.cx *= sx; f.cy *= sy; f.tx *= sx; f.ty *= sy; }
+  }
+  // one-shot still of a beat: 1 = walk-in settled (pre-gap) · 2 = frozen ❓ · 3 = fixed & moving.
+  // Beat 3 WRITES the fix into VIG.cfg (call it last).
+  function vigStillSim(beat) {
+    var trip2 = null;
+    if (beat === 3 && VIG.gap) { vigApplyFix(); VIG.plan = P.mergePlan(VIG.cfg); trip2 = P.scoreTrip(VIG.plan); }
+    var sim = P.createSim({ seed: 1, overrides: VIG.cfg.overrides }, 'fishday');
+    var base = VIG.gap ? VIG.gap.startMin : 300;
+    var upTo = beat === 1 ? base - 15 : beat === 2 ? base : base + 25;
+    var guard = 0;
+    while ((sim.clockMin || 0) < upTo && !sim.finished && guard++ < 400) { if (sim.paused) { sim.paused = false; sim.checkpoint = null; } P.tick(sim); }
+    return { sim: sim, trip2: trip2 };
+  }
+  // reduced motion: three static captioned frames, one-shot scene() calls, NO loop
+  function vigStills() {
+    var host = $('vig-stage'); if (!host) return;
+    VIG.host = host; host.innerHTML = ''; host.classList.add('stills');
+    vigBuildData();
+    var t = T(), wrap = document.createElement('div'); wrap.className = 'vig-stills';
+    host.appendChild(wrap);
+    for (var b = 1; b <= 3; b++) {
+      var cell = document.createElement('div'); cell.className = 'vig-still';
+      var cv = document.createElement('canvas');
+      cv.setAttribute('role', 'img'); cv.setAttribute('aria-label', t.vgAria);
+      var cap = document.createElement('div'); cap.className = 'vig-still-cap'; cap.textContent = t['vg' + b] || '';
+      cell.appendChild(cv); cell.appendChild(cap); wrap.appendChild(cell);
+      var w = Math.max(180, cell.clientWidth || 260), h = Math.max(140, Math.round(w * 0.62));
+      var ctx = PRS_STAGE.initStage(cv, { w: w, h: h });
+      var still = vigStillSim(b);
+      VIG.sim = still.sim; VIG.w = w; VIG.h = h;
+      VIG.sc = clamp(Math.min(w / 1000, h / 560), 0.45, 1);
+      VIG.boat = { cx: DOCK.x * w, cy: DOCK.y * h };
+      VIG.fig = {}; vigSyncFigs(true);
+      PRS_STAGE.scene(ctx, still.sim, 1, vigView(true, b === 2));
+    }
+    VIG.sim = null;                                       // nothing live to keep — stills are done
+  }
+  // static poster + Replay ▶: final=true (Skip) shows the fixed end-state + caption 3;
+  // final=false (Cast-button reopen) shows the beat-1 harbor + caption 1
+  function vigPoster(final) {
+    var host = $('vig-stage'); if (!host) return;
+    vigBuildData();
+    var still = vigStillSim(final ? 3 : 1);
+    vigMount(host);
+    VIG.sim = still.sim;
+    VIG.fig = {}; VIG.motes = [];
+    vigSyncFigs(true);
+    vigCaption(final ? 3 : 1);
+    if (final && still.trip2) { VIG.trip2 = still.trip2; vigRailRow(true, false); }
+    PRS_STAGE.scene(VIG.ctx, VIG.sim, 1, vigView(true, false));
+    VIG.phase = 'poster';
+    var rp = document.createElement('button'); rp.type = 'button';
+    rp.className = 'btn primary vig-replay'; rp.id = 'vig-replay';
+    rp.textContent = T().vgReplay;
+    rp.addEventListener('click', function () { bootVignette(true); });   // full boot: re-shows Skip + sets the re-boot mode
+    host.appendChild(rp);
+  }
+  function vigSkip() {
+    if ($('intro').classList.contains('hidden')) return;
+    killVignette();
+    if (RM.matches) { vigStills(); return; }              // nothing to skip under RM — re-render the stills
+    vigPoster(true);
+    var sk = $('vig-skip'); if (sk) sk.classList.add('hidden');   // a poster has nothing left to skip (Replay re-shows it)
+  }
+  function bootVignette(autoplay) {
+    killVignette();
+    if (!window.PRS_STAGE || !$('vig-stage')) return;
+    if ($('intro').classList.contains('hidden')) return;
+    if (!$('run').classList.contains('hidden')) return;   // never while the run stage is visible
+    vigLastAuto = !!autoplay;
+    var sk = $('vig-skip'); if (sk) sk.classList.toggle('hidden', RM.matches || !autoplay);
+    if (RM.matches) { vigStills(); return; }
+    if (!autoplay) { vigPoster(false); return; }
+    vigStart();
+  }
+  function killVignette() {
+    if (VIG.raf) cancelAnimationFrame(VIG.raf);
+    VIG.raf = null; VIG.sim = null; VIG.cv = null; VIG.ctx = null; VIG.prompt = null;
+    VIG.fig = {}; VIG.motes = []; VIG.boat = null;
+    VIG.cfg = null; VIG.plan = null; VIG.trip1 = null; VIG.trip2 = null;
+    VIG.gap = null; VIG.gapPid = null; VIG.gapState = null; VIG.gapTint = null;
+    VIG.phase = ''; VIG.last = 0; VIG.lastTick = 0; VIG.ticks = 0;
+    var vs = $('vig-stage'); if (vs) { vs.innerHTML = ''; vs.classList.remove('stills'); }  // destroyed, not hidden
+    var st = $('intro-start'); if (st) st.classList.remove('vig-pulse');
+    var vr = $('vig-rail'); if (vr) { vr.classList.add('hidden'); vr.innerHTML = ''; }
+    var vc = $('vig-caption'); if (vc) { vc.textContent = ''; vc.classList.remove('capin'); }
+    VIG.host = null;
+  }
 
   function enterMode(m) {
     var was = appMode;
     appMode = m;
+    killVignette();                                               // §W4 lifecycle: the vignette dies with the intro
     var iel = $('intro'); if (iel) iel.classList.add('hidden');   // leaving the intro whenever a real mode is entered
     $('mode-live').classList.toggle('on', m === 'live');
     $('mode-morning').classList.toggle('on', m === 'morning');
@@ -2713,5 +3071,5 @@
   // ---- init ----
   bind(); applyLang();
   // first-time players land on the graphic cast intro; returning players (localStorage) go straight in.
-  if (introSeen()) enterMode('live'); else showIntro();
+  if (introSeen()) enterMode('live'); else showIntro(true);   // first load autoplays the vignette (§W4)
 })();

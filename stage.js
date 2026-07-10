@@ -2383,6 +2383,8 @@ function drawFigures(ctx, sim, t, view) {
     // ---- name chip: role icon + localized name — stall state, spotlight, or hover ----
     if (STALL_STATES[state] || p.id === view.spotlightPid || p.id === view.hoverPid) {
       var label = (role.icon ? role.icon + ' ' : '') + nm(p.name);
+      // hovered pawn: append the localized state word (supplied by app.js via view.hoverWord)
+      if (p.id === view.hoverPid && view.hoverWord) label += ' · ' + view.hoverWord;
       chip(ctx, cx, feetY + 5 * scale, label, { font: chipFont, pad: chipPad, h: chipH, r: chipR });
     }
 

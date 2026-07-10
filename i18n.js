@@ -288,8 +288,6 @@
       btnCast: '👥 Cast',
       introKicker: 'REHEARSE BEFORE YOU RUN',
       introLead: 'A 10-day company fishing trip to Ogasawara — 8 organizers, 3 chefs and 13 guests. You decide who does what and when.',
-      introHow: 'Plan who does what → press <b>Run</b> → watch where people <b>stall</b> → that spot is the gap to fix. Fix it, re-run toward <b>100</b>.',
-      introThesis: 'A capable person still stalls the moment they need a fact they don’t yet hold. The stalled character isn’t a failure — the place they stall is the place to fix the plan.',
       introCastAibos: 'AIBOS · the 8 organizers',
       introCastAibosSub: 'You assign each of these duties.',
       introCastChefs: 'The 3 chefs',
@@ -326,7 +324,16 @@
 
       // --- function-valued (counts) ---
       dayLine: function (d, t) { return 'Day ' + d + ' / ' + t; },
-      hintGaps: function (n) { return '⚠️ ' + n + ' gap' + (n === 1 ? '' : 's') + ' still open — characters will stall there. Close them, or run to see what happens.'; }
+      hintGaps: function (n) { return '⚠️ ' + n + ' gap' + (n === 1 ? '' : 's') + ' still open — characters will stall there. Close them, or run to see what happens.'; },
+
+      // --- §W4 cold-open vignette (intro hero) ---
+      vg1: 'Everyone has a job.',
+      vg2: 'But information has a clock.',
+      vg3: 'The place they stall is the place to fix the plan. 100 = nobody waits.',
+      vgPrompt: 'Hand him the card',
+      vgSkip: 'Skip',
+      vgReplay: 'Replay ▶',
+      vgAria: 'Intro vignette: at dawn the crew walk to their stations; one crewmate freezes, waiting for information; handing over the card unfreezes him and the score rises.'
     },
 
     ja: {
@@ -610,8 +617,6 @@
       btnCast: '👥 登場人物',
       introKicker: '実行の前に、リハーサル',
       introLead: '小笠原への10日間の社員釣行——運営8名・料理長3名・ゲスト13名。誰が・いつ・何をするかを、あなたが決めます。',
-      introHow: '誰が何をするか計画 →「<b>実行</b>」→ 人が<b>止まる</b>場所を観察 → そこが直すべき欠陥。直して、<b>100点</b>を目指して再実行。',
-      introThesis: '有能な人でも、まだ持っていない情報が必要になった瞬間に止まる。止まったキャラクターは失敗ではない——止まった場所こそ、計画を直すべき場所。',
       introCastAibos: 'AIBOS・運営8名',
       introCastAibosSub: 'この役割をあなたが割り当てます。',
       introCastChefs: '料理長 3名',
@@ -648,7 +653,16 @@
 
       // --- function-valued ---
       dayLine: function (d, t) { return d + '日目 / ' + t; },
-      hintGaps: function (n) { return '⚠️ 未修正のギャップが ' + n + ' 件——そこで人が止まります。閉じるか、実行して確認を。'; }
+      hintGaps: function (n) { return '⚠️ 未修正のギャップが ' + n + ' 件——そこで人が止まります。閉じるか、実行して確認を。'; },
+
+      // --- §W4 cold-open vignette (intro hero) ---
+      vg1: '全員に役割がある。',
+      vg2: 'だが、情報には時刻がある。',
+      vg3: '止まった場所こそ、計画を直す場所。100点＝誰も待たない。',
+      vgPrompt: 'カードを渡す',
+      vgSkip: 'スキップ',
+      vgReplay: 'もう一度見る ▶',
+      vgAria: '導入ビネット：夜明けの港でクルーが持ち場へ歩き出す。一人が情報待ちで止まり、カードを渡すと再び動き出してスコアが上がる。'
     }
   };
 

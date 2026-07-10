@@ -860,15 +860,10 @@ body.canvas-stage .sitemap::after{display:none;} /* vignette is drawn on the can
 .intro-kicker{font-size:12px;letter-spacing:.28em;text-transform:uppercase;color:var(--accent-light);font-weight:700;margin-bottom:8px;}
 .intro-hero h1{font-family:var(--serif);font-size:44px;line-height:1.05;color:#f6efdc;margin:0 0 12px;font-weight:700;}
 .intro-lead{max-width:720px;color:#e7ddc6;font-size:16px;line-height:1.55;margin:0 0 10px;}
-.intro-how{max-width:760px;color:#cdbfa2;font-size:15px;line-height:1.6;margin:0 0 20px;}
-.intro-how b{color:var(--accent-light);font-weight:700;}
 .intro-cta{display:flex;gap:12px;align-items:center;flex-wrap:wrap;}
 .btn.lg{height:48px;padding:0 26px;font-size:16px;}
 .intro-hero .btn.ghost{color:#e7ddc6;border-color:rgba(227,196,107,.35);}
 .intro-hero .btn.ghost:hover{background:rgba(227,196,107,.12);}
-.intro-thesis{max-width:960px;margin:0 auto 26px;padding:14px 20px;font-family:var(--serif);font-style:italic;
-  font-size:16px;line-height:1.6;color:var(--ink2);background:var(--bg2);
-  border-left:4px solid var(--accent);border-radius:0 var(--r-md) var(--r-md) 0;}
 .intro-meet{font-family:var(--serif);font-size:24px;color:var(--ink);margin:0 0 4px;text-align:center;}
 .cast-group{margin:18px 0 8px;}
 .cast-h{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:16px 0 12px;
@@ -887,7 +882,12 @@ body.canvas-stage .sitemap::after{display:none;} /* vignette is drawn on the can
 .cc-name .cc-alt{display:block;font-weight:500;font-size:11.5px;color:var(--ink3);margin-top:1px;}
 .cc-role{margin:5px 0 6px;font-size:12px;color:var(--rc,var(--ink2));font-weight:600;}
 .cc-role i{font-style:normal;margin-right:4px;}
-.cc-duty{font-size:12px;line-height:1.4;color:var(--ink2);}
+/* §W4 text diet: the one-line duty reveals on hover / tap-focus (the text stays in the
+   DOM either way, so screen readers keep reading it; opacity-hide, never display:none) */
+.cc-duty{position:absolute;left:0;right:0;bottom:0;padding:26px 12px 10px;font-size:12px;line-height:1.4;color:var(--ink);
+  background:linear-gradient(rgba(247,242,230,0),var(--bg1) 34%);opacity:0;pointer-events:none;transition:opacity .15s ease;}
+.castcard:hover .cc-duty,.castcard:focus .cc-duty,.castcard:focus-within .cc-duty{opacity:1;}
+.castcard:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
 .guestcard{display:flex;align-items:center;gap:16px;margin:20px 0 0;padding:14px 18px;
   background:var(--bg2);border:1px dashed var(--line2);border-radius:var(--r-md);}
 .guestcard .gc-ic{font-size:34px;flex:0 0 auto;}
@@ -899,3 +899,51 @@ body.canvas-stage .sitemap::after{display:none;} /* vignette is drawn on the can
   .castgrid{grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:9px;}
 }
 @media(prefers-reduced-motion:reduce){ .castcard{transition:none;} .castcard:hover{transform:none;} }
+
+/* ============================================================
+   §W4 COLD-OPEN VIGNETTE — the intro hero shows the game in 15s
+   on the real canvas stage. Canvas + loop are created by
+   bootVignette() and destroyed by killVignette() (never hidden).
+   ============================================================ */
+.vig{margin:6px 0 18px;}
+.vig-stage{position:relative;border-radius:12px;overflow:hidden;min-height:120px;
+  background:var(--indigo-deep,#141c26);box-shadow:0 10px 26px rgba(10,14,20,.45), inset 0 0 0 1px rgba(227,196,107,.22);}
+.vig-stage canvas{display:block;max-width:100%;}
+/* the glowing "hand him the card" prompt chip, tracked onto the frozen pawn each frame */
+.vig-prompt{position:absolute;transform:translate(-50%,-100%);white-space:nowrap;z-index:3;}
+/* Replay ▶ overlay on the static poster (Skip / Cast-button reopen) */
+.vig-replay{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:3;
+  box-shadow:0 6px 22px rgba(10,14,20,.55);}
+/* caption strip: the three spec lines, big washi type, one at a time + the mini rail row */
+.vig-strip{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;
+  min-height:46px;margin-top:12px;}
+.vig-caption{font-family:var(--serif);font-size:21px;line-height:1.35;font-weight:700;color:#f6efdc;}
+.vig-caption.capin{animation:vigcap .5s ease;}
+@keyframes vigcap{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:none;}}
+/* mini ledger rail row — Fishing Day bucket, red while short, green once the card is handed */
+.vig-rail{position:relative;flex-shrink:0;}
+.vig-row{display:flex;align-items:baseline;gap:10px;padding:7px 12px;border-radius:7px;
+  font-size:12.5px;background:rgba(246,239,220,.08);border:1px solid rgba(227,196,107,.3);color:#e7ddc6;}
+.vig-row .rail-nm{font-weight:700;}
+.vig-row .rail-pts{font-variant-numeric:tabular-nums;font-weight:800;white-space:nowrap;}
+.vig-row.short{border-color:rgba(217,83,79,.65);color:#f3b7ae;background:rgba(217,83,79,.14);}
+.vig-row.ok{border-color:rgba(140,190,100,.6);color:#cfe8b8;background:rgba(140,190,100,.13);}
+.vig-rail .score-float{color:#cfe8b8;right:4px;}
+/* Start ▶ pulses once the vignette holds */
+#intro-start.vig-pulse{animation:vigpulse 1.6s ease-in-out infinite;}
+@keyframes vigpulse{0%,100%{box-shadow:0 3px 0 var(--accent-dark),0 0 0 0 rgba(227,196,107,.55);}
+  50%{box-shadow:0 3px 0 var(--accent-dark),0 0 18px 5px rgba(227,196,107,.5);}}
+/* reduced motion: three static captioned stills instead of the loop */
+.vig-stills{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding:10px;}
+.vig-still{min-width:0;}
+.vig-still canvas{display:block;max-width:100%;border-radius:8px;}
+.vig-still-cap{margin-top:7px;font-family:var(--serif);font-size:13.5px;line-height:1.4;font-weight:700;color:#f6efdc;}
+@media(max-width:760px){
+  .vig-caption{font-size:17px;}
+  .vig-stills{grid-template-columns:1fr;}
+}
+@media(prefers-reduced-motion:reduce){
+  .vig-caption.capin{animation:none;}
+  #intro-start.vig-pulse{animation:none;}
+  .cc-duty{transition:none;}
+}
