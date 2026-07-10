@@ -230,6 +230,9 @@ button{font-family:inherit;}
     repeating-radial-gradient(circle at 74% 72%, rgba(227,196,107,.04) 0 1px, transparent 2px 110px);
 }
 .sitemap.blocked{box-shadow:inset 0 0 0 3px rgba(161,61,47,.55), var(--shadow2);}
+/* §3 auto-cinematic: while the camera is punched-in (off-identity), the DOM station hotspots
+   no longer line up with the zoomed canvas — hold them (freeze interaction) until it returns. */
+.sitemap.cam-hold #stations{pointer-events:none;}
 .sitemap::after{content:"";position:absolute;inset:0;pointer-events:none;z-index:1;
   box-shadow:inset 0 0 90px 18px rgba(10,14,20,.55);}
 /* time-of-day tint — background set per minute-tick by JS (deterministic from the clock) */
@@ -511,12 +514,6 @@ button.rail-row:focus-visible{outline:2px solid var(--accent);outline-offset:1px
 .r-badge{display:none;margin:8px auto 4px;font-size:12.5px;font-weight:800;letter-spacing:1px;color:#3a260b;background:var(--accent-light);border-radius:var(--r-sm);padding:6px 18px;box-shadow:0 2px 10px rgba(184,137,43,.4);}
 .r-badge.show{display:inline-block;animation:badgepop .5s ease;}
 .report .conds{justify-content:center;margin-top:12px;}
-.scorecard{display:grid;grid-template-columns:1fr 1fr;gap:11px 18px;}
-.pillar .pl-top{display:flex;justify-content:space-between;align-items:baseline;font-size:12.5px;color:var(--ink2);}
-.pillar .pl-top b{font-family:var(--serif);font-size:15px;color:var(--ink);}
-.pillar .pl-top small{color:var(--ink3);font-size:11px;}
-.pillar .pl-bar{height:8px;border-radius:2px;background:var(--bg2);margin-top:6px;overflow:hidden;}
-.pillar .pl-bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--leader),var(--leader-light));transition:width .6s ease;}
 
 .fixpack{display:flex;flex-direction:column;gap:10px;}
 .fix-row{display:flex;gap:12px;align-items:center;border:1px solid var(--line);border-left:3px solid var(--idle);border-radius:var(--r-md);padding:11px 13px;background:var(--bg1);}
@@ -757,6 +754,9 @@ button.rail-row:focus-visible{outline:2px solid var(--accent);outline-offset:1px
 .ld-txt h3{font-family:var(--serif);margin:0 0 3px;font-size:17px;}
 .ld-txt p{margin:0;font-size:13px;color:var(--ink2);line-height:1.5;}
 #ld-prompt .ld-txt h3{color:var(--wait-dark);}
+/* §5 convergence grouping: the cluster note (prompt) + the "message i of n" step chip (spotlight) */
+.ld-cluster{margin:7px 0 0;font-size:12px;color:var(--build-dark);font-weight:700;}
+.ld-step{display:inline-block;font-size:10px;letter-spacing:.6px;text-transform:uppercase;font-weight:800;color:var(--accent-dark,#8a6a1a);background:rgba(184,137,43,.14);border:1px solid rgba(184,137,43,.4);border-radius:20px;padding:2px 9px;margin:0 0 6px;}
 .ld-chip{font-size:11px;font-weight:700;padding:4px 11px;border-radius:20px;background:var(--bg2);border:1px solid var(--line);color:var(--ink2);}
 .btn.glow{animation:glowbtn 1.5s ease-in-out infinite;}
 .ld-spot-head h3{font-family:var(--serif);margin:0 0 2px;font-size:16px;}
@@ -798,7 +798,7 @@ button.rail-row:focus-visible{outline:2px solid var(--accent);outline-offset:1px
   .brand-seal{width:36px;height:36px;font-size:16px;}
   .topbar{flex-direction:column;}
   .toprow{align-items:flex-start;flex-direction:row;}
-  .canvas-grid,.org,.editors,.scorecard{grid-template-columns:1fr;}
+  .canvas-grid,.org,.editors{grid-template-columns:1fr;}
   .mc-grid{grid-template-columns:1fr;}
   .mc-status{align-items:flex-start;flex-direction:column;}
   .mc-status span{text-align:left;}

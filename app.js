@@ -1039,12 +1039,67 @@
   var stageTrail = [], stageGhost = [{}, {}, {}], stageChain = [];  // canvas-owned cascade scratch (separate from anim.*)
   var stageSpotPid = null, stageTint = null, stageGapState = null;  // §21.4 Live draw-state bridge -> the scene() view
   function mapDims() { var m = $('sitemap'); return { w: m.clientWidth || 900, h: m.clientHeight || 480 }; }
+
+  // =========================================================================
+  // §3 AUTO-CINEMATIC CAMERA (freeze punch-in / dinner breathe-out).
+  // Preferred path: PRS_STAGE.camTo/camReset (the eased, RM-safe module API). If
+  // S2's export of those helpers has not landed yet, drive the SAME transform via
+  // the documented view.cam per-frame contract (camFrame: "explicit per-frame
+  // override wins") with app-side easing off the rAF clock. Exactly ONE path is
+  // ever active — camAnim is set only when the module API is absent, so the two
+  // never fight. Reduced motion = no camera, ever (also enforced inside stage.js).
+  // =========================================================================
+  var camAnim = null;   // fallback ease state (canvas CSS px + zoom): {fx,fy,fz,cx,cy,cz,tx,ty,tz,t0,dur}
+  function camApi() { return (window.PRS_STAGE && typeof PRS_STAGE.camTo === 'function' && typeof PRS_STAGE.camReset === 'function') ? PRS_STAGE : null; }
+  function camMoveTo(cx, cy, zoom, ms) {
+    if (RM.matches) return;                                  // reduced motion: never move the camera
+    document.getElementById('sitemap') && $('sitemap').classList.add('cam-hold');
+    var api = camApi();
+    if (api) { api.camTo({ x: cx, y: cy, zoom: zoom }, ms); camAnim = null; return; }
+    var cur = camAnim ? { x: camAnim.cx, y: camAnim.cy, z: camAnim.cz } : { x: cx, y: cy, z: 1 };
+    camAnim = { fx: cur.x, fy: cur.y, fz: cur.z, cx: cur.x, cy: cur.y, cz: cur.z,
+                tx: cx, ty: cy, tz: zoom, t0: -1, dur: (ms > 0 ? ms : 0) };   // dur in ms (frame() clock)
+  }
+  // release back to identity. ms<=0 = snap (safety: animReset / mode-exit / quit).
+  function camReleaseSafe(ms) {
+    var api = camApi();
+    if (api) api.camReset(ms > 0 ? ms : 0);
+    if (!(ms > 0)) { camAnim = null; if ($('sitemap')) $('sitemap').classList.remove('cam-hold'); return; }
+    if (camAnim) camAnim = { fx: camAnim.cx, fy: camAnim.cy, fz: camAnim.cz, cx: camAnim.cx, cy: camAnim.cy, cz: camAnim.cz,
+                             tx: camAnim.cx, ty: camAnim.cy, tz: 1, t0: -1, dur: ms, releasing: true };   // dur in ms
+    else if ($('sitemap')) $('sitemap').classList.remove('cam-hold');
+  }
+  // per-frame fallback resolve (called from frame()); returns {x,y,zoom} or null (identity)
+  function camFallbackFrame(ts) {
+    if (RM.matches || camApi() || !camAnim) return null;     // module API drives itself; RM = no camera
+    if (camAnim.t0 < 0) camAnim.t0 = ts;
+    var k = camAnim.dur > 0 ? Math.min(1, (ts - camAnim.t0) / camAnim.dur) : 1, e = k * k * (3 - 2 * k);
+    camAnim.cx = camAnim.fx + (camAnim.tx - camAnim.fx) * e;
+    camAnim.cy = camAnim.fy + (camAnim.ty - camAnim.fy) * e;
+    camAnim.cz = camAnim.fz + (camAnim.tz - camAnim.fz) * e;
+    if (k >= 1 && camAnim.releasing) { camAnim = null; if ($('sitemap')) $('sitemap').classList.remove('cam-hold'); return null; }
+    return Math.abs(camAnim.cz - 1) < 0.0005 ? null : { x: camAnim.cx, y: camAnim.cy, zoom: camAnim.cz };
+  }
+  // px center of the pawn holding a stalled task (fall back to its station, then map center)
+  function stallCenterPx(taskId, plan) {
+    var to = taskId && byId((plan || currentPlan()).tasks, taskId);
+    if (!to && sim) to = byId(sim.tasks, taskId);
+    var pid = to && to.assignedIds && to.assignedIds[0], f = pid && anim.fig[pid];
+    if (f && typeof f.cx === 'number') return { x: f.cx, y: f.cy };
+    var st = to && P.station(to.station);
+    if (st) return { x: st.x * anim.w, y: st.y * anim.h };
+    return { x: anim.w / 2, y: anim.h / 2 };
+  }
+  function camPunchGap(gap) { var p = stallCenterPx(gap && gap.taskId, currentPlan()); camMoveTo(p.x, p.y, 1.35, 600); }
+
   function animReset() {
     anim = { running: false, raf: null, last: 0, w: 0, h: 0, fig: {}, guest: {}, boat: null, wakes: [], hotPts: [],
       cascade: { hops: [], has: false }, ghost: [], trail: [], strikeSeg: -1, chain: [], chainOn: false,
       motes: [], acts: null, actsAt: -1, tweens: {}, fanfared: false, skyKey: '' };
     // §21.4 bridge state is module-scoped: clear it per run so a frozen gap's tint/spotlight can't leak into the next cold-open
     stageTint = null; stageSpotPid = null; stageGapState = null;
+    camReleaseSafe(0);   // §3 safety: no camera offset survives a (re-)run start
+    if ($('sitemap')) $('sitemap').classList.remove('cam-hold');
     stageTrail.length = 0; stageChain = []; stageGhost = [{}, {}, {}];
     // dashboard readouts carry tween state on the DOM node — a fresh run must not
     // tween from (or float a delta against) the previous run's final value
@@ -1185,27 +1240,45 @@
   // ---- P21: the hand-offs themselves fly the map — gold on time, hanko-red late ----
   // Deliveries are per (role, card) and the EARLIEST arrow wins (the engine's min-over-arrows,
   // so a superseded slow arrow never flies red over a plan the score calls clean).
+  // §5 coarse-day life: motes fly EVERY animated day. Generalized to handoffsForSeg(plan, seg) /
+  // tasksForSeg(plan, seg) with send-minutes resolved WITHIN the segment (a coarse day's arrows +
+  // tasks live in plan.days[seg], not plan.tasks). The fishday path is byte-identical: for
+  // seg==='fishday' tasksForSeg is the fishday subset of plan.tasks and sendOf reproduces
+  // P.resolveSendMin / P.staticArrival exactly, so the 220/91% anchors are untouched.
   function buildMotes(s) {
     var box = $('motes'); if (box) box.innerHTML = '';
     anim.motes = [];
-    // info motes fly the fishday's plan.handoffs — a coarse day's arrows live in plan.days[seg]; drawing
-    // the fishday arrows over an arrival/ops/return animation would be wrong-context, so gate to fishday
-    if (!box || !s || s.mode !== 'minute' || s.segment !== 'fishday') return;
-    var plan = s.plan, pairs = {};
-    plan.handoffs.forEach(function (h) {
-      var to = byId(plan.tasks, h.toTaskId), from = byId(plan.tasks, h.fromTaskId);
-      if (!to || !from || to.day !== 'fishday' || from.day !== 'fishday') return;
-      var send = P.resolveSendMin(plan, h), arr = P.staticArrival(plan, h);
-      if (send == null || arr == null) return;
+    if (!box || !s || s.mode !== 'minute') return;
+    var seg = s.segment, plan = s.plan, coarse = seg !== 'fishday';
+    var tasks = P.tasksForSeg(plan, seg), handoffs = P.handoffsForSeg(plan, seg);
+    if (!handoffs || !handoffs.length) return;
+    var tById = {}; for (var ti = 0; ti < tasks.length; ti++) tById[tasks[ti].id] = tasks[ti];
+    function sendOf(h) {   // mirrors engine.sendMinSeg: resolve within the seg, then plan.tasks
+      var tt, tr = h.trigger || {};
+      if (tr.type === 'atMinute') return (typeof tr.value === 'number' && isFinite(tr.value)) ? tr.value : null;
+      if (tr.type === 'onTaskDone') { tt = tById[tr.taskId] || byId(plan.tasks, tr.taskId); return (tt && typeof tt.startMin === 'number') ? tt.startMin + tt.durMin : null; }
+      if (tr.type === 'beforeTaskStart') { tt = tById[tr.taskId || h.toTaskId] || byId(plan.tasks, tr.taskId || h.toTaskId); return (tt && typeof tt.startMin === 'number') ? tt.startMin - (tr.leadMin || 0) : null; }
+      return null;
+    }
+    var pairs = {};
+    handoffs.forEach(function (h) {
+      var to = tById[h.toTaskId], from = tById[h.fromTaskId];
+      if (!to || !from) return;                     // both endpoints must live in this segment
+      // coarse days only fly PLACED→PLACED (matches the animated cast); fishday keeps its original reach
+      if (coarse && (!(from.assignedIds || []).length || !(to.assignedIds || []).length ||
+                     typeof from.startMin !== 'number' || typeof to.startMin !== 'number')) return;
+      var send = sendOf(h); if (send == null) return;
+      var arr = send + (P.CHANNELS[h.channel] || 0);
       var key = h.toRoleId + '|' + h.cardId;
       if (!pairs[key] || arr < pairs[key].arr) pairs[key] = { arr: arr, send: send, h: h, from: from, to: to };
     });
     Object.keys(pairs).forEach(function (k) {
       var b = pairs[k], A = P.station(b.from.station), B = P.station(b.to.station);
+      if (!A || !B) return;
       // late if ANY consuming task of this role needs the card before the winning arrival
       var late = false;
-      plan.tasks.forEach(function (tk) {
-        if (tk.day === 'fishday' && tk.ownerRoleId === b.h.toRoleId && tk.assignedIds.length &&
+      tasks.forEach(function (tk) {
+        if (tk.ownerRoleId === b.h.toRoleId && (tk.assignedIds || []).length &&
             (tk.neededInfo || []).indexOf(b.h.cardId) >= 0 && b.arr > tk.startMin) late = true;
       });
       var el = document.createElement('span'); el.className = 'mote ' + (late ? 'red' : 'gold');
@@ -1249,6 +1322,21 @@
     }
   }
 
+  // §5 coarse-day life (view layer only; engine.boatState stays fishday-only per §21.12): give the
+  // animated arrival / return days their crossing arc. Arrival = the ship comes IN (sea→dock, param 1→0),
+  // return = it heads OUT (dock→sea, param 0→1); ops keeps the boat docked. Fishday delegates to the
+  // engine untouched, so its 220/91%/dinner anchors are byte-identical.
+  function boatViewState(s) {
+    if (!s || s.mode !== 'minute' || s.segment === 'fishday') return P.boatState(s);
+    var seg = s.segment;
+    if (seg !== 'arrival' && seg !== 'return') return P.boatState(s);   // ops etc. — docked
+    var ws = s.winStart, we = s.winEnd;
+    if (!(we > ws)) return P.boatState(s);
+    var frac = Math.max(0, Math.min(1, ((s.clockMin || 0) - ws) / (we - ws)));
+    var param = seg === 'arrival' ? (1 - frac) : frac;
+    return { phase: seg === 'arrival' ? 'inbound' : 'outbound', param: param, atSea: param > 0.02 };
+  }
+
   function launch() {
     stopAnim(); clearFinishTimer();                       // never stack a second rAF loop or a stale report reveal
     // §21.8b: every authored day now ANIMATES on the minute clock — the coarse days (arrival/ops/return)
@@ -1278,8 +1366,18 @@
     if (paused || !sim) return;
     if (sim.paused) return;                       // checkpoint: wait for Resume
     P.tick(sim); renderSim(sim);
-    if (sim.paused && sim.checkpoint) openInspector();
+    if (sim.paused && sim.checkpoint) {
+      if (sim.checkpoint.id === 'cp_stall') camPunchStall(sim);   // §3: punch in on the coarse-day stall
+      openInspector();
+    }
     if (sim.finished) finish();
+  }
+  // find whoever just stalled (waitinfo/rework, in-scope) and punch the camera in on them
+  function camPunchStall(s) {
+    for (var i = 0; i < s.tasks.length; i++) {
+      var x = s.tasks[i];
+      if (x.scope === 'in' && (x.state === 'waitinfo' || x.state === 'rework')) { camPunchGap({ taskId: x.id }); return; }
+    }
   }
 
   // px target for each duty-holder: its engine station + a fanned stack below it
@@ -1341,7 +1439,7 @@
         setXY(gs.el, gs.cx, gs.cy);
       }
       // the boat sails a quadratic arc through the bay, bow to the heading, wake while under way
-      var bs = P.boatState(sim), b = anim.boat;
+      var bs = boatViewState(sim), b = anim.boat;
       if (b && b.el) {
         var tq = bs.param, u = 1 - tq;
         var bx = (u * u * DOCK.x + 2 * u * tq * BOATC.x + tq * tq * SEA.x) * anim.w;
@@ -1385,6 +1483,9 @@
         ghost: stageGhost, trail: stageTrail, chain: stageChain, hotPts: anim.hotPts,
         frozen: !!(paused || livePausedForFix || (sim && sim.paused))
       };
+      // §3 camera: when S2's camTo export isn't present we drive the transform via the
+      // documented view.cam per-frame contract (null => stage.js uses identity/module CAM)
+      stageView.cam = camFallbackFrame(ts);
       PRS_STAGE.scene(stageCtx, sim, ts / 1000, stageView);
       if (PRS_STAGE.hubSections) syncHubSections(PRS_STAGE.hubSections(stageView));
     }
@@ -1601,6 +1702,8 @@
     var ff = $('fanfare'); if (!ff) return;
     ff.textContent = T().fanfareText; ff.classList.remove('show'); void ff.offsetWidth; ff.classList.add('show');
     setTimeout(function () { ff.classList.remove('show'); }, 2600);
+    // §3 auto-cinematic: a slow breathe-out (1.0 → 0.94) as the dinner fanfare fires, then settle back
+    if (!RM.matches) { camMoveTo(anim.w / 2, anim.h / 2, 0.94, 900); setTimeout(function () { camReleaseSafe(1100); }, 1500); }
   }
 
   function renderDashboard(s) {
@@ -1736,7 +1839,7 @@
     $('inspect-modal').classList.add('show');
     if (!wasOpen) $('insp-resume').focus();
   }
-  function closeInspector() { $('inspect-modal').classList.remove('show'); if (sim && sim.paused) P.resume(sim); modalClosed(); }
+  function closeInspector() { $('inspect-modal').classList.remove('show'); camReleaseSafe(480); if (sim && sim.paused) P.resume(sim); modalClosed(); }
 
   // =========================================================================
   // W3 — inspectable cast: click / tap / roster any duty-holder -> washi popover
@@ -1893,6 +1996,7 @@
   // =========================================================================
   function finish() {
     clearInterval(timer); timer = null;
+    camReleaseSafe(0);                            // §3 safety: no camera offset carries into the report stage
     // §7.2: a coarse animated day (arrival/ops/return) report reads the whole-trip ledger (scoreTrip)
     // + that day's daySchedule/dayReadiness in renderDayReport — no scoreDay grade/score is rendered,
     // so res.day is unused for the coarse path.
@@ -2808,7 +2912,7 @@
     $('btn-quit').addEventListener('click', function () {
       if (!sim || sim.finished) return;
       sim.finished = 'incomplete';
-      if (appMode === 'live' && liveState) { livePausedForFix = false; clearGapFocus(); liveFinish(); }   // stay in the live flow
+      if (appMode === 'live' && liveState) { livePausedForFix = false; clearGapFocus(); camReleaseSafe(0); liveFinish(); }   // stay in the live flow
       else finish();
     });
     $('stations').addEventListener('click', function (e) {
@@ -3167,7 +3271,20 @@
       fig: VIG.fig, guest: {}, boat: VIG.boat, wakes: [],
       motes: VIG.motes, cascade: { hops: [], has: false },
       ghost: [{}, {}, {}], trail: [], chain: [], hotPts: [],
+      cam: rm ? null : VIG.cam,          // §3: dawn drift + freeze-beat punch-in (self-contained, via view.cam)
       frozen: !!showFreeze };
+  }
+  // §3 vignette camera: a slow lateral dawn drift throughout, punching in on the gap pawn at the
+  // freeze beat. Self-contained (its own eased state on VIG) so it never touches the shared module
+  // CAM — the intro canvas is independent of the run stage. Reduced motion = no camera.
+  function vigCam(showFreeze) {
+    if (RM.matches) { VIG.camZ = null; return null; }
+    var w = VIG.w, h = VIG.h, tx, ty, tz, f;
+    if (showFreeze && VIG.gapPid && (f = VIG.fig[VIG.gapPid])) { tx = f.cx; ty = f.cy; tz = 1.34; }
+    else { var drift = Math.sin((VIG.last || 0) / 1000 * 0.17); tx = w * (0.5 + 0.055 * drift); ty = h * 0.46; tz = 1.08; }
+    if (VIG.camZ == null) { VIG.camX = tx; VIG.camY = ty; VIG.camZ = tz; }
+    else { var k = 1 - Math.exp(-3.6 * (VIG._dt || 0.016)); VIG.camX += (tx - VIG.camX) * k; VIG.camY += (ty - VIG.camY) * k; VIG.camZ += (tz - VIG.camZ) * k; }
+    return Math.abs(VIG.camZ - 1) < 0.002 ? null : { x: VIG.camX, y: VIG.camY, zoom: VIG.camZ };
   }
   function vigTickOnce() {   // Live ignores the fixed checkpoints — so does the vignette
     if (VIG.sim.paused) { VIG.sim.paused = false; VIG.sim.checkpoint = null; }
@@ -3222,7 +3339,7 @@
     // hard lifecycle guards: the vignette never runs while #run is visible, and dies with the intro
     if ($('intro').classList.contains('hidden') || !$('run').classList.contains('hidden')) { killVignette(); return; }
     if (!VIG.last) { VIG.last = ts; VIG.lastTick = ts; }
-    var dt = Math.min(0.1, (ts - VIG.last) / 1000); VIG.last = ts;
+    var dt = Math.min(0.1, (ts - VIG.last) / 1000); VIG.last = ts; VIG._dt = dt;
     if (VIG.host && VIG.host.clientWidth && Math.abs(VIG.host.clientWidth - VIG.w) > 4) vigResize();
     if (VIG.phase === 'walk') {
       // beat 1 speed ramp: two slow establishing ticks, then brisk — the freeze lands ~4s in
@@ -3260,9 +3377,15 @@
     vigSyncFigs(false);
     vigWalk(dt);
     var showFreeze = VIG.phase === 'freezing' || VIG.phase === 'frozen' || VIG.phase === 'handoff';
+    VIG.cam = vigCam(showFreeze);          // §3: eased dawn drift / freeze-beat punch-in for this frame
     if (VIG.prompt && !VIG.prompt.classList.contains('hidden') && VIG.gapPid) {
       var fp = VIG.fig[VIG.gapPid];
-      if (fp) { VIG.prompt.style.left = Math.round(fp.cx) + 'px'; VIG.prompt.style.top = Math.round(fp.cy - 66 * VIG.sc) + 'px'; }
+      if (fp) {
+        // the prompt is a DOM overlay in canvas coords — project it through the camera so it tracks the zoomed pawn
+        var px = fp.cx, py = fp.cy - 66 * VIG.sc, c = VIG.cam;
+        if (c) { px = c.x + (fp.cx - c.x) * c.zoom; py = c.y + (fp.cy - 66 * VIG.sc - c.y) * c.zoom; }
+        VIG.prompt.style.left = Math.round(px) + 'px'; VIG.prompt.style.top = Math.round(py) + 'px';
+      }
     }
     PRS_STAGE.scene(VIG.ctx, VIG.sim, ts / 1000, vigView(false, showFreeze));
   }
@@ -3847,7 +3970,7 @@
     $('mode-morning').classList.toggle('on', m === 'morning');
     if (timer) { clearInterval(timer); timer = null; }
     clearFinishTimer();
-    stopAnim(); closeModals();
+    stopAnim(); closeModals(); camReleaseSafe(0);   // §3 safety: a mode switch never inherits a camera offset
     if (m === 'live') {
       if (was === 'morning' || !morningSnap) snapshotMorning();
       startLive();                              // -> launchLive -> enterScreen('run')
@@ -3862,7 +3985,7 @@
   function startLive() {
     for (var k in fixed) fixed[k] = true; fixed.fixHandoffs = false;   // classic decisions sound; the arrows are the puzzle
     fdReset(); mcReset(); daySel = 'fishday'; placingChip = null;
-    liveState = { fixes: 0, addressed: {}, phase: 'brief', currentGap: null, result: null };
+    liveState = { fixes: 0, addressed: {}, phase: 'brief', currentGap: null, currentCluster: null, clusterIdx: 0, result: null };
     launchLive();
   }
 
@@ -3886,11 +4009,23 @@
     if (!sim || paused || livePausedForFix) return;
     if (sim.paused && sim.checkpoint) { P.resume(sim); }         // Live ignores the fixed checkpoints
     P.tick(sim); renderSim(sim);
-    var gap = nextLiveGap();
-    if (gap && (sim.clockMin || 0) >= gap.startMin - 0.001) { livePausedForFix = true; openGap(gap); return; }
+    var cl = nextLiveGap();
+    if (cl && (sim.clockMin || 0) >= cl.startMin - 0.001) { livePausedForFix = true; openGap(cl); return; }
     if (sim.finished) liveFinish();
   }
 
+  // §5 convergence grouping: gaps are keyed by their CONVERGENCE point so one freeze presents a
+  // whole cluster (pre-departure info → menu/gearload/route; the ic_catch relay fan-out), each card
+  // still individually priced + committed. Everything else stays a solo freeze. This drops the
+  // seed's freeze count from 11 per-arrow stops to 5 meatier decisions (predep ×6, catch ×2, 3 solo
+  // ic_ground). Pure & deterministic — same engine calls, just clustered ordering.
+  var PREDEP_CONSUMERS = { t_f_menu: 1, t_f_gearload: 1, t_f_route: 1 };
+  function gapClusterKey(g) {
+    if (PREDEP_CONSUMERS[g.taskId]) return 'predep';           // everything gating menu → gearload/route
+    if (g.cardId === 'ic_catch') return 'catch';               // the catch-relay fan-out
+    return 'solo:' + g.taskId + '|' + g.cardId;                // anything else = its own freeze
+  }
+  // returns the next CLUSTER to freeze on: { key, gaps:[…startMin-sorted], startMin }, or null.
   function nextLiveGap() {
     var plan = currentPlan(), fd = P.fishdaySchedule(plan), out = [];
     fd.missing.forEach(function (m) { out.push({ taskId: m.taskId, cardId: m.cardId, kind: 'missing' }); });
@@ -3898,7 +4033,10 @@
     out = out.filter(function (g) { return !liveState.addressed[g.taskId + '|' + g.cardId]; });
     out.forEach(function (g) { var t = byId(plan.tasks, g.taskId); g.startMin = t ? t.startMin : 9999; });
     out.sort(function (a, b) { return a.startMin - b.startMin; });
-    return out[0] || null;
+    if (!out.length) return null;
+    var key = gapClusterKey(out[0]);
+    var gaps = out.filter(function (g) { return gapClusterKey(g) === key; });   // already startMin-sorted
+    return { key: key, gaps: gaps, startMin: gaps[0].startMin };
   }
 
   // the 迷い / 手待ち / 手戻り taxonomy, painted on the frozen crewmate (§1 — never flattened)
@@ -3926,10 +4064,31 @@
     }
     if (USE_CANVAS && sim) updateStageRoster(sim);               // refresh AT during the freeze (renderSim is paused)
   }
-  function openGap(gap) {
-    liveState.currentGap = gap; liveState.phase = 'prompt';
-    paintGapFocus(gap);
+  // open a whole cluster (spec §5): freeze once, present its cards in sequence. cl = { key, gaps, startMin }.
+  function openGap(cl) {
+    liveState.currentCluster = cl; liveState.clusterIdx = 0;
+    liveState.currentGap = cl.gaps[0]; liveState.phase = 'prompt';
+    paintGapFocus(liveState.currentGap);
+    camPunchGap(liveState.currentGap);            // §3 auto-cinematic: punch in on the stalled pawn
     renderLivePanel(true);
+  }
+  // move to the next un-addressed card in the frozen cluster, or resume the run when the cluster is done
+  function advanceCluster() {
+    var cl = liveState.currentCluster, next = null, ni = -1, i;
+    if (cl) for (i = 0; i < cl.gaps.length; i++) {
+      var gg = cl.gaps[i];
+      if (!liveState.addressed[gg.taskId + '|' + gg.cardId]) { next = gg; ni = i; break; }
+    }
+    if (next) {
+      liveState.clusterIdx = ni; liveState.currentGap = next; liveState.phase = 'spot';
+      paintGapFocus(next); camPunchGap(next);     // re-center on the next stalled crewmate
+      renderLivePanel();
+    } else {                                       // cluster cleared — release the freeze and the camera
+      clearStationTints(); clearGapFocus(); camReleaseSafe(520);
+      livePausedForFix = false; liveState.phase = 'brief';
+      liveState.currentGap = null; liveState.currentCluster = null;
+      renderLivePanel();
+    }
   }
 
   function renderLivePanel(focusPrompt) {
@@ -3942,7 +4101,8 @@
       var kind = gapKindState(g, to);
       var head = kind === 'waitInfo' ? t.ldLateT : (kind === 'rework' ? t.ldAssumeT : t.ldFrozenT);
       var body = kind === 'waitInfo' ? t.ldLateP : (kind === 'rework' ? t.ldAssumeP : t.ldFrozenP);
-      $('ld-prompt').innerHTML = '<div class="ld-txt"><h3>' + head(personName(to)) + '</h3><p>' + body(nm(to.name)) + '</p></div><button class="btn primary glow" id="ld-fix">' + t.ldFixBtn + '</button>';
+      var cl = liveState.currentCluster, note = (cl && cl.gaps.length > 1) ? '<p class="ld-cluster">' + t.ldClusterNote(cl.gaps.length) + '</p>' : '';
+      $('ld-prompt').innerHTML = '<div class="ld-txt"><h3>' + head(personName(to)) + '</h3><p>' + body(nm(to.name)) + '</p>' + note + '</div><button class="btn primary glow" id="ld-fix">' + t.ldFixBtn + '</button>';
       $('ld-fix').addEventListener('click', function () { liveState.phase = 'spot'; renderLivePanel(); });
       ldPanel('ld-prompt');
       if (focusPrompt) $('ld-fix').focus();    // the game paused FOR the player — hand them the control
@@ -3960,8 +4120,9 @@
         '<span class="lat">+' + (P.CHANNELS[ch] || 0) + t.chMin + '</span>' +
         '<span class="verdict">' + (onTime ? t.vInTime : t.vTooLate) + '</span></button>';
     }).join('');
+    var cl = liveState.currentCluster, step = (cl && cl.gaps.length > 1) ? '<span class="ld-step">' + t.spotStep(liveState.clusterIdx + 1, cl.gaps.length) + '</span>' : '';
     $('ld-spot').innerHTML =
-      '<div class="ld-spot-head"><h3>' + t.spotTitle(cname) + '</h3><p class="ld-sub">' +
+      '<div class="ld-spot-head">' + step + '<h3>' + t.spotTitle(cname) + '</h3><p class="ld-sub">' +
       t.spotSub(from ? personName(from) : nm(P.role('chef').name), personName(to), hhmm(to.startMin)) + '</p></div>' +
       '<div class="ld-opts" id="ld-opts">' + chips + '</div>' +
       '<div class="ld-preview" id="ld-preview"><span class="pv-lbl">' + t.pvLbl + '</span><span id="ld-pv-txt">' + t.spotHover + '</span><span class="pv-slice" id="ld-pv-slice"></span></div>';
@@ -4057,12 +4218,15 @@
         else { m.state = 1; m.t0 = 0; m.el.classList.add('on'); }
       }
     }
-    clearStationTints(); clearGapFocus(); renderSim(sim);
-    livePausedForFix = false; liveState.phase = 'brief'; liveState.currentGap = null; renderLivePanel();
+    renderSim(sim);
+    // §5: stay frozen and step to the next card in this convergence cluster; only when the whole
+    // cluster is committed does advanceCluster() release the freeze + camera and resume the run.
+    advanceCluster();
   }
 
   function liveFinish() {
     if (timer) { clearInterval(timer); timer = null; }
+    camReleaseSafe(0);                            // §3 safety: no punch-in survives into the result/report
     // §7.1: win = the Fishing-Day bucket is fully earned in the ledger AND dinner is served by 18:00.
     var trip = P.scoreTrip(currentPlan()), fd = P.fishdaySchedule(currentPlan()), fb = trip.byBucket.fishday;
     var win = fb.earned === fb.maxPts && (fd.dinnerMin == null || fd.dinnerMin <= 1080);

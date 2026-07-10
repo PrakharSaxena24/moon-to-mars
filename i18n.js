@@ -76,7 +76,6 @@
       rDone: 'The plan runs — everyone could move, no one stalled.',
       rIncomplete: 'Weaknesses surfaced — people stalled where the plan has gaps.',
       badgePerfect: '⭐ READY TO RUN ⭐',
-      scorecardTitle: 'Scorecard — 8 categories',
       fixpackTitle: 'Fix-pack — fix a gap & re-run',
       fixpackHint: 'These are the gaps that stalled the rehearsal (worst first). Apply a fix and re-run — the score climbs toward 100.',
       fixpackClean: '✅ No gaps left — the plan is ready to run for real.',
@@ -191,6 +190,9 @@
       ldRerun: '↻ Re-run the day',
       ldReport: 'Full report ▸',
       liveChip: function (n) { return n + ' fix' + (n === 1 ? '' : 'es') + ' made'; },
+      // §5 convergence grouping: one freeze presents a cluster of cards in sequence
+      ldClusterNote: function (n) { return n + ' messages converge here — fix them in one pass, each on its own channel.'; },
+      spotStep: function (i, n) { return 'Message ' + i + ' of ' + n; },
 
       // --- checkpoint inspector (§8 関所) ---
       inspTitle: 'Checkpoint',
@@ -447,7 +449,6 @@
       rDone: '計画は回りました——全員が動け、誰も止まりませんでした。',
       rIncomplete: '弱点が露呈——計画のギャップで人が止まりました。',
       badgePerfect: '⭐ 実行可能な計画 ⭐',
-      scorecardTitle: 'スコアカード——8項目',
       fixpackTitle: '改善パック——ギャップを直して再実行',
       fixpackHint: 'リハーサルを止めたギャップ（重要度順）。修正を適用して再実行すると、点数が100へ近づきます。',
       fixpackClean: '✅ ギャップなし——本番で実行できる計画です。',
@@ -562,6 +563,9 @@
       ldRerun: '↻ この日を再実行',
       ldReport: '詳細レポート ▸',
       liveChip: function (n) { return '修正 ' + n + ' 件'; },
+      // §5 合流グルーピング：一度の停止で合流点のカードを順に直す
+      ldClusterNote: function (n) { return n + ' 件の情報がここで合流——一度の停止でまとめて直します（各々に手段を選択）。'; },
+      spotStep: function (i, n) { return '情報 ' + i + ' / ' + n; },
 
       // --- checkpoint inspector (関所) ---
       inspTitle: 'チェックポイント',
