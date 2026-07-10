@@ -1161,4 +1161,42 @@ by fixed rule, from the flagged template data**, and make every number in it pin
   `docs/superpowers/specs/2026-07-10-scoring-rubric-v1-design.md` (the constitution) + plan
   `docs/superpowers/plans/2026-07-10-scoring-rubric-v1.md`. Commits: `8e742c6` spec, `7664836` plan,
   `2020925` engine+verify, `e306a63` UI/Live migration, `f3651ee` spec amendments, `9ca9dbd` QA fixes.
-  Not yet pushed to GitHub.
+  Pushed to GitHub Pages 2026-07-10 (cfe049d..9c7a4ad).
+
+## 25. UX Phase 1 + cold-open vignette — the receipt becomes the game (SHIPPED 2026-07-10)
+Owner asks: planning should stop being dropdown boxes; a less text-heavy introduction; many characters moving
+at once; hover/click a character to know their state. Designed via a 3-track design panel + a Fable
+architecture verdict (one persistent harbor stage carrying plan/run/report — Phases 1–2 built now; the full
+"plan on the harbor" command-tray mode is DEFERRED until the owner plays this phase). Spec
+`docs/superpowers/specs/2026-07-10-ux-phase1-vignette-design.md` · plan
+`docs/superpowers/plans/2026-07-10-ux-phase1-vignette.md`.
+- **Ledger rail (one renderer, three surfaces).** `renderRail(mode)`: setup `#rail-setup` (sticky right
+  column ≥1180px, "Projected 54 → aim 100", 5 clickable bucket jump-links, gate line, `#launch` in the rail
+  footer; `#fd-projected` + PRE-RUN chips deleted), run (replaces the dashboard readiness block, `#dash-ready`
+  id kept), report `#rail-report` above the itemized ledger.
+- **Receipt-as-control.** The 8 planning `<select>`s are GONE: each decision is a receipt row — status chip,
+  flip-open stakes (`p_<det>_cause`), one-tap "Close this gap (+N)" + quiet Undo — writing through the
+  byte-identical `fixed[]`→`buildCfg`→`applyFix` path (incl. the mcOv coupling). Per-decision +N = memoized
+  pure scoreTrip diff; the fishday-arrows row routes to the day editor showing the +18 prize (never a fake
+  one-click).
+- **Inspectable living cast.** Hover a pawn → canvas name chip + localized state word (`view.hoverWord`);
+  click/tap → washi popover (`#pawn-card`, `P.memberInfo`: held cards + arrival times, waiting-on + ETA +
+  predicted idle, next task; degrades on the classic clock); keyboard path via `#stage-roster` buttons.
+  Stage: 8 deterministic role work-gestures + ≤6px seeded wander + idle sway (stage.js), all suppressed on
+  stalled pawns and under reduced motion; ctx save/restore 70/70.
+- **The 15s cold-open vignette.** A scripted real `createSim` (Live config) on the stage inside `#intro`:
+  walk-in → first-gap freeze (~5.7s, chef ❓) → "Hand him the card" → gold mote, mini rail chip 23/41→25/41
+  (+2) → "The place they stall is the place to fix the plan. 100 = nobody waits." Hard lifecycle
+  (`killVignette` on Start/Skip/enterMode/applyLang; 5× open/close leak check = 0 stray rAF), RM = 3 stills,
+  mobile 390px OK. Intro prose cut to one line; pull-quote absorbed; cast duties hover-reveal.
+- **Verified:** `node verify.js` **258/258** (engine untouched throughout) · smoke **22/22** + 9 dedicated
+  vignette/popover checks + reviewer-scenario re-checks, zero JS errors, EN/JP parity (i18n symmetric).
+  2-lens adversarial close-out found 4 real defects, all fixed: affordance-wins pawn clicks over station
+  hotspots (pointer only; keyboard keeps station priority), honest +N after undo for grantAuth/fixReserve
+  (mcOv mirroring in `receiptAltTotal`), Escape closes only the top layer, skipped vignette re-boots as the
+  FINAL poster on language switch.
+- **Execution:** 2 waves × 2 parallel agents — Fable (rail/receipt, vignette), Opus (pawn inspect), Sonnet
+  (work-loops); W4 built in an isolated worktree, 3-way-merged cleanly. Commits: spec `222f60f` · plan
+  `8b56b69` · P1a `3f566a1` · P1b-1 `6dc1c47` · P1b-2 `76158a9` · QA `a480a58`.
+- **Deferred:** plan-on-the-harbor (command tray, physical decision objects, day drawers) — owner decides
+  after playing this phase; guests-visible-by-default; the Ambient-Live-Peek intro variant.
