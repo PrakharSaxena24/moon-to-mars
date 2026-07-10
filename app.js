@@ -1069,7 +1069,11 @@
     if (!(ms > 0)) { camAnim = null; if ($('sitemap')) $('sitemap').classList.remove('cam-hold'); return; }
     if (camAnim) camAnim = { fx: camAnim.cx, fy: camAnim.cy, fz: camAnim.cz, cx: camAnim.cx, cy: camAnim.cy, cz: camAnim.cz,
                              tx: camAnim.cx, ty: camAnim.cy, tz: 1, t0: -1, dur: ms, releasing: true };   // dur in ms
-    else if ($('sitemap')) $('sitemap').classList.remove('cam-hold');
+    else if ($('sitemap')) {
+      // API-driven ease: keep the hotspot hold until the camera actually reaches identity
+      // (spec §3: DOM layers stay frozen while the world is drawn off-identity)
+      setTimeout(function () { var m = $('sitemap'); if (m) m.classList.remove('cam-hold'); }, ms + 40);
+    }
   }
   // per-frame fallback resolve (called from frame()); returns {x,y,zoom} or null (identity)
   function camFallbackFrame(ts) {
@@ -2371,7 +2375,7 @@
     var pos = {}, bucket = {};
     s.stations.forEach(function (st) { bucket[st.id] = []; });
     s.participants.forEach(function (p) { if (bucket[p.station]) bucket[p.station].push(p); });
-    var colGap = 23 * RSTG.sc, rowGap = 24 * RSTG.sc, feet = 36 * RSTG.sc;
+    var colGap = 23 * FIGK * RSTG.sc, rowGap = 24 * FIGK * RSTG.sc, feet = 36 * RSTG.sc;   // fan tracks sprite-era pawn size
     s.stations.forEach(function (st) {
       var sd = P.station(st.id), n = bucket[st.id].length;
       bucket[st.id].forEach(function (p, i2) {
@@ -2934,12 +2938,14 @@
       var map = $('sitemap');
       map.addEventListener('pointermove', function (e) {
         if (!sim || $('run').classList.contains('hidden')) return;
+        if (map.classList.contains('cam-hold')) return;   // off-identity camera: screen->world mapping is wrong (§3)
         var pid = pawnAt(e);
         if (pid !== hoverPid) { hoverPid = pid; map.classList.toggle('pawn-hover', !!pid); }
       });
       map.addEventListener('pointerleave', function () { if (hoverPid) { hoverPid = null; map.classList.remove('pawn-hover'); } });
       map.addEventListener('click', function (e) {
         if (!sim) return;
+        if (map.classList.contains('cam-hold')) return;   // pawn hit-testing is camera-unaware — hold clicks too (§3)
         if (e.target.closest('.station') || e.target.closest('.sec-hot')) return;   // hotspots keep first claim
         var astro = e.target.closest && e.target.closest('.astro[data-pid]');       // DOM-stage pawn (?dom)
         var pid = astro ? astro.getAttribute('data-pid') : pawnAt(e);               // canvas: hit-test the cache
@@ -3234,7 +3240,7 @@
     var pos = {}, bucket = {};
     s.stations.forEach(function (st) { bucket[st.id] = []; });
     s.participants.forEach(function (p) { if (bucket[p.station]) bucket[p.station].push(p); });
-    var colGap = 23 * VIG.sc, rowGap = 24 * VIG.sc, feet = 36 * VIG.sc;
+    var colGap = 23 * FIGK * VIG.sc, rowGap = 24 * FIGK * VIG.sc, feet = 36 * VIG.sc;   // fan tracks sprite-era pawn size
     s.stations.forEach(function (st) {
       var sd = P.station(st.id), n = bucket[st.id].length;
       bucket[st.id].forEach(function (p, i) {
@@ -3545,7 +3551,8 @@
   var PS_POS = {
     comms:      { x: 0.20, y: 0.32 }, owner:     { x: 0.33, y: 0.28 }, pm:         { x: 0.30, y: 0.46 },
     budgetLead: { x: 0.13, y: 0.52 }, safetyLead:{ x: 0.19, y: 0.68 }, chef:       { x: 0.42, y: 0.34 },
-    logi:       { x: 0.50, y: 0.50 }, specialist:{ x: 0.60, y: 0.62 }, siteLead:   { x: 0.80, y: 0.66 }
+    logi:       { x: 0.50, y: 0.50 }, specialist:{ x: 0.495, y: 0.70 }, siteLead:  { x: 0.80, y: 0.66 }
+    // specialist casts from the waterline (was 0.60/0.62 — open water); siteLead stands at his boat
   };
   var SEAT_ROLES = ['owner', 'pm', 'siteLead', 'budgetLead', 'safetyLead', 'logi', 'comms', 'specialist'];
   // the tray catalog (spec §2 order). drag:false objects dock but open a panel/drawer instead.
@@ -3599,7 +3606,7 @@
   function psTargets(s) {
     var pos = {}, byRole = {};
     s.participants.forEach(function (p) { (byRole[p.roleId] = byRole[p.roleId] || []).push(p); });
-    var colGap = 27 * PSTG.sc, feet = 30 * PSTG.sc;
+    var colGap = 27 * FIGK * PSTG.sc, feet = 30 * PSTG.sc;   // fan tracks sprite-era pawn size
     for (var rid in byRole) {
       var a = PS_POS[rid] || { x: 0.5, y: 0.5 }, arr = byRole[rid], n = arr.length;
       arr.forEach(function (p, i) { pos[p.id] = { x: a.x * PSTG.w + (i - (n - 1) / 2) * colGap, y: a.y * PSTG.h + feet }; });

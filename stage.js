@@ -46,7 +46,7 @@
   // sprite provider (spec §1 pinned API) — re-resolved every frame in scene().
   // null => full procedural fallback (the game must render perfectly without
   // sprites.js loaded at all). A throwing provider is disarmed for the session.
-  var SPR = null, _sprBroken = false;
+  var SPR = null, _sprBroken = false, _sprSince = 0;
   function sprGet(roleId, pose, frame, facing) {
     if (!SPR) return null;
     try { return SPR.get(roleId, pose, frame, facing) || null; }
@@ -617,9 +617,13 @@
       : clamp(Math.min(view.w / 1000, view.h / 560), 1, 1.7);
     // sprite provider (spec §1): consumed ONLY when present AND ready; a broken
     // provider is disarmed once and the full procedural pawn path takes over.
+    var sprWas = SPR;
     SPR = (!_sprBroken && typeof window !== 'undefined' && window.PRS_SPRITES &&
            window.PRS_SPRITES.ready && typeof window.PRS_SPRITES.get === 'function')
       ? window.PRS_SPRITES : null;
+    // async decode settles mid-session: ease the procedural->sprite swap (a height
+    // morph over ~450ms) instead of a one-frame pop to 40%-taller silhouettes
+    if (SPR && !sprWas) _sprSince = (typeof performance !== 'undefined' ? performance.now() : 0);
     lightFrame(sim, view);             // resolve the per-frame light rig (night/sun/shadows/dusk)
     var cam = camFrame(t, view);       // resolve the auto-cinematic camera (null = identity)
 
@@ -1749,6 +1753,11 @@ function drawGuests(ctx, sim, t, view) {
     var gs = vg[id];
     if (!gs || typeof gs.cx !== 'number' || typeof gs.cy !== 'number') continue;
     var cx = gs.cx, cy = gs.cy;
+    // land clamp: the ambientActors wander field predates the land/sea map split —
+    // hold every guest west of the shoreline (≈0.51w) with a per-guest margin so
+    // nobody strolls on open water (deterministic, no engine change)
+    var shoreMax = (0.47 + (i % 5) * 0.006) * w;
+    if (cx > shoreMax) cx = shoreMax;
 
     // hush: prefer frame()'s precomputed flag, else derive it the same way (HUSH_R2 around a stalled holder)
     var hushed = gs.hushed;
@@ -3057,7 +3066,15 @@ function drawFigures(ctx, sim, t, view) {
       // overlays are suppressed; the shadow/aura/bubble/name stack (below,
       // outside this block) and the wander/bob offsets are kept.
       var sm = (SPR && SPR.meta) ? SPR.meta : { w: 48, h: 56, feetX: 24, feetY: 52 };
-      ctx.drawImage(spr, cx - sm.feetX * figs, feetY - sm.feetY * figs, sm.w * figs, sm.h * figs);
+      // swap ease: grow from ~procedural height to full sprite height, feet anchored
+      var swapK = 1;
+      if (_sprSince && !rm) {
+        swapK = ((typeof performance !== 'undefined' ? performance.now() : _sprSince) - _sprSince) / 450;
+        if (swapK >= 1) { swapK = 1; _sprSince = 0; }
+        else if (swapK < 0) swapK = 0;
+      }
+      var mh = 0.72 + 0.28 * swapK;
+      ctx.drawImage(spr, cx - sm.feetX * figs * mh, feetY - sm.feetY * figs * mh, sm.w * figs * mh, sm.h * figs * mh);
     } else {
       // ---- PROCEDURAL PAWN (the permanent fallback — byte-equivalent art,
       // sized by figs): legs, coat, head, cap, work gesture. ----
@@ -3167,7 +3184,9 @@ function drawFigures(ctx, sim, t, view) {
     // ---- speech-bubble chip (BUB map; '' = none) — pops on state change ----
     var bubTxt = BUB[state] || '';
     if (bubTxt) {
-      var bubY = feetY - 46 * figs; // top-centre; tail:'down' lands the tail over the pawn's hat
+      // sprite heads reach ~37 units above the feet (vs the procedural ~26) — lift the chip
+      // clear of the hat so the diagnostic bubble never covers the face it explains
+      var bubY = feetY - (spr ? 56 : 46) * figs; // top-centre; tail:'down' hangs toward the hat
       var bubScale = 1;
       if (!rm && f.bubT0) {
         var kk = (ts - f.bubT0) / DUR.bubpop;
