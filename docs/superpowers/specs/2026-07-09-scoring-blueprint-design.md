@@ -1,5 +1,9 @@
 # Scoring Blueprint — Ogasawara Rehearsal
 
+> **Superseded 2026‑07‑10:** this v0.3's principles (§2) and §13 Phase‑0 rulings are inherited as-is, but its
+> atom **enumeration and pricing** are superseded by the as-built 89-atom inventory in
+> `2026-07-10-scoring-rubric-v1-design.md` — read that spec as the current constitution.
+
 > **Status: v0.3 — APPROVED; Phase‑0 resolutions LOCKED (2026‑07‑09). Build in progress.**
 > v0.2 folded in a Fable design review; v0.3 adds §13 (Phase‑0 reconciliations + frozen build contract) after
 > a Fable plan‑reconfirm and a Sonnet atom enumeration. This is the authoritative reference the scoring engine
