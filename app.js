@@ -277,8 +277,23 @@
   function receiptAltTotal(d) {
     var fixId = DET_FIX[d], was = fixed[fixId];
     fixed[fixId] = !was;
+    // mirror the real close path's Mission-Control coupling (applyReceiptFix runs
+    // mcClearFixConflicts on close) — otherwise a leftover undo side-channel (null approver /
+    // zero reserve) overrides the previewed fix in buildCfg and the +N reads 0 (a lying receipt)
+    var savedMeals, savedReserve, savedCash, touched = false;
+    if (!was) {
+      if (fixId === 'grantAuth' && mcOv.lines.bl_meals) { savedMeals = mcOv.lines.bl_meals; delete mcOv.lines.bl_meals; touched = true; }
+      if (fixId === 'fixReserve' && (mcOv.reserve !== null || mcOv.resources.res_cash)) {
+        savedReserve = mcOv.reserve; savedCash = mcOv.resources.res_cash;
+        mcOv.reserve = null; delete mcOv.resources.res_cash; touched = true;
+      }
+    }
     var total = P.scoreTrip(P.mergePlan(buildCfg())).total;
     fixed[fixId] = was;
+    if (touched) {
+      if (fixId === 'grantAuth') mcOv.lines.bl_meals = savedMeals;
+      if (fixId === 'fixReserve') { mcOv.reserve = savedReserve; if (savedCash) mcOv.resources.res_cash = savedCash; }
+    }
     return total;
   }
   function paintReceiptRows(open, baseTotal) {
@@ -2270,6 +2285,10 @@
       else finish();
     });
     $('stations').addEventListener('click', function (e) {
+      // the shown affordance wins: a pointer click while a pawn is visibly hovered (cursor +
+      // name chip) inspects THAT pawn, even when its body overlaps the station hotspot.
+      // e.detail > 0 = real pointer click; keyboard activation (detail 0) keeps station priority.
+      if (hoverPid && e.detail > 0 && !$('run').classList.contains('hidden')) { openPawnCard(hoverPid); return; }
       var sec = e.target.closest('.sec-hot'); if (sec) { openSectionPanel(sec.getAttribute('data-sec')); return; }
       var st = e.target.closest('.station'); if (st) openProblemPanel(st.id.replace('st-', ''));
     });
@@ -2298,7 +2317,9 @@
     // popover: its own close button; Escape; and click-away (clicks inside #sitemap/#stage-roster
     // are owned by their handlers above, which switch or close the popover themselves)
     $('pawn-card').addEventListener('click', function (e) { if (e.target.closest('#pc-close')) closePawnCard(); });
-    document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && pawnCardOpen()) closePawnCard(); });
+    // Escape closes the popover only when it is the top layer — an open modal takes the keypress
+    // (the §18 top-modal handler below closes it; one Escape must never dismiss two layers)
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && pawnCardOpen() && !topModal()) closePawnCard(); });
     document.addEventListener('pointerdown', function (e) {
       if (!pawnCardOpen()) return;
       if (e.target.closest('#pawn-card') || e.target.closest('#sitemap') || e.target.closest('#stage-roster')) return;
@@ -2451,6 +2472,7 @@
     $('live-dock').classList.add('hidden');
     renderIntro();
     $('intro').classList.remove('hidden');
+    if (auto !== true) vigLastFinal = false;   // a fresh cast-reopen offers the beat-1 poster
     bootVignette(auto === true);
     if (window.scrollTo) window.scrollTo(0, 0);
     var s = $('intro-start'); if (s) s.focus();
@@ -2482,6 +2504,7 @@
     phase: '', last: 0, lastTick: 0, ticks: 0, promptAt: 0, fixAt: 0, holdMin: 0,
     w: 0, h: 0, sc: 1 };
   var vigLastAuto = true;              // last boot mode, so a language switch re-boots into the same face
+  var vigLastFinal = false;            // which poster face a non-autoplay boot restores (skip = the final one)
 
   // the Live config, scoped to the vignette (startLive's fixed[] pattern: every
   // classic fix true, fixHandoffs false) — never touches the player's `fixed`/dayOv
@@ -2776,6 +2799,8 @@
   }
   function vigSkip() {
     if ($('intro').classList.contains('hidden')) return;
+    vigLastAuto = false;   // a skipped vignette must re-boot as the poster (e.g. on language switch), never re-autoplay
+    vigLastFinal = true;   // ...and as the FINAL poster face, matching what skip showed
     killVignette();
     if (RM.matches) { vigStills(); return; }              // nothing to skip under RM — re-render the stills
     vigPoster(true);
@@ -2789,7 +2814,7 @@
     vigLastAuto = !!autoplay;
     var sk = $('vig-skip'); if (sk) sk.classList.toggle('hidden', RM.matches || !autoplay);
     if (RM.matches) { vigStills(); return; }
-    if (!autoplay) { vigPoster(false); return; }
+    if (!autoplay) { vigPoster(vigLastFinal); return; }
     vigStart();
   }
   function killVignette() {
