@@ -1599,9 +1599,11 @@
   // status of a (role,card) socket, read off daySchedule's OWN missing/late arrays (the
   // engine's existing min-over-arrows checker) — never a re-derived arrival calculation.
   function tripSocketStatus(ds, taskIds, cardId, livePlaced) {
-    var i, anyPlacedNeed = false;
-    for (i = 0; i < taskIds.length; i++) if (livePlaced[taskIds[i]]) anyPlacedNeed = true;
-    if (!anyPlacedNeed) return 'missing';
+    // §5 worst-consumer rule: EVERY consuming task must be placed and fed — one unplaced
+    // consumer voids the whole socket (daySchedule's arrays only cover placed tasks, so an
+    // unplaced consumer would otherwise silently fall through to 'ok' on collapsed sockets).
+    var i;
+    for (i = 0; i < taskIds.length; i++) if (!livePlaced[taskIds[i]]) return 'missing';
     for (i = 0; i < ds.missing.length; i++) { var m = ds.missing[i]; if (m.cardId === cardId && taskIds.indexOf(m.taskId) >= 0) return 'missing'; }
     for (i = 0; i < ds.late.length; i++) { var l = ds.late[i]; if (l.cardId === cardId && taskIds.indexOf(l.taskId) >= 0) return 'late'; }
     return 'ok';
@@ -1650,9 +1652,10 @@
   }
   // a binary gate atom (authority / criterion / route) — dimension is caller-supplied
   // (safety | money | people); ok/gapKey come from the fixed §13.3 reason set.
-  function tripGateAtom(id, bucket, dimension, maxPts, ok, itemRef, okKey, gapKey) {
+  function tripGateAtom(id, bucket, dimension, maxPts, ok, itemRef, okKey, gapKey, failStatus) {
     return { id: id, bucket: bucket, dimension: dimension, itemRef: itemRef, maxPts: maxPts,
-      earned: ok ? maxPts : 0, status: ok ? 'ok' : 'missing', reasonKey: ok ? okKey : gapKey, reasonParams: {} };
+      earned: ok ? maxPts : 0, status: ok ? 'ok' : (failStatus || 'missing'),
+      reasonKey: ok ? okKey : gapKey, reasonParams: {} };
   }
   // a quality atom gated on the day cascade's own idle read-off (no idle => on-time/uncompressed)
   function tripQualityAtom(id, bucket, plan, seg, taskId, tmplDur, ds) {
@@ -1705,18 +1708,25 @@
   // window (start <= 07:00); t_f_health just runs on landing.
   function tripSafetyGateAtom(bucket, plan, seg, task, tmplDur, ds) {
     var all = tasksForSeg(plan, seg), live = byId(all, task.id), floor = tmplDur[task.id];
+    // §7.4 taxonomy: the fail status names the actual cause — unplaced 'missing', floor
+    // 'compressed', wrong role 'broken'; an absent criterion stays 'missing' (never specified).
+    var fail = 'missing';
+    if (live && isPlaced(live)) {
+      if (typeof floor === 'number' && live.durMin < floor) fail = 'compressed';
+      else if (ds.misassigned.indexOf(task.id) >= 0) fail = 'broken';
+    }
     var placedRight = !!(live && isPlaced(live) && (typeof floor !== 'number' || live.durMin >= floor) && ds.misassigned.indexOf(task.id) < 0);
     var ok = placedRight;
     if (task.id === 't_f_weather') { var sea = byId(plan.risks, 'rk_sea'); ok = placedRight && !!(sea && sea.abortCriterion); }
     else if (task.id === 't_f_seawatch') { ok = placedRight && live.startMin <= 420; }
     return tripGateAtom(bucket + '_safety_' + task.id, bucket, 'safety', task.safetyGate, ok,
-      { type: 'gate', taskId: task.id }, 'scr_safety_ok', 'scr_safety_gap');
+      { type: 'gate', taskId: task.id }, 'scr_safety_ok', 'scr_safety_gap', fail);
   }
   // a moneyCheck-flagged task priced additively (§3.2/§3.4) — the authority/settlement property
   // on top of the task's execution. Task-homed id + itemRef.taskId so the ledger name resolves
   // from the task (§10 delta #4). Each check ports its as-built earn criterion verbatim.
   function tripMoneyCheckAtom(bucket, plan, seg, task, tmplDur, ds, rd) {
-    var ok = false, l;
+    var ok = false, l, fail = 'missing';
     if (task.id === 'hd_a_board') { l = byId(plan.budget.lines, 'bl_transport'); ok = !!(l && l.approverRoleId && l.payMethod); }
     else if (task.id === 'hd_o_foodsource') { l = byId(plan.budget.lines, 'bl_onsite'); ok = !!(l && l.approverRoleId && l.payMethod); }
     else if (task.id === 'hd_o_tackleprep') { l = byId(plan.budget.lines, 'bl_tackle'); ok = !!(l && l.approverRoleId && l.payMethod); }
@@ -1724,12 +1734,14 @@
       var all = tasksForSeg(plan, seg), sc = byId(all, 'hd_r_sitecash');
       var broken = rd.some(function (r) { return (r.type === 'DEP_BROKEN' || r.type === 'MISASSIGNED') && r.taskId === 'hd_r_sitecash'; });
       ok = !!(sc && isPlaced(sc) && !broken);
+      if (sc && isPlaced(sc) && broken) fail = 'broken'; // §7.4: dep/role breakage is 'broken', not 'missing'
     } else if (task.id === 'hd_r_settle') {
       var all2 = tasksForSeg(plan, seg), st = byId(all2, 'hd_r_settle');
       ok = !!(st && isPlaced(st) && st.durMin >= tmplDur.hd_r_settle);
+      if (st && isPlaced(st) && st.durMin < tmplDur.hd_r_settle) fail = 'compressed';
     }
     return tripGateAtom(bucket + '_money_' + task.id, bucket, 'money', task.moneyCheck, ok,
-      { type: 'gate', taskId: task.id }, 'scr_money_ok', 'scr_money_gap');
+      { type: 'gate', taskId: task.id }, 'scr_money_ok', 'scr_money_gap', fail);
   }
   // the three COMPUTED Fishing-Day quality gates (§3.2/§4) — priced beyond a single task's
   // placement: cookblock (dur >= 5min × portions AND dinner <= 18:00, 2pts), allergy respected

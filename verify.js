@@ -826,6 +826,84 @@ console.log('\n=== SCORING RUBRIC v1.0 §8 — the pinned constitution ===');
   ok(P.tripEfficiency(canonPlan) === 100, 'tripEfficiency: canonical -> 100 (pinned)');
   var eff1 = P.tripEfficiency(gappyPlan), eff2 = P.tripEfficiency(gappyPlan);
   ok(eff1 === eff2, 'tripEfficiency: determinism — two calls on the same plan are identical (' + eff1 + ')');
+
+  // (12) QA-wave hardening — behavioral cases for rules the pins above reach only structurally.
+  function tripOf(cfg) { return P.scoreTrip(P.mergePlan(cfg)); }
+  function cloneCfg(cfg) { return JSON.parse(JSON.stringify(cfg)); }
+  var atomIn = function (t, id) { return atomOf(t.atoms, id); };
+
+  // 12a. collapsed socket + one unplaced consumer -> the whole socket is 'missing' (§5
+  // worst-consumer: specialist×ic_ground feeds BOTH t_f_rig and t_f_fish; unplacing t_f_fish
+  // must void the socket even though t_f_rig is still fed on time)
+  var csCfg = cloneCfg(trueCanonCfg());
+  csCfg.overrides.staffing = csCfg.overrides.staffing || {};
+  csCfg.overrides.staffing.t_f_fish = [];
+  var cst = tripOf(csCfg), csA = atomIn(cst, 'fishday_info_specialist_ic_ground');
+  ok(!!csA && csA.earned === 0 && csA.status === 'missing' && csA.reasonKey === 'scr_info_missing',
+    'scoreTrip §5: collapsed socket with an unplaced consumer voids all 3 pts -> missing (' +
+    (csA && csA.earned) + '/' + (csA && csA.status) + ')');
+  ok(sumEarnedClamped(cst.atoms) === cst.total, 'scoreTrip §5: Sigma-earned identity holds on the unplaced-consumer plan (' + cst.total + ')');
+
+  // 12b. same-role overlap -> lane atom reports 'overlap' / scr_exec_overlap (moving
+  // hd_a_board onto hd_a_checkin's hour, same logi person, dep ferrycheck still satisfied)
+  var ovCfg = cloneCfg(trueCanonCfg());
+  var ovPlan0 = P.mergePlan(ovCfg), ovCheckin = null, ovBoard = null;
+  P.tasksForSeg(ovPlan0, 'arrival').forEach(function (t) { if (t.id === 'hd_a_checkin') ovCheckin = t; if (t.id === 'hd_a_board') ovBoard = t; });
+  ovCfg.overrides.days = ovCfg.overrides.days || {}; ovCfg.overrides.days.arrival = ovCfg.overrides.days.arrival || {};
+  ovCfg.overrides.days.arrival.placement = ovCfg.overrides.days.arrival.placement || {};
+  ovCfg.overrides.days.arrival.placement.hd_a_board = { startMin: ovCheckin.startMin, durMin: ovBoard.durMin, assignedIds: ovBoard.assignedIds.slice() };
+  var ovA = atomIn(tripOf(ovCfg), 'arrival_exec_logi');
+  ok(!!ovA && ovA.earned === 0 && ovA.status === 'overlap' && ovA.reasonKey === 'scr_exec_overlap',
+    'scoreTrip §3.2: double-booked logi lane -> overlap / scr_exec_overlap (' + (ovA && ovA.status) + '/' + (ovA && ovA.reasonKey) + ')');
+
+  // 12c. dependency broken -> lane atom reports 'broken' / scr_exec_broken (board re-timed
+  // to start before its dep hd_a_ferrycheck finishes)
+  var dbCfg = cloneCfg(trueCanonCfg());
+  dbCfg.overrides.days = dbCfg.overrides.days || {}; dbCfg.overrides.days.arrival = dbCfg.overrides.days.arrival || {};
+  dbCfg.overrides.days.arrival.placement = dbCfg.overrides.days.arrival.placement || {};
+  dbCfg.overrides.days.arrival.placement.hd_a_board = { startMin: 300, durMin: ovBoard.durMin, assignedIds: ovBoard.assignedIds.slice() };
+  var dbA = atomIn(tripOf(dbCfg), 'arrival_exec_logi');
+  ok(!!dbA && dbA.earned === 0 && dbA.status === 'broken' && dbA.reasonKey === 'scr_exec_broken',
+    'scoreTrip §3.2: dep-broken logi lane -> broken / scr_exec_broken (' + (dbA && dbA.status) + '/' + (dbA && dbA.reasonKey) + ')');
+
+  // 12d. decoy debits bill scoreTrip itself: placing an exec decoy costs -2, a safety-flavored
+  // one -3, and either kills clean (§3.2)
+  var dcCfg = cloneCfg(trueCanonCfg());
+  dcCfg.overrides.days = dcCfg.overrides.days || {}; dcCfg.overrides.days.ops = dcCfg.overrides.days.ops || {};
+  dcCfg.overrides.days.ops.placement = dcCfg.overrides.days.ops.placement || {};
+  dcCfg.overrides.days.ops.placement.hd_o_dec_sidefish = { startMin: 600, durMin: 60, assignedIds: ['p08'] };
+  var dct = tripOf(dcCfg), dcA = atomIn(dct, 'ops_decoy_hd_o_dec_sidefish');
+  ok(!!dcA && dcA.earned === -2 && dcA.status === 'decoy' && dct.total === 98 && dct.gate.clean === false,
+    'scoreTrip §3.2: placed exec decoy -> -2, total 98, not clean (' + (dcA && dcA.earned) + '/' + dct.total + ')');
+  var dsCfg = cloneCfg(trueCanonCfg());
+  dsCfg.overrides.days = dsCfg.overrides.days || {}; dsCfg.overrides.days.arrival = dsCfg.overrides.days.arrival || {};
+  dsCfg.overrides.days.arrival.placement = dsCfg.overrides.days.arrival.placement || {};
+  dsCfg.overrides.days.arrival.placement.hd_a_dec_nightfish = { startMin: 1140, durMin: 60, assignedIds: ['p08'] };
+  var dst = tripOf(dsCfg), dsA = atomIn(dst, 'arrival_decoy_hd_a_dec_nightfish');
+  ok(!!dsA && dsA.earned === -3 && dst.total === 97 && dst.gate.clean === false,
+    'scoreTrip §3.2: placed safety-flavored decoy -> -3, total 97, not clean (' + (dsA && dsA.earned) + '/' + dst.total + ')');
+
+  // 12e. the shrink-the-cook-block exploit (§3.2 durMin floor): t_f_cook at 30min (< 5×18=90)
+  // -> cookblock 0/2 'compressed' AND the chef lane compressed too
+  var ckCfg = cloneCfg(trueCanonCfg());
+  ckCfg.overrides.timing = ckCfg.overrides.timing || {};
+  ckCfg.overrides.timing.t_f_cook = { durMin: 30 };
+  var ckt = tripOf(ckCfg), ckA = atomIn(ckt, 'fishday_quality_cookblock'), ckL = atomIn(ckt, 'fishday_exec_chef');
+  ok(!!ckA && ckA.earned === 0 && ckA.status === 'compressed' && !!ckL && ckL.earned === 0 && ckL.status === 'compressed',
+    'scoreTrip §3.2: shrunk cook block -> cookblock 0/2 compressed + chef lane compressed (' +
+    (ckA && ckA.status) + '/' + (ckL && ckL.status) + ')');
+  ok(sumEarnedClamped(ckt.atoms) === ckt.total, 'scoreTrip §3.2: Sigma-earned identity holds on the shrunk-cook plan (' + ckt.total + ')');
+
+  // 12f. misassigned safety gate -> 'broken' (§7.4: wrong role is broken, never 迷い/'missing')
+  var mgCfg = cloneCfg(trueCanonCfg());
+  mgCfg.overrides.days = mgCfg.overrides.days || {}; mgCfg.overrides.days.ops = mgCfg.overrides.days.ops || {};
+  mgCfg.overrides.days.ops.placement = mgCfg.overrides.days.ops.placement || {};
+  var mgPlan0 = P.mergePlan(cloneCfg(trueCanonCfg())), mgW = null;
+  P.tasksForSeg(mgPlan0, 'ops').forEach(function (t) { if (t.id === 'hd_o_weather') mgW = t; });
+  mgCfg.overrides.days.ops.placement.hd_o_weather = { startMin: mgW.startMin, durMin: mgW.durMin, assignedIds: ['p09'] };
+  var mgA = atomIn(tripOf(mgCfg), 'ops_safety_hd_o_weather');
+  ok(!!mgA && mgA.earned === 0 && mgA.status === 'broken' && mgA.reasonKey === 'scr_safety_gap',
+    'scoreTrip §7.4: safety gate on the wrong role -> broken / scr_safety_gap (' + (mgA && mgA.status) + ')');
 })();
 
 console.log('\n' + (fail === 0 ? 'ALL ' + pass + ' CHECKS PASSED ✓' : pass + ' passed, ' + fail + ' FAILED ✗'));
