@@ -261,36 +261,6 @@ var scBefore = JSON.stringify(scoreOf(base));
 P.ambientActors(1, 0.5); P.cascadeTrace(P.mergePlan(base)); P.stationReadiness(P.createSim(base, 'fishday')); P.boatState(P.createSim(base, 'fishday'));
 ok(JSON.stringify(scoreOf(base)) === scBefore, 'cosmetic helpers do not perturb score() (pure)');
 
-console.log('\n=== ALL-DAY GRID — dayLayout / derivedHandoffs (pure, additive) ===');
-(function () {
-  var plan = P.mergePlan(base);
-  var tasksBefore = JSON.stringify(plan.tasks);
-  var scBefore = JSON.stringify(scoreOf(base));
-  ok(P.dayLayout(plan, 'fishday') === null, 'dayLayout(fishday) === null (Day 3 uses the minute path)');
-  ['arrival', 'ops', 'return'].forEach(function (seg) {
-    var L = P.dayLayout(plan, seg);
-    var shape = L && Array.isArray(L.lanes) && Array.isArray(L.blocks) && Array.isArray(L.unstaffed);
-    ok(shape, 'dayLayout(' + seg + ') returns {lanes,blocks,unstaffed}');
-    if (!shape) return;
-    var within = L.blocks.every(function (b) { return b.startMin >= P.DAY_HOUR_START && (b.startMin + b.durMin) <= P.DAY_HOUR_END && b.laneIndex >= 0 && b.laneIndex < L.lanes.length; });
-    ok(within, seg + ': all blocks within [' + P.DAY_HOUR_START + ',' + P.DAY_HOUR_END + '] and a valid lane');
-    var groups = {}; L.blocks.forEach(function (b) { var k = b.laneIndex + '_' + b.subRow; (groups[k] = groups[k] || []).push(b); });
-    var noOverlap = Object.keys(groups).every(function (k) {
-      var g = groups[k].slice().sort(function (a, b) { return a.startMin - b.startMin; });
-      for (var i = 1; i < g.length; i++) if (g[i].startMin < g[i - 1].startMin + g[i - 1].durMin) return false;
-      return true;
-    });
-    ok(noOverlap, seg + ': blocks in the same lane-row never overlap in time');
-  });
-  ok(P.dayLayout(plan, 'return').unstaffed.indexOf('t_ship') >= 0, 'return flags t_ship unstaffed (GAP-G surfaced)');
-  var ho = P.derivedHandoffs(plan, 'ops');
-  ok(ho.length >= 1 && ho.every(function (a) { return typeof a.cardId === 'string' && typeof a.fromRoleId === 'string' && typeof a.toRoleId === 'string' && typeof a.toTaskId === 'string' && typeof a.incoming === 'boolean'; }), 'derivedHandoffs(ops) well-formed (' + ho.length + ')');
-  ok(ho.some(function (a) { return a.incoming === false && a.fromTaskId; }), 'derivedHandoffs(ops) has a real sender→task line');
-  ok(P.derivedHandoffs(plan, 'return').length === 0, 'derivedHandoffs(return) empty (no cross-person flow)');
-  ok(JSON.stringify(scoreOf(base)) === scBefore, 'dayLayout/derivedHandoffs do not perturb score() (pure)');
-  ok(JSON.stringify(plan.tasks) === tasksBefore, 'dayLayout/derivedHandoffs do not mutate plan.tasks (pure)');
-})();
-
 console.log('\n=== AUTHORABLE DAYS — daySchedule / scoreDay (§20) ===');
 (function () {
   // the first back-to-back handoff (producer end === consumer start) per seg, in handoff-array order
@@ -577,13 +547,25 @@ console.log('\n=== SCORING BLUEPRINT §13 — scoreTrip/tripEfficiency (P1 struc
   ok(st1.atoms.length > 0 && st1.atoms.every(function (a) { return a.id && a.bucket && a.dimension && a.itemRef && typeof a.maxPts === 'number' && typeof a.earned === 'number' && a.status && a.reasonKey; }),
     'scoreTrip: every atom carries {id,bucket,dimension,itemRef,maxPts,earned,status,reasonKey} (' + st1.atoms.length + ' atoms)');
 
-  // §13.3 — every reasonKey is drawn from the fixed template set (no free text, no typos)
-  var RK = { scr_info_ok: 1, scr_info_late: 1, scr_info_missing: 1, scr_info_drawn_late: 1, scr_exec_ok: 1, scr_exec_unstaffed: 1, scr_exec_misassigned: 1, scr_exec_overlap: 1, scr_exec_compressed: 1, scr_exec_broken: 1, scr_safety_ok: 1, scr_safety_gap: 1, scr_qual_ok: 1, scr_qual_fail: 1, scr_money_ok: 1, scr_money_gap: 1, scr_decoy: 1 };
+  // §13.3 / v1.0 §7.4 — every reasonKey is drawn from the fixed template set (no free text, no
+  // typos). scr_people_ok/scr_people_overload are v1.0-new (frame_load_relief no longer borrows
+  // an exec reasonKey — its own People-dimension reason family).
+  var RK = { scr_info_ok: 1, scr_info_late: 1, scr_info_missing: 1, scr_info_drawn_late: 1, scr_exec_ok: 1, scr_exec_unstaffed: 1, scr_exec_misassigned: 1, scr_exec_overlap: 1, scr_exec_compressed: 1, scr_exec_broken: 1, scr_safety_ok: 1, scr_safety_gap: 1, scr_qual_ok: 1, scr_qual_fail: 1, scr_money_ok: 1, scr_money_gap: 1, scr_decoy: 1, scr_people_ok: 1, scr_people_overload: 1 };
   ok(st1.atoms.every(function (a) { return RK[a.reasonKey]; }) && P.scoreTrip(P.mergePlan(base)).atoms.every(function (a) { return RK[a.reasonKey]; }),
-    'scoreTrip: every reasonKey is from the fixed §13.3 set (canonical + gappy)');
+    'scoreTrip: every reasonKey is from the fixed §13.3/§7.4 set (canonical + gappy)');
   // §13.2 — itemRef.type is one of lane|socket|gate|decoy|frame
   var IT = { lane: 1, socket: 1, gate: 1, decoy: 1, frame: 1 };
   ok(st1.atoms.every(function (a) { return IT[a.itemRef.type]; }), 'scoreTrip: every itemRef.type is lane|socket|gate|decoy|frame');
+
+  // frame_load_relief uses the People-specific reason keys (never a borrowed exec key): on the
+  // true canonical (rebalance applied) it earns full with scr_people_ok; on the gappy seed
+  // (rebalance NOT applied -> the 'fatigue' detector is live) it earns 0 with scr_people_overload.
+  var lrCanon = P.scoreTrip(P.mergePlan(P.applyAllFixes(base))).atoms.filter(function (a) { return a.id === 'frame_load_relief'; })[0];
+  ok(!!lrCanon && lrCanon.earned === lrCanon.maxPts && lrCanon.reasonKey === 'scr_people_ok',
+    'frame_load_relief: canonical (rebalance applied) -> earns its full pts, reasonKey scr_people_ok (' + (lrCanon && lrCanon.reasonKey) + ')');
+  var lrGappy = P.scoreTrip(P.mergePlan(base)).atoms.filter(function (a) { return a.id === 'frame_load_relief'; })[0];
+  ok(!!lrGappy && lrGappy.earned === 0 && lrGappy.reasonKey === 'scr_people_overload',
+    'frame_load_relief: gappy (no rebalance, fatigue detector live) -> earned 0, reasonKey scr_people_overload (' + (lrGappy && lrGappy.reasonKey) + ')');
   // false-credit guard: a wrong-role fishday lane task must LOSE its exec point. daySchedule flags
   // misassigned[] on every seg, but dayReadiness surfaces MISASSIGNED on coarse segs only — so the
   // lane atom reads the schedule directly, else a wrong-role Day-3 placement keeps full exec credit.
@@ -619,22 +601,24 @@ console.log('\n=== SCORING BLUEPRINT §13 — P2a make-real atoms (earn on canon
   ok(t.atoms.every(function (a) { return a.earned === a.maxPts; }),
     'scoreTrip: true canonical -> every atom earns its maxPts exactly (no surviving gap)');
 
-  var SEVEN = ['fishday_exec_owner_flex', 'fishday_exec_pm_flex', 'frame_hospital_shared', 'frame_abort_night',
-    'fishday_safety_health_check', 'fishday_quality_allergy', 'fishday_quality_portions'];
+  // v1.0 id scheme (plan §W1-T2 id-change list): fishday_exec_owner_flex->fishday_exec_owner,
+  // fishday_exec_pm_flex->fishday_exec_pm, fishday_safety_health_check->fishday_safety_t_f_health
+  var SEVEN = ['fishday_exec_owner', 'fishday_exec_pm', 'frame_hospital_shared', 'frame_abort_night',
+    'fishday_safety_t_f_health', 'fishday_quality_allergy', 'fishday_quality_portions'];
   SEVEN.forEach(function (id) {
     var a = atomOf(t.atoms, id);
     ok(!!a && a.earned === a.maxPts && a.earned > 0, id + ': earns its full ' + (a && a.maxPts) + ' pts on the true canonical (' + (a && a.earned) + ')');
   });
 
-  // 1. fishday_exec_owner_flex: unplacing the flex task loses its point
+  // 1. fishday_exec_owner: unplacing the flex task loses its point
   var brk1 = trueCanonCfg(); brk1.overrides.staffing = brk1.overrides.staffing || {}; brk1.overrides.staffing.t_f_flex_owner = [];
-  var a1 = atomOf(P.scoreTrip(P.mergePlan(brk1)).atoms, 'fishday_exec_owner_flex');
-  ok(a1.earned === 0 && a1.reasonKey === 'scr_exec_unstaffed', 'fishday_exec_owner_flex: unplacing t_f_flex_owner -> earned 0 (' + a1.reasonKey + ')');
+  var a1 = atomOf(P.scoreTrip(P.mergePlan(brk1)).atoms, 'fishday_exec_owner');
+  ok(a1.earned === 0 && a1.reasonKey === 'scr_exec_unstaffed', 'fishday_exec_owner: unplacing t_f_flex_owner -> earned 0 (' + a1.reasonKey + ')');
 
-  // 2. fishday_exec_pm_flex: misassigning the flex task to the wrong role loses its point
+  // 2. fishday_exec_pm: misassigning the flex task to the wrong role loses its point
   var brk2 = trueCanonCfg(); brk2.overrides.staffing = brk2.overrides.staffing || {}; brk2.overrides.staffing.t_f_flex_pm = ['p08'];
-  var a2 = atomOf(P.scoreTrip(P.mergePlan(brk2)).atoms, 'fishday_exec_pm_flex');
-  ok(a2.earned === 0 && a2.reasonKey === 'scr_exec_misassigned', 'fishday_exec_pm_flex: reassigning t_f_flex_pm to specialist p08 -> earned 0 (' + a2.reasonKey + ')');
+  var a2 = atomOf(P.scoreTrip(P.mergePlan(brk2)).atoms, 'fishday_exec_pm');
+  ok(a2.earned === 0 && a2.reasonKey === 'scr_exec_misassigned', 'fishday_exec_pm: reassigning t_f_flex_pm to specialist p08 -> earned 0 (' + a2.reasonKey + ')');
 
   // 3. frame_hospital_shared: dropping a needed recipient loses the point
   var brk3 = trueCanonCfg(); brk3.overrides.info = brk3.overrides.info || {}; brk3.overrides.info.ic_hospital = { recipientRoleIds: ['pm', 'siteLead'] };
@@ -648,10 +632,10 @@ console.log('\n=== SCORING BLUEPRINT §13 — P2a make-real atoms (earn on canon
   ok(a4.earned === 0 && a4.reasonKey === 'scr_safety_gap' && a4sea.earned === a4sea.maxPts,
     'frame_abort_night: clearing rk_night.abortCriterion -> earned 0, frame_abort_sea unaffected (' + a4.reasonKey + ')');
 
-  // 5. fishday_safety_health_check: unstaffing t_f_health loses the point
+  // 5. fishday_safety_t_f_health: unstaffing t_f_health loses the point
   var brk5 = trueCanonCfg(); brk5.overrides.staffing = brk5.overrides.staffing || {}; brk5.overrides.staffing.t_f_health = [];
-  var a5 = atomOf(P.scoreTrip(P.mergePlan(brk5)).atoms, 'fishday_safety_health_check');
-  ok(a5.earned === 0 && a5.reasonKey === 'scr_safety_gap', 'fishday_safety_health_check: unstaffing t_f_health -> earned 0 (' + a5.reasonKey + ')');
+  var a5 = atomOf(P.scoreTrip(P.mergePlan(brk5)).atoms, 'fishday_safety_t_f_health');
+  ok(a5.earned === 0 && a5.reasonKey === 'scr_safety_gap', 'fishday_safety_t_f_health: unstaffing t_f_health -> earned 0 (' + a5.reasonKey + ')');
 
   // 6. fishday_quality_allergy: committing the menu to a species in the allergen CATEGORY
   // (refinement-1: 'shrimp' -> category 'shellfish', which intersects ic_food.allergens —
@@ -680,8 +664,8 @@ console.log('\n=== SCORING BLUEPRINT §7/§13.4 — P2 numeric: gappy D-band + a
   var gappyPlan = P.mergePlan(base);
   var g = P.scoreTrip(gappyPlan);
   console.log('  gappy scoreTrip:', g.total, '/', g.grade, JSON.stringify(g.byBucket));
-  ok(g.total < 60, 'scoreTrip: gappy trip lands in the D band (<60) (' + g.total + ')');
-  ok(g.total >= 40 && g.total <= 60, 'scoreTrip: gappy trip is near the ~50 target (' + g.total + ')');
+  // v1.0 §6/§8: band assertions ("<60", "~50 target") are retired now that the exact seed value
+  // is pinned (see the "SCORING RUBRIC v1.0 §8" section below, PINS.gappySeed).
   ok(g.grade === 'D', 'scoreTrip: gappy trip grades D (' + g.grade + ')');
   ok(g.gate.clean === false, 'scoreTrip: gappy trip is not clean');
 
@@ -704,6 +688,144 @@ console.log('\n=== SCORING BLUEPRINT §7/§13.4 — P2 numeric: gappy D-band + a
   ['arrival', 'ops', 'return'].forEach(function (s) { canonCfg2 = P.applyDayFix(canonCfg2, s); });
   var t2 = P.scoreTrip(P.mergePlan(canonCfg2));
   ok(t2.total === 100 && t2.grade === 'A' && t2.gate.clean === true, 'scoreTrip: canonical still 100/A/clean under the re-tuned seed (' + t2.total + '/' + t2.grade + ')');
+})();
+
+// ============================================================================
+// SCORING RUBRIC v1.0 — §8 the pinned constitution (spec 2026-07-10-scoring-rubric-v1-design.md
+// §6 seed contract + §8 verification contract). Items (2) Sigma maxPts===100 and (3) both matrix
+// axes exact are ALREADY asserted above (the P1-structural block) and are not repeated here.
+// Everything else — atom count, the Sigma-earned-clamped identity, the exact PINS, the monotone
+// ladder, and the three constructed recipes (withheldA / drawn-but-late / redundant-arrow) — is
+// new and lives in this one section, per plan Task W1-T2 Step 3.
+// ============================================================================
+console.log('\n=== SCORING RUBRIC v1.0 §8 — the pinned constitution ===');
+(function () {
+  function sumEarnedClamped(atoms) {
+    var s = 0; atoms.forEach(function (a) { s += a.earned; });
+    return Math.max(0, s);
+  }
+  function atomOf(atoms, id) { return atoms.filter(function (a) { return a.id === id; })[0]; }
+  function trueCanonCfg() {
+    var cfg = P.applyAllFixes({ seed: 1, overrides: {} });
+    ['arrival', 'ops', 'return'].forEach(function (s) { cfg = P.applyDayFix(cfg, s); });
+    return cfg;
+  }
+
+  // PINS — the exact seed values (spec §6, plan §W1-T2). These are the reference derivation's
+  // PRE-MEASURED ESTIMATES, not yet the real numbers off the merged v1.0 engine (this task
+  // (W1-T2) runs concurrently with W1-T1's engine rewrite and cannot measure them). The
+  // INTEGRATOR (W2) measures the true values from the merged engine.js and overwrites the
+  // fields below to the exact measured numbers before committing — this object is the single
+  // place a seed re-tune touches thereafter, spec-first per §6.
+  var PINS = {
+    gappySeed: 54,
+    gappyBuckets: { frame: 0, arrival: 7, ops: 16, fishday: 20, return: 11 },
+    fixHandoffsJump: 18,
+    tripEffGappy: 81
+  };
+
+  var gappyPlan = P.mergePlan(base);
+  var g = P.scoreTrip(gappyPlan);
+  var canonCfg = trueCanonCfg();
+  var canonPlan = P.mergePlan(canonCfg);
+  var t = P.scoreTrip(canonPlan);
+
+  // (1) atom count === 89, gappy AND canonical (the constitution's atom inventory is
+  // template-derived, not plan-derived — both plans carry the identical 89 atoms)
+  ok(g.atoms.length === 89, 'scoreTrip: gappy atoms.length === 89 (' + g.atoms.length + ')');
+  ok(t.atoms.length === 89, 'scoreTrip: canonical atoms.length === 89 (' + t.atoms.length + ')');
+
+  // (4) Sigma atoms.earned (clamped >=0) === total, on gappy + canonical
+  ok(sumEarnedClamped(g.atoms) === g.total, 'scoreTrip: Sigma atoms.earned (clamped) === total on gappy (' + g.total + ')');
+  ok(sumEarnedClamped(t.atoms) === t.total, 'scoreTrip: Sigma atoms.earned (clamped) === total on canonical (' + t.total + ')');
+
+  // (5) PINS — exact seed values (finalized by the integrator against the merged engine)
+  ok(g.total === PINS.gappySeed, 'scoreTrip: gappy total pinned exactly at PINS.gappySeed (' + g.total + ')');
+  var gBuckets = {}; for (var kg in g.byBucket) gBuckets[kg] = g.byBucket[kg].earned;
+  ok(JSON.stringify(gBuckets) === JSON.stringify(PINS.gappyBuckets),
+    'scoreTrip: gappy byBucket earned pinned exactly at PINS.gappyBuckets (' + JSON.stringify(gBuckets) + ')');
+  var jump = P.scoreTrip(P.mergePlan(P.applyFix(base, 'fixHandoffs'))).total - g.total;
+  ok(jump === PINS.fixHandoffsJump, 'scoreTrip: fixHandoffs jump pinned exactly at PINS.fixHandoffsJump (' + jump + ')');
+  ok(P.tripEfficiency(gappyPlan) === PINS.tripEffGappy, 'tripEfficiency: gappy pinned exactly at PINS.tripEffGappy (' + P.tripEfficiency(gappyPlan) + ')');
+
+  // (6) cumulative monotone ladder: the 8 classic fixes (incl. fixHandoffs) then applyDayFix x3
+  // (arrival/ops/return) -> each step's total is >= the previous, and the Sigma-earned identity
+  // holds at every step; the final step reaches 100/A/clean.
+  var LADDER_FIXES = ['setSafety', 'grantAuth', 'shareInfo', 'setReport', 'rebalance', 'fixReserve', 'setReturn', 'fixHandoffs'];
+  var accCfg = base, ladder = [g];
+  LADDER_FIXES.forEach(function (fx) { accCfg = P.applyFix(accCfg, fx); ladder.push(P.scoreTrip(P.mergePlan(accCfg))); });
+  ['arrival', 'ops', 'return'].forEach(function (seg) { accCfg = P.applyDayFix(accCfg, seg); ladder.push(P.scoreTrip(P.mergePlan(accCfg))); });
+  var monoLadder = true;
+  for (var li = 1; li < ladder.length; li++) {
+    if (ladder[li].total < ladder[li - 1].total) monoLadder = false;
+    ok(sumEarnedClamped(ladder[li].atoms) === ladder[li].total, 'scoreTrip: Sigma atoms.earned (clamped) === total at ladder step ' + li + ' (' + ladder[li].total + ')');
+  }
+  ok(monoLadder, 'scoreTrip: cumulative fix ladder (8 classic incl. fixHandoffs + 3 canonDay) is monotone non-decreasing (' + ladder.map(function (s) { return s.total; }).join('→') + ')');
+  var lastStep = ladder[ladder.length - 1];
+  ok(lastStep.total === 100 && lastStep.grade === 'A' && lastStep.gate.clean === true, 'scoreTrip: final ladder step -> 100/A/clean');
+
+  // (7) withheldA: canonical minus one 1pt return arrow -> 99, not clean, grade B, gate.withheldA
+  var wCfg = trueCanonCfg();
+  wCfg.overrides.days = wCfg.overrides.days || {};
+  wCfg.overrides.days['return'] = wCfg.overrides.days['return'] || {};
+  wCfg.overrides.days['return'].handoffs = wCfg.overrides.days['return'].handoffs || {};
+  var returnArrowIds = P.mergePlan(wCfg).days['return'].handoffs.map(function (h) { return h.id; });
+  wCfg.overrides.days['return'].handoffs[returnArrowIds[0]] = null;
+  var wPlan = P.mergePlan(wCfg), wt = P.scoreTrip(wPlan);
+  ok(wt.total === 99 && wt.gate.clean === false && wt.grade === 'B' && wt.gate.withheldA === true,
+    'scoreTrip: withheldA — erasing one 1pt return arrow (' + returnArrowIds[0] + ') -> 99/clean:false/B/withheldA:true (' +
+    wt.total + '/' + wt.grade + '/' + wt.gate.withheldA + ')');
+
+  // (7b) the clean gate also polices the one classic detector without an atom home: skipping
+  // setReturn (frame t_ship staffing) still totals 100 but withholds the A via detect()!==0
+  var nrCfg = base;
+  ['setSafety', 'grantAuth', 'shareInfo', 'setReport', 'rebalance', 'fixReserve', 'fixHandoffs'].forEach(function (fx) { nrCfg = P.applyFix(nrCfg, fx); });
+  ['arrival', 'ops', 'return'].forEach(function (seg) { nrCfg = P.applyDayFix(nrCfg, seg); });
+  var nrt = P.scoreTrip(P.mergePlan(nrCfg));
+  ok(nrt.total === 100 && nrt.gate.clean === false && nrt.grade === 'B' && nrt.gate.withheldA === true,
+    'scoreTrip: skipping setReturn -> 100 points but a live returnLogi detector withholds the A (' +
+    nrt.total + '/' + nrt.grade + '/withheldA:' + nrt.gate.withheldA + ')');
+
+  // (8) drawn-but-late riskable: canonical + retime h_menu_angler to a late board send ->
+  // fishday_info_specialist_ic_menu earns 1/3, status present-but-late, reasonKey scr_info_drawn_late
+  var lCfg = trueCanonCfg();
+  lCfg.overrides.handoffs = lCfg.overrides.handoffs || {};
+  // retime the FULL canonical arrow (a partial {trigger,channel} override would replace the
+  // whole arrow at merge and orphan the socket into 'missing' — the arrow must stay valid)
+  var lArrow = P.canonHandoffs().filter(function (h) { return h.id === 'h_menu_angler'; })[0];
+  var lPatch = {}; for (var lk in lArrow) lPatch[lk] = lArrow[lk];
+  lPatch.trigger = { type: 'atMinute', value: 330 }; lPatch.channel = 'board';
+  lCfg.overrides.handoffs.h_menu_angler = lPatch;
+  var lPlan = P.mergePlan(lCfg), lt = P.scoreTrip(lPlan);
+  var lAtom = atomOf(lt.atoms, 'fishday_info_specialist_ic_menu');
+  ok(!!lAtom && lAtom.earned === 1 && lAtom.status === 'present-but-late' && lAtom.reasonKey === 'scr_info_drawn_late',
+    'scoreTrip: drawn-but-late riskable socket earns 1/3, status present-but-late, reasonKey scr_info_drawn_late (' +
+    (lAtom && lAtom.earned) + '/' + (lAtom && lAtom.status) + '/' + (lAtom && lAtom.reasonKey) + ')');
+
+  // (9) redundant-arrow non-inflation: canonical + a duplicate faster arrow on an already-ok
+  // socket -> total unchanged at 100, and that socket's maxPts is unaffected by the extra wire
+  var rCfg = trueCanonCfg();
+  rCfg.overrides.handoffs = rCfg.overrides.handoffs || {};
+  rCfg.overrides.handoffs.h_tackle2 = { cardId: 'ic_tackle', fromRoleId: 'logi', fromTaskId: 't_f_tackleprep', toRoleId: 'specialist', toTaskId: 't_f_gearload', trigger: { type: 'onTaskDone', taskId: 't_f_tackleprep' }, channel: 'faceToFace', ifLate: 'idle', reworkKind: null, content: { en: 'x', jp: 'x' } };
+  var rPlan = P.mergePlan(rCfg), rt = P.scoreTrip(rPlan);
+  var rAtom = atomOf(rt.atoms, 'fishday_info_specialist_ic_tackle');
+  ok(rt.total === 100, 'scoreTrip: a redundant faster duplicate arrow does not inflate the total (still 100)');
+  ok(!!rAtom && rAtom.maxPts === 1 && rAtom.earned === 1,
+    'scoreTrip: the duplicated socket (fishday_info_specialist_ic_tackle) stays at its normal maxPts/earned, unaffected by the extra wire (' + (rAtom && rAtom.maxPts) + '/' + (rAtom && rAtom.earned) + ')');
+
+  // (10) i18n parity: EN/JA key sets are symmetric (require guarded by the i18n.js UMD export
+  // tail another Wave-1 worker (W1-T3) adds; STR.en/STR.ja are plain flat namespaces)
+  var STR = require('./i18n.js');
+  var enKeys = Object.keys(STR.en || {}), jaKeys = Object.keys(STR.ja || {});
+  var onlyEn = enKeys.filter(function (k) { return jaKeys.indexOf(k) < 0; });
+  var onlyJa = jaKeys.filter(function (k) { return enKeys.indexOf(k) < 0; });
+  ok(onlyEn.length === 0 && onlyJa.length === 0,
+    'i18n: EN/JA key sets are symmetric (only-EN=' + onlyEn.join(',') + ' only-JA=' + onlyJa.join(',') + ')');
+
+  // (11) tripEfficiency: pinned exact on gappy (via PINS above) and 100 on canonical; determinism
+  ok(P.tripEfficiency(canonPlan) === 100, 'tripEfficiency: canonical -> 100 (pinned)');
+  var eff1 = P.tripEfficiency(gappyPlan), eff2 = P.tripEfficiency(gappyPlan);
+  ok(eff1 === eff2, 'tripEfficiency: determinism — two calls on the same plan are identical (' + eff1 + ')');
 })();
 
 console.log('\n' + (fail === 0 ? 'ALL ' + pass + ' CHECKS PASSED ✓' : pass + ' passed, ' + fail + ' FAILED ✗'));
