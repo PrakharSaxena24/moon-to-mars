@@ -45,8 +45,11 @@ re-normalization. Frozen matrix (bucket × dimension), asserted on both axes:
 Fishing Day is the heaviest bucket and Information the heaviest dimension because they *contain* the most
 clocked atoms under the rules — the thesis (information has a clock) priced honestly, not by multiplier.
 
-**Grade gate (inherited):** A requires total ≥ 90 **and** clean (every atom at max, decoys at 0). ≥90 but not
-clean shows the true sum with a withheld A: "97 · B — an A requires zero known gaps." B ≥ 75 · C ≥ 60 · else D.
+**Grade gate (inherited):** A requires total ≥ 90 **and** clean. Clean = every atom at max (decoys at 0) **and
+no live classic detector** — the second clause exists because exactly one legacy check (return logistics
+staffing, the frame `t_ship` gap fixed by `setReturn`) has no atom home in the frozen matrix; it must still
+withhold the A ("zero known gaps") even though it prices at 0. ≥90 but not clean shows the true sum with a
+withheld A: "97 · B — an A requires zero known gaps." B ≥ 75 · C ≥ 60 · else D.
 One shared `GRADE_BANDS` constant; the legacy per-scorer thresholds and the old !clean→89 cap are retired from
 every player-facing number (§7.2).
 
@@ -231,6 +234,12 @@ deleted (the outstanding §21.8a retirement).
    `transport_auth`) so their ledger names resolve from task data.
 5. Atom count 90 → **89**. All other prices, all 26 sockets, the riskable set, frame gates, decoy debits, and
    both matrix axes are unchanged from the as-built.
+6. *(integration amendment)* Retiring `return_safety_ship_staffed` de-priced the classic `returnLogi` gap; the
+   clean gate gained the no-live-detector clause (§2) so that gap withholds the A instead of vanishing.
+   Verified by a constructed skip-setReturn case (100 points, grade B, withheldA).
+7. *(as-built note)* Coarse quality/safety/money atom ids are task-homed like every derived atom
+   (`arrival_quality_hd_a_dinnerprep`, `ops_safety_hd_o_weather`, …), and `return_safety_hd_r_headcount` is a
+   plain coarse gate (the `ic_return` delivery is priced by the `return_info_pm_ic_return` socket, not the gate).
 
 ## 11. Out of scope
 
