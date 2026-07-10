@@ -57,6 +57,14 @@
 
   <!-- ============ SETUP ============ -->
   <section id="setup">
+    <!-- §W1 ledger rail: the score receipt as the progress spine (sticky right column ≥1180px) -->
+    <aside class="setup-rail" id="rail-setup">
+      <div class="card railcard">
+        <div class="rail" id="rail-body"></div>
+        <button class="btn primary" id="launch" data-i18n="launchBtn"></button>
+      </div>
+    </aside>
+    <div class="setup-main">
     <div class="card canvascard">
       <div class="goalrow">
         <div class="goalbig" data-i18n="canvasTitle"></div>
@@ -90,7 +98,6 @@
       <div id="tracker" class="tracker"></div>
       <div class="ed-head" id="ed-head"></div>
       <div id="editors" class="editors"></div>
-      <div class="planready" id="plan-ready"></div>
       <div class="planhint" id="plan-hint"></div>
       <div style="display:flex;gap:8px;margin-top:14px;">
         <button class="btn sm ghost" id="btn-auto" data-i18n="autoBtn"></button>
@@ -111,10 +118,8 @@
       <div class="dash-lbl" id="fd-arrows-lbl" data-i18n="fdArrowsLbl" style="margin-top:12px;"></div>
       <div class="fd-arrowlist" id="fd-arrowlist"></div>
       <div class="planready" id="fd-ready"></div>
-      <div class="planhint" id="fd-projected"></div>
     </div>
-
-    <button class="btn primary" id="launch" style="width:100%;height:48px;font-size:16px;" data-i18n="launchBtn"></button>
+    </div><!-- /.setup-main -->
   </section>
 
   <!-- ============ RUN ============ -->
@@ -137,9 +142,9 @@
       <aside class="dashboard" id="dashboard">
         <div class="dash-head"><span class="dash-day" id="dash-day"></span><span class="dash-phase" id="dash-phase"></span></div>
         <div class="dash-sec">
-          <div class="dash-lbl" data-i18n="overallLbl"></div>
-          <div class="bigreadout"><span id="dash-ready">100%</span></div>
-          <div class="meter"><div class="bar"><i id="dash-ready-bar"></i></div></div>
+          <div class="dash-lbl" data-i18n="railLbl"></div>
+          <div class="bigreadout"><span id="dash-ready">100</span><span class="rail-of">/ 100</span><span class="rail-grade" id="dash-grade"></span></div>
+          <div class="rail-rows" id="rail-run"></div>
         </div>
         <div class="dash-sec hidden" id="dash-fd">
           <div class="dash-lbl" id="dash-eff-lbl" data-i18n="effLbl"></div>
@@ -199,6 +204,7 @@
       </div>
       <div class="conds" id="r-conds"></div>
     </div>
+    <div class="card railcard"><div class="rail" id="rail-report"></div></div>
     <div class="card"><h2 id="ledger-title"></h2><div class="ledger" id="ledger"></div></div>
     <div class="card"><h2 data-i18n="fixpackTitle"></h2><div class="tag" data-i18n="fixpackHint" style="margin:-6px 0 12px;"></div><div class="fixpack" id="fixpack"></div></div>
     <div class="card"><h2 data-i18n="individualsTitle"></h2><div class="indivwrap"><table class="indiv" id="individuals"></table></div></div>

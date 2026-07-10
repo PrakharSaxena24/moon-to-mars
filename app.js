@@ -247,47 +247,141 @@
       '<section><h3>' + t.mcSpendDrills + '</h3><div class="mc-spends">' + events + '</div></section></div>';
   }
 
+  // §W1 receipt-as-control: each design decision is a receipt ROW (icon + label + status chip +
+  // points + flip-open stakes + one action), not a <select>. buildEditors lays the static skeleton;
+  // paintReceiptRows (via updatePlanUI) fills every dynamic part, so the "why" <details> open state
+  // survives repaints exactly like the old cards did.
   function buildEditors() {
     var t = T(), box = $('editors'); box.innerHTML = '';
     var head = $('ed-head'); if (head) head.textContent = t.planDayLine(dayLabel(daySel), detsForDay(daySel).length);
     detsForDay(daySel).forEach(function (d) {
       var rr = P.role(DET_ROLE[d]);
-      var c = document.createElement('div'); c.className = 'editor-card'; c.id = 'ed-' + d;
+      var c = document.createElement('div'); c.className = 'editor-card rc'; c.id = 'ed-' + d;
       c.innerHTML =
         '<div class="ed-top"><span class="ed-ic" style="background:' + rr.color + '">' + rr.icon + '</span>' +
-          '<span class="ed-label">' + t['e_' + d + '_label'] + '</span><span class="ed-chip" id="chip-' + d + '"></span></div>' +
+          '<span class="ed-label">' + t['e_' + d + '_label'] + '</span><span class="lg-chip" id="chip-' + d + '"></span><span class="rc-pts" id="pts-' + d + '"></span></div>' +
+        '<div class="rc-state" id="state-' + d + '"></div>' +
         '<details class="ed-more" id="cause-' + d + '"><summary>' + t.whyBtn + '</summary><div>' + t['p_' + d + '_cause'] + '</div></details>' +
-        '<select class="ed-sel" data-fix="' + DET_FIX[d] + '">' +
-          '<option value="off">' + t['e_' + d + '_off'] + '</option>' +
-          '<option value="on">✓ ' + t['e_' + d + '_on'] + '</option></select>';
+        '<div class="rc-act" id="act-' + d + '"></div>';
       box.appendChild(c);
-      c.querySelector('select').value = fixed[DET_FIX[d]] ? 'on' : 'off';
     });
+  }
+
+  // "+N per decision" = scoreTrip with this fix toggled vs. the current plan — the REAL apply path
+  // (toggle `fixed`, rebuild cfg), computed once per paint per visible row (≤9 scoreTrip calls,
+  // setup-only; measured ~a few ms total, see W1 self-check).
+  function receiptAltTotal(d) {
+    var fixId = DET_FIX[d], was = fixed[fixId];
+    fixed[fixId] = !was;
+    var total = P.scoreTrip(P.mergePlan(buildCfg())).total;
+    fixed[fixId] = was;
+    return total;
+  }
+  function paintReceiptRows(open, baseTotal) {
+    var t = T();
+    detsForDay(daySel).forEach(function (d) {
+      var card = $('ed-' + d); if (!card) return;
+      var isOpen = !!open[d], hasFlag = fixed[DET_FIX[d]];
+      var chip = $('chip-' + d), state = $('state-' + d), pts = $('pts-' + d), act = $('act-' + d), cause = $('cause-' + d);
+      var delta = null;
+      if (isOpen) delta = Math.max(0, receiptAltTotal(d) - baseTotal);            // the prize for closing it
+      else if (hasFlag) delta = Math.max(0, baseTotal - receiptAltTotal(d));      // what this closed row earns
+      card.classList.toggle('closed', !isOpen);
+      if (chip) { chip.textContent = isOpen ? ('⛔ ' + t.sst_missing) : ('✓ ' + t.sst_ok); chip.className = 'lg-chip ' + (isOpen ? 'zero' : 'full'); }
+      if (state) state.textContent = t['e_' + d + (isOpen ? '_off' : '_on')];
+      if (pts) { pts.textContent = delta == null ? '✓' : (isOpen ? '+' + delta : '✓ +' + delta); pts.className = 'rc-pts ' + (isOpen ? 'zero' : 'full'); }
+      if (cause) cause.style.display = isOpen ? 'block' : 'none';
+      if (act) {
+        // the fishday-arrows row NEVER fakes a one-click — it routes to the real editor (spec §2)
+        if (isOpen && d === 'handoffTiming') act.innerHTML = '<button type="button" class="btn sm rc-route" data-det="' + d + '">' + t.rcRouteFishday + '</button>';
+        else if (isOpen) act.innerHTML = '<button type="button" class="btn sm primary rc-close" data-det="' + d + '">' + t.rcClose(delta) + '</button>';
+        else act.innerHTML = '<span class="rc-earned">' + (delta != null && delta > 0 ? t.rcClosed(delta) : '✓') + '</span>' +
+          (hasFlag ? '<button type="button" class="btn sm ghost rc-undo" data-det="' + d + '">' + t.rcUndo + '</button>' : '');
+      }
+    });
+  }
+  // one tap closes/reopens a gap through the SAME buildCfg→applyFix path the old <select> used,
+  // keeping the mcOv coupling (grantAuth/fixReserve) and the fixHandoffs conflict-clear byte-identical
+  function applyReceiptFix(d, on) {
+    var fixId = DET_FIX[d];
+    fixed[fixId] = on;
+    if (fixId === 'fixHandoffs' && on) fdClearFixConflicts();
+    if (fixId === 'grantAuth') {
+      if (on) mcClearFixConflicts('grantAuth');
+      else mcOv.lines.bl_meals = { approverRoleId: null };
+    }
+    if (fixId === 'fixReserve') {
+      if (on) mcClearFixConflicts('fixReserve');
+      else { mcOv.reserve = 0; mcOv.resources.res_cash = { planned: 0 }; }
+    }
+    updatePlanUI();
+    // keep keyboard flow alive across the innerHTML swap: land on the row's new action
+    var nb = document.querySelector((on ? '.rc-undo' : '.rc-close') + '[data-det="' + d + '"]');
+    if (nb) nb.focus();
+  }
+
+  // ---- §W1 ledger rail: ONE renderer, three surfaces (setup #rail-body · run #rail-run · report #rail-report) ----
+  var railLastSetup = null;
+  function railRowsHtml(trip, t, clickable) {
+    return LEDGER_BUCKETS.map(function (bk) {
+      var b = trip.byBucket[bk] || { earned: 0, maxPts: 0 };
+      var short = b.earned < b.maxPts;
+      var inner = '<span class="rail-nm">' + t['sb_' + bk] + '</span><span class="rail-pts">' + b.earned + ' / ' + b.maxPts + '</span>';
+      return clickable
+        ? '<button type="button" class="rail-row' + (short ? ' short' : '') + '" data-bucket="' + bk + '">' + inner + '</button>'
+        : '<div class="rail-row' + (short ? ' short' : '') + '">' + inner + '</div>';
+    }).join('');
+  }
+  function railGateHtml(trip, t) {
+    if (trip.gate && trip.gate.clean) return '';
+    return '<div class="rail-gate' + (trip.gate && trip.gate.withheldA ? ' hot' : '') + '">' + t.railGate + '</div>';
+  }
+  function renderRail(mode, tripIn) {
+    var t = T(), trip, box, i;
+    if (mode === 'setup') {
+      box = $('rail-body'); if (!box) return;
+      trip = tripIn || P.scoreTrip(currentPlan());
+      box.innerHTML = '<div class="dash-lbl">' + t.railLbl + '</div>' +
+        '<div class="rail-tense" id="rail-tense">' + t.railAim(trip.total) + '</div>' +
+        '<div class="rail-rows">' + railRowsHtml(trip, t, true) + '</div>' + railGateHtml(trip, t);
+      if (railLastSetup != null && trip.total > railLastSetup && !$('setup').classList.contains('hidden')) {
+        var te = $('rail-tense');
+        floatDelta(te, '+' + (trip.total - railLastSetup));
+        if (!RM.matches) { te.classList.add('bump'); setTimeout(function () { te.classList.remove('bump'); }, 620); }
+      }
+      railLastSetup = trip.total;
+    } else if (mode === 'run') {
+      box = $('rail-run'); if (!box || !tripIn) return;
+      trip = tripIn;
+      // rebuilt only when the ledger actually moves, so per-tick repaints don't thrash the DOM
+      var sig = L;
+      for (i = 0; i < LEDGER_BUCKETS.length; i++) { var bb = trip.byBucket[LEDGER_BUCKETS[i]]; sig += '|' + bb.earned + '/' + bb.maxPts; }
+      sig += '|' + (trip.gate.clean ? 'c' : (trip.gate.withheldA ? 'w' : 'o'));
+      if (box._sig === sig) return;
+      box._sig = sig;
+      box.innerHTML = railRowsHtml(trip, t, false) + railGateHtml(trip, t);
+    } else {
+      box = $('rail-report'); if (!box) return;
+      trip = tripIn || P.scoreTrip(currentPlan());
+      box.innerHTML = '<div class="rail-tense" style="color:' + GRADE_COLOR[trip.grade] + '">' + t.railFinal(trip.total, trip.grade) + '</div>' +
+        '<div class="rail-rows">' + railRowsHtml(trip, t, false) + '</div>' + railGateHtml(trip, t);
+    }
   }
 
   function updatePlanUI() {
     var open = {}; activeProblemIds().forEach(function (id) { open[id] = true; });
     var t = T(), dayDets = detsForDay(daySel), gaps = 0;
-    dayDets.forEach(function (d) {
-      var isOpen = !!open[d];
-      var chip = $('chip-' + d), cause = $('cause-' + d), card = $('ed-' + d);
-      var sel = document.querySelector('.ed-sel[data-fix="' + DET_FIX[d] + '"]');
-      if (sel) sel.value = fixed[DET_FIX[d]] ? 'on' : 'off';
-      if (chip) { chip.textContent = isOpen ? ('⛔ ' + t.gapChip) : '✓'; chip.className = 'ed-chip ' + (isOpen ? 'bad' : 'ok'); }
-      if (cause) cause.style.display = isOpen ? 'block' : 'none';
-      if (card) card.classList.toggle('closed', !isOpen);
-      if (isOpen) gaps++;
-    });
+    dayDets.forEach(function (d) { if (open[d]) gaps++; });
+    var trip = P.scoreTrip(currentPlan());
+    paintReceiptRows(open, trip.total);
     buildOrg();
-    $('plan-ready').innerHTML = '<span class="pr-lbl">' + t.readyTitle + '</span>' + dayDets.map(function (d) {
-      return '<span class="pr-item ' + (open[d] ? 'bad' : 'ok') + '">' + (open[d] ? '•' : '✓') + ' ' + t['e_' + d + '_label'].split(' (')[0].split('（')[0] + '</span>';
-    }).join('');
     $('plan-hint').textContent = gaps ? t.hintGaps(gaps) : t.hintReadyDay(dayLabel(daySel));
     $('plan-hint').className = 'planhint' + (gaps ? '' : ' good');
     buildDaySelect();
     $('launch').textContent = t.runDayBtn(dayLabel(daySel));
     buildMissionControl();
     buildDayGrid();
+    renderRail('setup', trip);
   }
 
   // =========================================================================
@@ -297,7 +391,7 @@
   // reading P.tasksForSeg/P.handoffsForSeg and writing dayOv[seg] (§20.3).
   // =========================================================================
   var PXM = 0.8, FD_T0 = P.DAY_START_MIN, FD_T1 = P.DAY_END_MIN, LANE_H = 40, LBL_W = 108, RULER_H = 26;
-  var fdDrag = null, fdWire = null, fdGhost = null, arrowEdit = null, arrowEditSeg = null, placingChip = null, fdUid = 1, fdLastProj = {};
+  var fdDrag = null, fdWire = null, fdGhost = null, arrowEdit = null, arrowEditSeg = null, placingChip = null, fdUid = 1;
   // AoE-style resource-tick: float a "+N" over the projection when a fix raises the score
   function floatDelta(host, txt, cls) {
     if (!host) return;
@@ -499,19 +593,8 @@
     $('fd-ready').innerHTML = '<span class="pr-lbl">' + t.fdReadyLbl + '</span>' +
       (chips.length ? chips.slice(0, 8).join('') + (chips.length > 8 ? '<span class="pr-item bad">+' + (chips.length - 8) + '</span>' : '')
                     : '<span class="pr-item ok">' + t.fdReadyOk + '</span>');
-    // §7.2: setup projections preview this day's SLICE of the whole-trip 100 by running scoreTrip on
-    // the hypothetical (in-progress) plan — no scoreDay/projectedDay. Efficiency is day-scoped.
-    var hypo = P.mergePlan(buildCfg()), trip = P.scoreTrip(hypo);
-    var b = trip.byBucket[seg] || { earned: 0, maxPts: 0 };
-    var scoreVal = b.earned, maxVal = b.maxPts, effVal = P.daySchedule(hypo, seg).efficiency;
-    var pe = $('fd-projected');
-    pe.textContent = t.fdProjected(scoreVal, maxVal, effVal);
-    pe.className = 'planhint' + (chips.length ? '' : ' good');
-    if (fdLastProj[seg] != null && scoreVal > fdLastProj[seg]) {
-      floatDelta(pe, '+' + (scoreVal - fdLastProj[seg])); pe.classList.add('bump');
-      setTimeout(function () { pe.classList.remove('bump'); }, 620);
-    }
-    fdLastProj[seg] = scoreVal;
+    // §W1: the per-day projection line moved into the ledger rail (renderRail('setup') — the day's
+    // bucket row IS the projection); updatePlanUI repaints it in the same pass as this ready-check.
   }
 
   // ---- tap-to-place fallback (keyboard/touch parity with the pointer drag below): tap/Enter a
@@ -914,6 +997,8 @@
     ['dash-eff', 'dash-ready'].forEach(function (id) {
       var el = $(id); if (el) { el._v = null; el._shown = null; if (el.parentNode) el.parentNode.classList.remove('gold'); }
     });
+    // §W1: the run rail's rebuild signature also lives on the DOM node — a fresh run must repaint
+    var rr = $('rail-run'); if (rr) rr._sig = '';
   }
   // one transform write per mover per frame, and only when it actually moved
   function setXY(el, x, y) {
@@ -1490,11 +1575,13 @@
       var ib = $('dash-idle-bar');
       if (ib) { var iw = Math.min(100, idleSoFar / 2.2); ib.style.width = iw + '%'; ib.className = idleSoFar <= 0 ? 'ok' : (iw > 40 ? 'bad' : 'mid'); }
     }
+    // §W1: the readiness meter is now the ledger rail — the ticking total (E2E hook #dash-ready
+    // kept on the total element) + grade + the 5 bucket rows + the grade-gate line.
     var readyVal = trip.total;
-    tweenNum($('dash-ready'), readyVal, '%');
-    $('dash-ready-bar').style.width = readyVal + '%';
-    $('dash-ready-bar').className = readyVal >= 75 ? 'ok' : (readyVal >= 60 ? 'mid' : 'bad');
+    tweenNum($('dash-ready'), readyVal, '');
     $('dash-ready').style.color = GRADE_COLOR[trip.grade];
+    var gEl = $('dash-grade'); if (gEl) { gEl.textContent = trip.grade; gEl.style.color = GRADE_COLOR[trip.grade]; }
+    renderRail('run', trip);
     var bpct = Math.round(s.budget.spent / s.budget.total * 100);
     $('dash-budget-txt').textContent = '¥' + nf(s.budget.spent) + ' / ¥' + nf(s.budget.total);
     $('dash-budget-bar').style.width = bpct + '%';
@@ -1828,6 +1915,7 @@
         td(iv.action) + td(iv.decision) + td(iv.load, true) + td(iv.fatigue, true) + td(iv.coop) + td(iv.contribution) + '</tr>';
     }).join('');
     $('individuals').innerHTML = th + rows;
+    renderRail('report', trip);
     renderLedger(trip, res.segment);
   }
 
@@ -1878,6 +1966,7 @@
       return '<div class="fix-row" data-type="' + h.type + '"><div class="fix-main"><div class="fix-body">' + hintTxt(h) + '</div></div></div>';
     }).join('') + '<button class="btn primary" id="btn-day-autofix">' + t.autoArrangeBtn + '</button>';
     $('individuals').innerHTML = '';
+    renderRail('report', trip);
     renderLedger(trip, seg);
   }
 
@@ -1949,19 +2038,39 @@
       daySel = b.dataset.day; placingChip = null; removeGhost(); removeDropSlot();
       paintSetup();
     });
-    $('editors').addEventListener('change', function (e) {
-      var s = e.target.closest('.ed-sel'); if (!s) return;
-      fixed[s.dataset.fix] = (s.value === 'on');
-      if (s.dataset.fix === 'fixHandoffs' && s.value === 'on') fdClearFixConflicts();
-      if (s.dataset.fix === 'grantAuth') {
-        if (s.value === 'on') mcClearFixConflicts('grantAuth');
-        else mcOv.lines.bl_meals = { approverRoleId: null };
+    // §W1 receipt rows: Close / Undo / route-to-fishday (the dropdowns are gone)
+    $('editors').addEventListener('click', function (e) {
+      var b = e.target.closest('button'); if (!b || !b.dataset.det) return;
+      if (b.classList.contains('rc-close')) applyReceiptFix(b.dataset.det, true);
+      else if (b.classList.contains('rc-undo')) applyReceiptFix(b.dataset.det, false);
+      else if (b.classList.contains('rc-route')) {
+        daySel = 'fishday'; placingChip = null; removeGhost(); removeDropSlot();
+        paintSetup();
+        var fc = $('fd-card');
+        if (fc && fc.scrollIntoView) fc.scrollIntoView({ behavior: RM.matches ? 'auto' : 'smooth', block: 'start' });
       }
-      if (s.dataset.fix === 'fixReserve') {
-        if (s.value === 'on') mcClearFixConflicts('fixReserve');
-        else { mcOv.reserve = 0; mcOv.resources.res_cash = { planned: 0 }; }
+    });
+    // §W1 rail bucket rows are jump-links: a day bucket switches to that day's tab; the frame
+    // bucket scrolls to the first still-open receipt row (falling back to the 'all' tab if the
+    // current tab filters every frame decision out)
+    $('rail-body').addEventListener('click', function (e) {
+      var r = e.target.closest('.rail-row'); if (!r || !r.dataset.bucket) return;
+      var bk = r.dataset.bucket;
+      if (bk === 'frame') {
+        var oc = document.querySelector('#editors .editor-card:not(.closed)');
+        if (!oc && daySel !== 'all') {
+          daySel = 'all'; placingChip = null; removeGhost(); removeDropSlot(); paintSetup();
+          oc = document.querySelector('#editors .editor-card:not(.closed)');
+        }
+        var tgt = oc || $('editors');
+        if (tgt.scrollIntoView) tgt.scrollIntoView({ behavior: RM.matches ? 'auto' : 'smooth', block: 'center' });
+        var fb = tgt.querySelector && tgt.querySelector('.rc-close, .rc-route');
+        if (fb) { try { fb.focus({ preventScroll: true }); } catch (e2) { fb.focus(); } }
+      } else {
+        if (bk !== daySel) { daySel = bk; placingChip = null; removeGhost(); removeDropSlot(); paintSetup(); }
+        var ds = $('day-select');
+        if (ds && ds.scrollIntoView) ds.scrollIntoView({ behavior: RM.matches ? 'auto' : 'smooth', block: 'start' });
       }
-      updatePlanUI();
     });
     $('mission-control').addEventListener('change', function (e) {
       var el = e.target;

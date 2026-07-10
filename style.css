@@ -150,7 +150,6 @@ button{font-family:inherit;}
 .ed-more summary::before{content:"+ ";font-family:var(--font);}
 .ed-more[open] summary::before{content:"- ";}
 .ed-more div{font-size:11.5px;color:var(--ink2);line-height:1.45;margin-top:5px;}
-.ed-sel{width:100%;background:var(--bg1);color:var(--ink);border:1px solid var(--line2);border-radius:var(--r-sm);padding:8px 9px;font-family:inherit;font-size:12.5px;}
 
 /* day chooser (rehearse one day at a time) — banner-style tabs */
 .day-select{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;}
@@ -415,10 +414,56 @@ button{font-family:inherit;}
 .idlemeter{margin-top:6px;}
 .idlemeter .bar i{background:linear-gradient(90deg,var(--idle),var(--wait));}
 .idlemeter .bar i.ok{background:var(--build);} .idlemeter .bar i.mid{background:var(--idle);} .idlemeter .bar i.bad{background:var(--wait);}
-#fd-projected{position:relative;}
-#fd-projected.bump{animation:bump .6s ease;}
 .score-float{position:absolute;right:12px;top:0;font-weight:800;font-size:15px;color:var(--build-dark);pointer-events:none;animation:floatup 1s ease forwards;}
 .score-float.down{color:var(--wait-dark);}
+
+/* ============ §W1 LEDGER RAIL — the score receipt as the progress spine (setup/run/report) ============ */
+.setup-main{min-width:0;}
+.railcard #launch{width:100%;height:48px;font-size:16px;margin-top:12px;}
+.rail-tense{position:relative;font-family:var(--serif);font-size:17px;font-weight:700;color:var(--ink);margin:2px 0 10px;line-height:1.35;}
+.rail-tense.bump{animation:bump .6s ease;}
+.rail-rows{display:flex;flex-direction:column;gap:5px;}
+.rail-row{display:flex;justify-content:space-between;align-items:baseline;gap:8px;width:100%;font-family:inherit;font-size:12.5px;padding:6px 10px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--bg1);color:var(--ink2);text-align:left;}
+button.rail-row{cursor:pointer;transition:.15s;}
+button.rail-row:hover{background:var(--bg2);border-color:var(--line2);}
+button.rail-row:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
+.rail-row .rail-nm{font-weight:600;color:var(--ink);}
+.rail-row .rail-pts{font-variant-numeric:tabular-nums;font-weight:700;color:var(--ink3);white-space:nowrap;}
+.rail-row.short{background:rgba(161,61,47,.08);border-color:rgba(161,61,47,.42);}
+.rail-row.short .rail-nm,.rail-row.short .rail-pts{color:var(--wait-dark);}
+.rail-gate{font-size:11.5px;color:var(--ink3);margin-top:9px;padding-top:8px;border-top:1px dashed var(--line);line-height:1.45;}
+.rail-gate.hot{color:var(--wait-dark);font-weight:700;}
+/* run dashboard: the big readout ticks the ledger total; bucket rows sit under it */
+.bigreadout .rail-of{font-size:14px;color:var(--ink3);font-weight:600;margin-left:2px;}
+.bigreadout .rail-grade{font-family:var(--serif);font-size:17px;font-weight:800;margin-left:8px;}
+#rail-run{margin-top:8px;}
+#rail-run .rail-row{padding:4px 8px;font-size:11.5px;}
+/* report rail header ("Final: 54 · D") */
+#rail-report .rail-tense{font-size:21px;}
+
+/* receipt-as-control rows in the Design-decisions card (the dropdowns are gone) */
+.editor-card.rc{display:flex;flex-direction:column;gap:6px;}
+.rc-pts{font-variant-numeric:tabular-nums;font-weight:800;font-size:13px;flex-shrink:0;}
+.rc-pts.zero{color:var(--wait-dark);} .rc-pts.full{color:var(--build-dark);}
+.rc-state{font-size:11.5px;color:var(--ink2);line-height:1.4;}
+.editor-card.closed .rc-state{color:var(--build-dark);}
+.rc-act{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:2px;}
+.rc-act .rc-close{width:100%;}
+.rc-act .rc-route{width:100%;border-color:var(--accent);color:var(--accent-dark);font-weight:700;background:rgba(184,137,43,.07);}
+.rc-act .rc-route:hover{background:rgba(184,137,43,.14);}
+.rc-earned{font-size:12px;font-weight:700;color:var(--build-dark);}
+.rc-undo{padding:3px 9px;font-size:11px;color:var(--ink3);}
+
+/* setup layout: single column below 1180px (rail stacks above the cards); 2-col grid above */
+#setup{display:grid;grid-template-columns:1fr;}
+@media(min-width:1180px){
+  .wrap{max-width:1280px;}
+  #report{max-width:920px;margin:0 auto;}          /* report/intro keep today's reading column */
+  #intro .introwrap{max-width:920px;}
+  #setup{grid-template-columns:minmax(0,1fr) 300px;gap:14px;align-items:start;}
+  .setup-main{grid-column:1;grid-row:1;}
+  #rail-setup{grid-column:2;grid-row:1;position:sticky;top:14px;}
+}
 
 /* dashboard — a paper HUD panel pinned beside the night map */
 .dashboard{background:var(--panel);border:1px solid var(--line2);border-radius:var(--r-lg);padding:15px;box-shadow:var(--shadow2);align-self:start;}
@@ -729,8 +774,9 @@ button{font-family:inherit;}
   .astro,.astro::after,.astro .pw,.astro .lg,.astro .bub,.astro .sh,.astro.spot .sh,
   .station.stalled .st-ic,.station.strike .st-ic,
   .fd-socket.miss,.fd-slot,.r-badge.show,.guest .g-body,.gull,.splash,.water::after,
-  .boat .bcore,.boat.sailing .bcore,.path,.dinnertag.late,#fd-projected.bump,
+  .boat .bcore,.boat.sailing .bcore,.path,.dinnertag.late,.rail-tense.bump,
   .btn.glow,.ld-panel.on,.bigreadout.gold{animation:none !important;}
+  button.rail-row{transition:none !important;}
   .lg-row{transition:none !important;} .lg-row:hover{filter:none;}
   /* hand-off arrival cue stays visible without motion: a static ring while the class is held */
   .station.ping .st-ic{animation:none !important;box-shadow:0 0 0 5px rgba(227,196,107,.5), 0 4px 10px rgba(0,0,0,.4) !important;}

@@ -2063,6 +2063,130 @@ function drawFigures_leg(ctx, hipX, hipY, w, h, r, angleDeg, color) {
   ctx.stroke();
   ctx.restore();
 }
+// ---- W2 deterministic idle work-loops (spec §4 / CLAUDE.md §21) ----------
+// Pure functions of (pid, t) only — no RNG, no Date.now(), no extra engine
+// reads. Mirrors the app.js figSpeedMul FNV-1a idiom (kept local to stage.js
+// per the file-ownership boundary: stage.js never imports from app.js).
+function workHash(s) {
+  var h = 2166136261, i;
+  s = s || '';
+  for (i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = (h * 16777619) >>> 0; }
+  return h;
+}
+function workFrac(s) { return (workHash(s) % 100000) / 100000; }        // deterministic [0,1) per seed string
+function gesturePhase(t, period, offset) {                              // deterministic [0,1) sawtooth, offset per pid
+  var v = (t / period) + offset;
+  return v - Math.floor(v);
+}
+
+// ---- role work-gesture overlays (spec §4's 8 gestures) --------------------
+// Each draws a SMALL prop/limb overlay near the pawn's hand/head anchor, in
+// the caller's already-translated/flipped local space (cx, feetY are the
+// pawn's own — never re-derive positions here). ph is this pawn's gesture
+// phase in [0,1). Amplitudes stay in the 2-4px (unscaled) band per the brief;
+// every drawn SIZE still multiplies by the module `scale`, never a position.
+function gestureChef(ctx, cx, feetY, headCy, ph) {                      // chop/stir: knife flicks over a board
+  var handX = cx + 6.5 * scale, boardY = feetY - 8 * scale;
+  var k = Math.abs(Math.sin(2 * Math.PI * ph));                        // 0..1, sharp at the down-chop
+  var bladeY = boardY - 5 * scale - k * 3 * scale;
+  ctx.save();
+  ctx.strokeStyle = rgba(PAL.washi, 0.55);
+  ctx.lineWidth = 1.1 * scale;
+  ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(handX - 4 * scale, boardY); ctx.lineTo(handX + 4 * scale, boardY); ctx.stroke();  // board
+  ctx.strokeStyle = rgba(PAL.ink, 0.6);
+  ctx.lineWidth = 1.3 * scale;
+  ctx.beginPath(); ctx.moveTo(handX, bladeY); ctx.lineTo(handX, bladeY + 4 * scale); ctx.stroke();              // blade
+  ctx.restore();
+}
+function gestureRod(ctx, cx, feetY, headCy, ph) {                       // specialist: rod-tip flick
+  var handX = cx + 6 * scale, handY = feetY - 13 * scale;
+  var ang = -34 + 16 * Math.sin(2 * Math.PI * ph);
+  ctx.save();
+  ctx.translate(handX, handY);
+  ctx.rotate(ang * Math.PI / 180);
+  ctx.strokeStyle = rgba(PAL.ink, 0.55);
+  ctx.lineWidth = 1 * scale;
+  ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(13 * scale, 0); ctx.stroke();
+  ctx.restore();
+}
+function gestureClipboard(ctx, cx, feetY, headCy, ph) {                 // comms: clipboard flip
+  var x = cx - 6 * scale, y = feetY - 14 * scale;
+  var tilt = 9 * Math.sin(2 * Math.PI * ph);
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(tilt * Math.PI / 180);
+  ctx.fillStyle = rgba(PAL.washi, 0.82);
+  ctx.strokeStyle = rgba(PAL.ink, 0.4);
+  ctx.lineWidth = 0.8 * scale;
+  roundRect(ctx, -2.4 * scale, -3.2 * scale, 4.8 * scale, 6.4 * scale, 0.8 * scale);
+  ctx.fill(); ctx.stroke();
+  ctx.restore();
+}
+function gestureScan(ctx, cx, feetY, headCy, ph) {                      // safetyLead: horizon scan (hand-shade sweep)
+  var sweep = Math.sin(2 * Math.PI * ph) * 4 * scale;
+  ctx.save();
+  ctx.strokeStyle = rgba(PAL.ink, 0.5);
+  ctx.lineWidth = 1.1 * scale;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(cx - 3 * scale, headCy - 4.5 * scale);
+  ctx.lineTo(cx - 3 * scale + sweep, headCy - 6.2 * scale);
+  ctx.stroke();
+  ctx.restore();
+}
+function gestureCrate(ctx, cx, feetY, headCy, ph) {                     // logi: crate lift
+  var liftK = (Math.sin(2 * Math.PI * ph) + 1) / 2;
+  var y = feetY - 7 * scale - liftK * 3 * scale;
+  ctx.save();
+  ctx.fillStyle = rgba(PAL.washiWarm, 0.5);
+  ctx.strokeStyle = rgba(PAL.ink, 0.45);
+  ctx.lineWidth = 0.9 * scale;
+  roundRect(ctx, cx - 4 * scale, y - 3.5 * scale, 8 * scale, 5.5 * scale, 1 * scale);
+  ctx.fill(); ctx.stroke();
+  ctx.restore();
+}
+function gestureTally(ctx, cx, feetY, headCy, ph) {                    // budgetLead: tally count (tick at hand)
+  var x = cx + 6.5 * scale, y = feetY - 12 * scale + Math.sin(2 * Math.PI * ph) * 1.4 * scale;
+  ctx.save();
+  ctx.strokeStyle = rgba(PAL.ink, 0.55);
+  ctx.lineWidth = 1 * scale;
+  ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(x, y - 2 * scale); ctx.lineTo(x, y + 2 * scale); ctx.stroke();
+  ctx.restore();
+}
+function gestureBeckon(ctx, cx, feetY, headCy, ph) {                    // pm: beckon/point wave
+  var shX = cx + 6 * scale, shY = feetY - 15 * scale;
+  var ang = -18 + 26 * Math.sin(2 * Math.PI * ph);
+  ctx.save();
+  ctx.translate(shX, shY);
+  ctx.rotate(ang * Math.PI / 180);
+  ctx.strokeStyle = rgba(PAL.skin, 0.9);
+  ctx.lineWidth = 1.8 * scale;
+  ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(8 * scale, 1.5 * scale); ctx.stroke();
+  ctx.restore();
+}
+function gestureSurvey(ctx, cx, feetY, headCy, ph) {                    // siteLead/owner: broad survey stance sway
+  var sway = Math.sin(2 * Math.PI * ph) * 1.6 * scale;
+  ctx.save();
+  ctx.strokeStyle = rgba(PAL.ink, 0.42);
+  ctx.lineWidth = 1 * scale;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(cx - 6 * scale, feetY - 14 * scale);
+  ctx.lineTo(cx - 8 * scale + sway, feetY - 9 * scale);
+  ctx.moveTo(cx + 6 * scale, feetY - 14 * scale);
+  ctx.lineTo(cx + 8 * scale + sway, feetY - 9 * scale);
+  ctx.stroke();
+  ctx.restore();
+}
+var GESTURE = {
+  chef: gestureChef, specialist: gestureRod, comms: gestureClipboard, safetyLead: gestureScan,
+  logi: gestureCrate, budgetLead: gestureTally, pm: gestureBeckon, siteLead: gestureSurvey, owner: gestureSurvey
+};
+
 function drawFigures(ctx, sim, t, view) {
   if (!sim || !sim.participants || !view || !view.fig) return;
   var ts = t * 1000;
@@ -2081,6 +2205,18 @@ function drawFigures(ctx, sim, t, view) {
     // §21.4 Live bridge: the gap-focus figure shows the gap taxonomy (迷い/手待ち/手戻り) the app painted, not raw engine state
     var state = (view.gapState && view.gapState.pid === p.id) ? view.gapState.state : p.state;
     var cx = f.cx, feetY = f.cy;
+    // ---- W2 bounded idle wander: a slow (20-40s), <=6px-radius seeded drift
+    // on the fanned station position — only when settled (never walking,
+    // never mid-stall: a frozen pawn must read as STOPPED) and never under RM.
+    if (!rm && !f.walking && !STALL_STATES[state]) {
+      var wPeriod = 20 + workFrac(p.id + '#wp') * 20;
+      var wPhase = workFrac(p.id + '#wa') * Math.PI * 2;
+      var wRadK = 0.35 + workFrac(p.id + '#wr') * 0.65;
+      var wAng = (t * Math.PI * 2 / wPeriod) + wPhase;
+      var wRad = 6 * scale * wRadK;
+      cx += Math.cos(wAng) * wRad;
+      feetY += Math.sin(wAng) * wRad * 0.4;
+    }
     var dim = (STATE_DIM[state] != null) ? STATE_DIM[state] : 1;
     var roleRGB = hexRGB(role.color);
 
@@ -2095,7 +2231,7 @@ function drawFigures(ctx, sim, t, view) {
     contactShadow(ctx, cx, feetY + 3 * scale, shRx * 2 * scale, 5 * scale, 0.42);
 
     // walk trot / working idle-breath bob (t-driven ambience per contract §2); none under rm
-    var bobOffset = 0;
+    var bobOffset = 0, swayX = 0;
     if (!rm) {
       if (state === 'working') {
         var ph2 = (t % 1.15) / 1.15;
@@ -2103,6 +2239,11 @@ function drawFigures(ctx, sim, t, view) {
       } else if (f.walking) {
         var ph1 = (t % 0.38) / 0.38;
         bobOffset = -0.8 * scale * (1 - Math.cos(2 * Math.PI * ph1));
+      } else if (state === 'idle') {
+        // ---- W2 idle fidget: a subtle weight-shift sway, seeded per pid, every few seconds
+        var fPeriod = 3.4 + workFrac(p.id + '#fp') * 1.6;
+        var fPhase = workFrac(p.id + '#fa');
+        swayX = Math.sin(gesturePhase(t, fPeriod, fPhase) * Math.PI * 2) * 1.6 * scale;
       }
     }
     // leg swing (independent of the bob rule above — CSS keeps legswing tied purely to .walking)
@@ -2114,7 +2255,7 @@ function drawFigures(ctx, sim, t, view) {
     }
 
     ctx.save();
-    ctx.translate(0, bobOffset);
+    ctx.translate(swayX, bobOffset);
 
     drawFigures_leg(ctx, cx - 2 * scale, feetY - 7.5 * scale, 3 * scale, 7.5 * scale, 1.5 * scale, angL, '#2b241c');
     drawFigures_leg(ctx, cx + 2 * scale, feetY - 7.5 * scale, 3 * scale, 7.5 * scale, 1.5 * scale, angR, '#2b241c');
@@ -2165,6 +2306,16 @@ function drawFigures(ctx, sim, t, view) {
     ctx.fillRect(hX, hY, hW * 0.6, 1.5 * scale);
     ctx.fillStyle = rgba(PAL.washi, 0.75);
     ctx.fillRect(hX, hY + hH - 1 * scale, hW, 1 * scale);
+
+    // ---- W2 role work-gesture overlay: small, seeded, only while actually working ----
+    if (!rm && state === 'working') {
+      var gfn = GESTURE[p.roleId];
+      if (gfn) {
+        var gPeriod = 0.8 + workFrac(p.id + '#gp') * 0.8;
+        var gPhase = workFrac(p.id + '#ga');
+        gfn(ctx, cx, feetY, headCy, gesturePhase(t, gPeriod, gPhase));
+      }
+    }
 
     ctx.restore(); // end bob translate
     ctx.restore(); // end flip

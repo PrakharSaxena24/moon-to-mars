@@ -46,7 +46,6 @@
       designTitle: 'Design decisions — close the gaps',
       designHint: 'Close the open gaps for the selected day.',
       whyBtn: 'Why this matters',
-      readyTitle: 'Pre-run check:',
       autoBtn: 'Auto-fix all', clearBtn: 'Reset to gappy',
       launchBtn: 'Run rehearsal ▶',
       wholeTrip: 'Whole trip',
@@ -64,7 +63,7 @@
       autoArrangeBtn: 'Auto-arrange the arrows ▶',
 
       // --- run ---
-      overallLbl: 'Overall readiness', budgetLbl: 'Budget used', warningsLbl: 'Live warnings', perfLbl: 'Performance',
+      budgetLbl: 'Budget used', warningsLbl: 'Live warnings', perfLbl: 'Performance',
       speedLbl: 'Speed', pauseBtn: 'Pause', resumeBtn: 'Resume', quitBtn: 'End & review',
       guestsShow: 'Show guests', guestsHide: 'Hide guests', guestsToggleAria: 'Show or hide the 13 hosted guests on the map',
       drawerShow: 'Show dashboard', drawerHide: 'Hide dashboard', drawerAria: 'Show or hide the dashboard panel to widen the map',
@@ -103,7 +102,6 @@
       fdHint: 'Drag task blocks. Draw arrows into hollow sockets. Slow channels can make good information arrive too late.',
       fdArrowsLbl: 'Information handoffs (click an arrow to re-time it)',
       fdReadyLbl: 'Ready-check:',
-      fdProjected: function (earned, max, eff) { return 'Projected: ' + earned + ' of its ' + max + ' trip points · efficiency ' + eff + '%'; },
       fdReadyOk: '✓ Every handoff lands on time.',
       fdDayLine: function (tm) { return 'Day 3 · ' + tm; },
       // --- §20 authorable all-days editor: deck→arrange→connect, shared by Arrival/Ops/Return ---
@@ -267,6 +265,16 @@
       ledgerTitle: 'Score Ledger — every point, named',
       sst_ok: 'OK', sst_missing: 'Missing', sst_late: 'Late', sst_partial: 'Partial', sst_broken: 'Broken', sst_overlap: 'Overlap', sst_compressed: 'Compressed', sst_decoy: 'Decoy',
 
+      // --- §W1 ledger rail (setup/run/report) + receipt-as-control rows ---
+      railLbl: 'Score receipt — whole trip',
+      railAim: function (cur) { return 'Projected ' + cur + ' → aim 100'; },
+      railFinal: function (total, grade) { return 'Final: ' + total + ' · ' + grade; },
+      railGate: 'An A requires zero known gaps.',
+      rcClose: function (n) { return 'Close this gap (+' + n + ')'; },
+      rcClosed: function (n) { return '✓ Closed — +' + n + ' earned'; },
+      rcUndo: 'Undo',
+      rcRouteFishday: 'Draw the arrows on Fishing Day →',
+
       // --- intro / cast (onboarding) ---
       btnCast: '👥 Cast',
       introKicker: 'REHEARSE BEFORE YOU RUN',
@@ -351,7 +359,6 @@
       designTitle: '設計判断——ギャップを閉じる',
       designHint: '選択中の日の未修正ギャップを閉じる。',
       whyBtn: 'なぜ重要？',
-      readyTitle: '発進前チェック：',
       autoBtn: '全ギャップ自動修正', clearBtn: '全て未修正に',
       launchBtn: 'リハーサル実行 ▶',
       wholeTrip: '通し（全日）',
@@ -369,7 +376,7 @@
       autoArrangeBtn: '矢印を自動配置 ▶',
 
       // --- run ---
-      overallLbl: '全体準備度', budgetLbl: '予算消化', warningsLbl: 'リアルタイム警告', perfLbl: 'パフォーマンス',
+      budgetLbl: '予算消化', warningsLbl: 'リアルタイム警告', perfLbl: 'パフォーマンス',
       speedLbl: '速度', pauseBtn: '一時停止', resumeBtn: '再開', quitBtn: '終了して講評',
       guestsShow: 'ゲストを表示', guestsHide: 'ゲストを隠す', guestsToggleAria: '地図上の13人のゲストの表示・非表示を切り替え',
       drawerShow: 'ダッシュボードを表示', drawerHide: 'ダッシュボードを隠す', drawerAria: 'ダッシュボードパネルの表示・非表示を切り替えて地図を広げる',
@@ -408,7 +415,6 @@
       fdHint: 'タスクを動かし、空いたソケットへ矢印を引く。遅い手段では、正しい情報でも間に合わない。',
       fdArrowsLbl: '情報の受け渡し（矢印をクリックで調整）',
       fdReadyLbl: '準備チェック：',
-      fdProjected: function (earned, max, eff) { return '予測：トリップ100点のうち ' + earned + ' / ' + max + ' 点・稼働効率 ' + eff + '%'; },
       fdReadyOk: '✓ すべての受け渡しが間に合っています。',
       fdDayLine: function (tm) { return '3日目・' + tm; },
       // --- §20 全日程・選択→配置→連携エディタ（到着・運営・帰着の共通UI） ---
@@ -571,6 +577,16 @@
       daySliceLine: function (earned, max, phase) { return phase + '：トリップ100点のうち ' + earned + ' / ' + max + ' 点'; },
       ledgerTitle: '採点台帳 — すべての得点に理由',
       sst_ok: 'OK', sst_missing: '未設定', sst_late: '遅延', sst_partial: '部分点', sst_broken: '破綻', sst_overlap: '重複', sst_compressed: '圧縮', sst_decoy: 'ダミー',
+
+      // --- §W1 得点レール（計画・実行・講評）＋レシート型の設計判断行 ---
+      railLbl: '得点台帳——トリップ全体',
+      railAim: function (cur) { return '予測 ' + cur + ' 点 → 目標 100 点'; },
+      railFinal: function (total, grade) { return '最終：' + total + ' 点・' + grade; },
+      railGate: 'A評価には既知のギャップゼロが条件です。',
+      rcClose: function (n) { return 'このギャップを閉じる（+' + n + '）'; },
+      rcClosed: function (n) { return '✓ 解消済み——+' + n + ' 点獲得'; },
+      rcUndo: '元に戻す',
+      rcRouteFishday: '釣行日タブで矢印を描く →',
 
       // --- intro / cast (onboarding) ---
       btnCast: '👥 登場人物',
