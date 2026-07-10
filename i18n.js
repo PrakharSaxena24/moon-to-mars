@@ -103,7 +103,7 @@
       fdHint: 'Drag task blocks. Draw arrows into hollow sockets. Slow channels can make good information arrive too late.',
       fdArrowsLbl: 'Information handoffs (click an arrow to re-time it)',
       fdReadyLbl: 'Ready-check:',
-      fdProjected: function (score, eff) { return 'Projected: ' + score + ' / 100 · efficiency ' + eff + '%'; },
+      fdProjected: function (earned, max, eff) { return 'Projected: ' + earned + ' of its ' + max + ' trip points · efficiency ' + eff + '%'; },
       fdReadyOk: '✓ Every handoff lands on time.',
       fdDayLine: function (tm) { return 'Day 3 · ' + tm; },
       // --- §20 authorable all-days editor: deck→arrange→connect, shared by Arrival/Ops/Return ---
@@ -134,6 +134,8 @@
 
       // --- run: efficiency readouts ---
       effLbl: 'Efficiency',
+      effTripLbl: 'Trip efficiency',
+      effDayLbl: function (day) { return day + ' efficiency'; },
       idleLine: function (i, r) { return 'idle ' + i + ' min · rework ' + r + ' min'; },
 
       // --- run: offscreen a11y roster (canvas stage has no DOM figures) ---
@@ -167,7 +169,7 @@
       spotSend: 'Send it →',
       spotSendLate: 'Send anyway →',
       resWinT: 'Dinner served 18:00 — nobody waited.',
-      resWinP: function (eff) { return 'Every handoff landed on time. Efficiency ' + eff + '%, score 100 · A. You read it and stepped around the trap.'; },
+      resWinP2: function (pts, max) { return 'Fishing Day: ' + pts + ' of its ' + max + ' trip points — dinner 18:00, nobody waited. You read it and stepped around the trap.'; },
       resGapLate: 'a late hand-off',
       resFailT: 'The day beat your plan.',
       resFailP: function (dinner, gap) { return 'Dinner slipped to ' + dinner + '. The gap: ' + gap + '. The fix names the plan, never the person — re-run and try a faster hand-off.'; },
@@ -258,9 +260,12 @@
       scr_qual_ok: 'Quality condition met', scr_qual_fail: 'Quality condition missed',
       scr_money_ok: 'Budget authority and reserve are usable', scr_money_gap: 'No usable budget authority or reserve',
       scr_decoy: 'Placed a task that wasn’t needed',
+      scr_people_ok: 'Load is balanced and relief is arranged',
+      scr_people_overload: 'Someone is overloaded with no relief',
       gradeGateB: function (n) { return n + ' · B — an A requires zero known gaps'; },
       daySliceLine: function (earned, max, phase) { return phase + ': ' + earned + ' of its ' + max + ' trip points'; },
-      sst_ok: 'OK', sst_missing: 'Missing', sst_late: 'Late', sst_broken: 'Broken', sst_overlap: 'Overlap', sst_compressed: 'Compressed', sst_decoy: 'Decoy',
+      ledgerTitle: 'Score Ledger — every point, named',
+      sst_ok: 'OK', sst_missing: 'Missing', sst_late: 'Late', sst_partial: 'Partial', sst_broken: 'Broken', sst_overlap: 'Overlap', sst_compressed: 'Compressed', sst_decoy: 'Decoy',
 
       // --- intro / cast (onboarding) ---
       btnCast: '👥 Cast',
@@ -403,7 +408,7 @@
       fdHint: 'タスクを動かし、空いたソケットへ矢印を引く。遅い手段では、正しい情報でも間に合わない。',
       fdArrowsLbl: '情報の受け渡し（矢印をクリックで調整）',
       fdReadyLbl: '準備チェック：',
-      fdProjected: function (score, eff) { return '予測：' + score + ' / 100・稼働効率 ' + eff + '%'; },
+      fdProjected: function (earned, max, eff) { return '予測：トリップ100点のうち ' + earned + ' / ' + max + ' 点・稼働効率 ' + eff + '%'; },
       fdReadyOk: '✓ すべての受け渡しが間に合っています。',
       fdDayLine: function (tm) { return '3日目・' + tm; },
       // --- §20 全日程・選択→配置→連携エディタ（到着・運営・帰着の共通UI） ---
@@ -434,6 +439,8 @@
 
       // --- run: efficiency readouts ---
       effLbl: '稼働効率',
+      effTripLbl: '旅程全体の稼働効率',
+      effDayLbl: function (day) { return day + 'の稼働効率'; },
       idleLine: function (i, r) { return '手待ち ' + i + '分・手戻り ' + r + '分'; },
 
       // --- run: offscreen a11y roster (canvas stage has no DOM figures) ---
@@ -467,7 +474,7 @@
       spotSend: '送る →',
       spotSendLate: 'それでも送る →',
       resWinT: '夕食を18:00に提供——誰も待たなかった。',
-      resWinP: function (eff) { return 'すべての受け渡しが定刻。稼働効率 ' + eff + '%、評価 100・A。先を読んで罠を避けた。'; },
+      resWinP2: function (pts, max) { return '釣行日：トリップ100点のうち ' + pts + ' / ' + max + ' 点——夕食18:00、誰も待たなかった。先を読んで罠を避けた。'; },
       resGapLate: '遅い受け渡し',
       resFailT: 'この日は計画を上回った。',
       resFailP: function (dinner, gap) { return '夕食が ' + dinner + ' に遅延。穴：' + gap + '。直すのは計画であって人ではない——再実行して、より速い受け渡しを。'; },
@@ -558,9 +565,12 @@
       scr_qual_ok: '品質条件を満たしている', scr_qual_fail: '品質条件を満たしていない',
       scr_money_ok: '予算権限・予備費が使用可能', scr_money_gap: '使える予算権限・予備費がない',
       scr_decoy: '不要なタスクを配置した',
+      scr_people_ok: '負荷が均等で交代要員も確保されている',
+      scr_people_overload: '交代要員がなく特定の人に負荷が集中している',
       gradeGateB: function (n) { return n + '・B——Aにはギャップゼロが条件'; },
       daySliceLine: function (earned, max, phase) { return phase + '：トリップ100点のうち ' + earned + ' / ' + max + ' 点'; },
-      sst_ok: 'OK', sst_missing: '未設定', sst_late: '遅延', sst_broken: '破綻', sst_overlap: '重複', sst_compressed: '圧縮', sst_decoy: 'ダミー',
+      ledgerTitle: '採点台帳 — すべての得点に理由',
+      sst_ok: 'OK', sst_missing: '未設定', sst_late: '遅延', sst_partial: '部分点', sst_broken: '破綻', sst_overlap: '重複', sst_compressed: '圧縮', sst_decoy: 'ダミー',
 
       // --- intro / cast (onboarding) ---
       btnCast: '👥 登場人物',

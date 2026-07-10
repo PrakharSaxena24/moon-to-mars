@@ -499,13 +499,13 @@
     $('fd-ready').innerHTML = '<span class="pr-lbl">' + t.fdReadyLbl + '</span>' +
       (chips.length ? chips.slice(0, 8).join('') + (chips.length > 8 ? '<span class="pr-item bad">+' + (chips.length - 8) + '</span>' : '')
                     : '<span class="pr-item ok">' + t.fdReadyOk + '</span>');
-    // fishday keeps its existing (whole-trip) projected wording; the coarse days show their own
-    // rule-based day score (§20.4) via scoreDay/projectedDay
-    var scoreVal, effVal;
-    if (seg === 'fishday') { var proj = P.projected(buildCfg()); scoreVal = proj.score; effVal = proj.efficiency; }
-    else { var pd = P.projectedDay(buildCfg(), seg); scoreVal = pd.score; effVal = pd.efficiency; }
+    // §7.2: setup projections preview this day's SLICE of the whole-trip 100 by running scoreTrip on
+    // the hypothetical (in-progress) plan — no scoreDay/projectedDay. Efficiency is day-scoped.
+    var hypo = P.mergePlan(buildCfg()), trip = P.scoreTrip(hypo);
+    var b = trip.byBucket[seg] || { earned: 0, maxPts: 0 };
+    var scoreVal = b.earned, maxVal = b.maxPts, effVal = P.daySchedule(hypo, seg).efficiency;
     var pe = $('fd-projected');
-    pe.textContent = t.fdProjected(scoreVal, effVal);
+    pe.textContent = t.fdProjected(scoreVal, maxVal, effVal);
     pe.className = 'planhint' + (chips.length ? '' : ' good');
     if (fdLastProj[seg] != null && scoreVal > fdLastProj[seg]) {
       floatDelta(pe, '+' + (scoreVal - fdLastProj[seg])); pe.classList.add('bump');
@@ -1114,8 +1114,8 @@
     stopAnim(); clearFinishTimer();                       // never stack a second rAF loop or a stale report reveal
     // §21.8b: every authored day now ANIMATES on the minute clock — the coarse days (arrival/ops/return)
     // opt into the minute-sim via {animate:true} so people walk + comment + PAUSE-on-stall like the fishday.
-    // The run ends in a rule-based P.scoreDay report (finish()); the plan gaps that caused the pauses are
-    // exactly what mark the day down. Whole-trip ('all') is not authorable → stays the classic day clock.
+    // The run ends in the whole-trip ledger report (finish()→renderDayReport); the plan gaps that caused
+    // the pauses are exactly what mark the day slice down. Whole-trip ('all') is not authorable → classic clock.
     sim = P.createSim({ seed: (Math.floor(Math.random() * 1e9) >>> 0) || 1, overrides: buildCfg().overrides }, daySel, { animate: true });
     paused = false; livePausedForFix = false; document.body.classList.add('running');
     closeModals();
@@ -1126,7 +1126,7 @@
     var ff = $('fanfare'); if (ff) ff.classList.remove('show');
     animReset(); updateRunButtons(); buildSitemap();
     // the cascade comet traces the fishday fault chain (港→船→食堂); it's fishday-specific, so a coarse
-    // animated day shows no comet (its stalls surface as ⏳ pauses + the scoreDay markdown instead)
+    // animated day shows no comet (its stalls surface as ⏳ pauses + the day-slice ledger report instead)
     anim.cascade = (sim.mode === 'minute' && sim.segment === 'fishday') ? P.cascadeTrace(sim.plan) : { hops: [], has: false };
     anim.cascade.has = anim.cascade.hasFault;
     buildMotes(sim);
@@ -1460,21 +1460,23 @@
   }
 
   function renderDashboard(s) {
-    // §21.8b: a coarse animated day reads its live grade + efficiency from the rule-based scoreDay over
-    // the merged plan.days[seg] (same source as the report), not the classic score() (which grades the frame).
-    var coarseMin = s.mode === 'minute' && s.segment !== 'fishday';
-    var sc = coarseMin ? P.scoreDay(s.plan, s.segment) : P.score(s), t = T();
-    // §Phase3a — SWITCH: non-Live (Morning) runs read the readiness/efficiency headline off the
-    // whole-trip ledger (scoreTrip/tripEfficiency) instead of the legacy per-segment scorers above.
-    // Live keeps its legacy source untouched (Phase 4 retunes Live).
-    var trip = appMode !== 'live' ? P.scoreTrip(s.plan) : null;
-    var tripEff = appMode !== 'live' ? P.tripEfficiency(s.plan) : null;
-    $('dash-day').textContent = s.mode === 'minute' ? (s.segment === 'fishday' ? t.fdDayLine(hhmm(s.clockMin)) : dayLabel(s.segment) + ' · ' + hhmm(s.clockMin)) : T().dayLine(Math.min(P.DAYS, Math.ceil(s.day)), P.DAYS);
+    var t = T(), minute = s.mode === 'minute';
+    // §7.2/§7.3: EVERY mode (Live included) reads the whole-trip ledger for the headline grade/score;
+    // a day-scoped (minute) run reads that day's own daySchedule efficiency, labeled with the day name.
+    // scoreDay/projectedDay are no longer consulted here (they are internal-only per §7.2).
+    var trip = P.scoreTrip(s.plan);
+    var ds = minute ? P.daySchedule(s.plan, s.segment) : null;
+    // team-performance bars come from the classic score(); a coarse animated day has no per-team block,
+    // so only fetch it for a fishday-minute run or the whole-trip (non-minute) run.
+    var wantTeam = !(minute && s.segment !== 'fishday');
+    var team = wantTeam ? P.score(s).team : null;
+    $('dash-day').textContent = minute ? (s.segment === 'fishday' ? t.fdDayLine(hhmm(s.clockMin)) : dayLabel(s.segment) + ' · ' + hhmm(s.clockMin)) : T().dayLine(Math.min(P.DAYS, Math.ceil(s.day)), P.DAYS);
     $('dash-phase').textContent = s.phaseLabel ? nm(s.phaseLabel) : '';
-    // fishday: Efficiency % beside the grade (§9) + idle/rework minutes
-    $('dash-fd').classList.toggle('hidden', s.mode !== 'minute');
-    if (s.mode === 'minute') {
-      var effVal = tripEff != null ? tripEff : sc.efficiency;
+    // day-scoped Efficiency % beside the grade (§7.3) + idle/rework minutes
+    $('dash-fd').classList.toggle('hidden', !minute);
+    if (minute) {
+      var effVal = ds.efficiency;
+      var effLblEl = $('dash-eff-lbl'); if (effLblEl) effLblEl.textContent = t.effDayLbl(dayLabel(s.segment));
       tweenNum($('dash-eff'), effVal, '%');
       $('dash-eff-bar').style.width = effVal + '%';
       $('dash-eff-bar').className = effVal >= 98 ? 'ok' : (effVal >= 90 ? 'mid' : 'bad');
@@ -1484,15 +1486,15 @@
         if (tk.scope !== 'in') return; var e = s.sched.byTask[tk.id]; if (!e) return;
         idleSoFar += Math.max(0, Math.min(s.clockMin, e.start) - tk.startMin) * Math.max(1, tk.assignedIds.length);
       });
-      $('dash-idle').textContent = t.idleLine(Math.round(idleSoFar), sc.reworkMin);
+      $('dash-idle').textContent = t.idleLine(Math.round(idleSoFar), ds.reworkTotal);
       var ib = $('dash-idle-bar');
       if (ib) { var iw = Math.min(100, idleSoFar / 2.2); ib.style.width = iw + '%'; ib.className = idleSoFar <= 0 ? 'ok' : (iw > 40 ? 'bad' : 'mid'); }
     }
-    var readyVal = trip ? trip.total : sc.score;
+    var readyVal = trip.total;
     tweenNum($('dash-ready'), readyVal, '%');
     $('dash-ready-bar').style.width = readyVal + '%';
     $('dash-ready-bar').className = readyVal >= 75 ? 'ok' : (readyVal >= 60 ? 'mid' : 'bad');
-    $('dash-ready').style.color = trip ? GRADE_COLOR[trip.grade] : '';
+    $('dash-ready').style.color = GRADE_COLOR[trip.grade];
     var bpct = Math.round(s.budget.spent / s.budget.total * 100);
     $('dash-budget-txt').textContent = '¥' + nf(s.budget.spent) + ' / ¥' + nf(s.budget.total);
     $('dash-budget-bar').style.width = bpct + '%';
@@ -1506,9 +1508,8 @@
         return '<div class="warn sev-' + p.severity + '" data-station="' + p.station + '" tabindex="0" role="button"><span class="warn-ic">' + (p.severity === 'high' ? '⛔' : '⚠️') + '</span>' + t['p_' + p.id + '_title'] + '</div>';
       }).join('');
     }
-    // team performance (6 values) — classic score() only; a coarse day is graded by scoreDay, which
-    // has no per-team performance block, so clear the bars rather than crash on the missing field.
-    var team = sc.team;
+    // team performance (6 values) — classic score() only (team computed above); a coarse animated day
+    // has no per-team block, so team is null there and the bars are cleared rather than crashing.
     if (team) {
       var rows = [['action', 'perf-good'], ['decision', 'perf-good'], ['coop', 'perf-good'], ['contribution', 'perf-good'], ['load', 'perf-stress'], ['fatigue', 'perf-stress']];
       var lblK = { action: 'ivAction', decision: 'ivDecision', coop: 'ivCoop', contribution: 'ivContribution', load: 'ivLoad', fatigue: 'ivFatigue' };
@@ -1640,11 +1641,11 @@
   // =========================================================================
   function finish() {
     clearInterval(timer); timer = null;
-    // §21.8b: a coarse animated day (arrival/ops/return) is graded by the rule-based P.scoreDay over the
-    // authored plan.days[seg] arrangement — NOT the classic score()/daySummary, which read the 10-day frame's
-    // plan.tasks. The plan gaps that stalled the run are exactly what scoreDay marks the day down for.
+    // §7.2: a coarse animated day (arrival/ops/return) report reads the whole-trip ledger (scoreTrip)
+    // + that day's daySchedule/dayReadiness in renderDayReport — no scoreDay grade/score is rendered,
+    // so res.day is unused for the coarse path.
     if (sim.mode === 'minute' && sim.segment !== 'fishday') {
-      lastResult = { trip: null, day: P.scoreDay(sim.plan, sim.segment), segment: sim.segment, coarse: true };
+      lastResult = { trip: null, day: null, segment: sim.segment, coarse: true };
     } else {
       lastResult = { trip: P.score(sim), day: (sim.segment !== 'all' ? P.daySummary(sim) : null), segment: sim.segment };
     }
@@ -1657,8 +1658,6 @@
     }, 700);
   }
 
-  var CAT_ORDER = ['objective', 'schedule', 'roles', 'info', 'budget', 'safety', 'quality', 'health'];
-  var CAT_KEY = { objective: 'catObjective', schedule: 'catSchedule', roles: 'catRoles', info: 'catInfo', budget: 'catBudget', safety: 'catSafety', quality: 'catQuality', health: 'catHealth' };
   var GRADE_COLOR = { A: 'var(--build)', B: 'var(--leader)', C: 'var(--idle)', D: 'var(--wait)' };
 
   // =========================================================================
@@ -1668,16 +1667,16 @@
   // =========================================================================
   var LEDGER_BUCKETS = ['frame', 'arrival', 'ops', 'fishday', 'return'];
   var LEDGER_DIMS = ['info', 'exec', 'safety', 'quality', 'money', 'people'];
-  var LEDGER_TITLE = { en: 'Score Ledger — every point, named', ja: '採点台帳 — すべての得点に理由' };
+  var LEDGER_SEGS = ['arrival', 'ops', 'fishday', 'return'];
   // a coarse/fishday single-day report shows that bucket + the trip-wide 'frame' bucket
   // (frame atoms are standing authorities, not tied to one day); 'all' shows all five.
   function ledgerBucketsFor(segment) {
     if (segment === 'all') return LEDGER_BUCKETS;
     return segment === 'frame' ? ['frame'] : ['frame', segment];
   }
-  // only 4 gate atoms (money/evac authority checks with no card or task) carry neither a
-  // cardId nor a taskId nor a truthy detectorId — humanize the atom id as a last resort so
-  // every row still names something (strip the bucket_/dimension_ prefixes it was built with).
+  // a few gate atoms carry neither a cardId nor a taskId nor a truthy detectorId — humanize the
+  // atom id as a last resort so every row still names something (strip the bucket_/dimension_
+  // prefixes it was built with).
   function ledgerHumanizeId(id, bucket) {
     var s = id || '';
     var bp = bucket + '_'; if (s.indexOf(bp) === 0) s = s.slice(bp.length);
@@ -1685,25 +1684,26 @@
     s = s.replace(/_/g, ' ');
     return s ? s.charAt(0).toUpperCase() + s.slice(1) : id;
   }
-  // explicit bilingual labels for the gate atoms whose itemRef carries no card/task and no
-  // (truthy) detectorId — otherwise ledgerHumanizeId would surface a raw-id hack ("Transport
-  // auth", "Evac plan"). The two frame abort gates share one detector label ("Safety authority
-  // (sea / night)"), so name them apart here too (sea vs night) — worded off the same budget-line
-  // / risk data they are priced against, so the ledger reads like the rest of the UI.
+  // explicit bilingual labels only for the two frame abort gates, which share one detector label
+  // ("Safety authority (sea / night)") — name them apart here (sea vs night). Every other gate is
+  // now task-homed (money/safety atoms carry an itemRef.taskId per the v1.0 constitution), so
+  // ledgerItemName resolves them from task data and this list stays tiny.
   var LEDGER_ITEM_NM = {
     frame_abort_sea: { en: 'Rough-sea abort authority', jp: '時化時の中止権限' },
-    frame_abort_night: { en: 'Night-sea abort authority', jp: '夜間の中止権限' },
-    arrival_money_transport_auth: { en: 'Transport budget sign-off', jp: '交通費の承認' },
-    ops_money_onsite_auth: { en: 'On-site budget sign-off', jp: '現地費の承認' },
-    ops_money_tackle_auth: { en: 'Gear / tackle budget sign-off', jp: '道具費の承認' },
-    return_safety_evac_plan: { en: 'Typhoon evacuation plan', jp: '台風時の避難計画' }
+    frame_abort_night: { en: 'Night-sea abort authority', jp: '夜間の中止権限' }
   };
+  // find a task by id across every authorable segment (a task-homed atom's itemRef.taskId belongs
+  // to its bucket's segment, but searching all four is robust to any homing surprise).
+  function ledgerTaskAcrossSegs(plan, tid) {
+    for (var i = 0; i < LEDGER_SEGS.length; i++) { var tk = byId(P.tasksForSeg(plan, LEDGER_SEGS[i]), tid); if (tk) return tk; }
+    return null;
+  }
   // resolve a bilingual display name for one atom's itemRef, off the SAME arrays the atom
   // was priced against: socket/gate-with-card -> the info card; lane/gate-with-task/decoy ->
-  // the task(s) via P.tasksForSeg(plan,bucket) (fishday included — tasksForSeg dispatches);
-  // gate-with-detector -> the existing problem-panel label (e_<id>_label).
+  // the task(s) via P.tasksForSeg (all four segs, fishday included); gate-with-detector -> the
+  // existing problem-panel label (e_<id>_label); else the humanized id.
   function ledgerItemName(plan, atom) {
-    var ref = atom.itemRef, bucket = atom.bucket, roleName, tasks, tids, names, i, tk, card;
+    var ref = atom.itemRef, bucket = atom.bucket, roleName, tids, names, i, tk, card;
     if (LEDGER_ITEM_NM[atom.id]) return nm(LEDGER_ITEM_NM[atom.id]);
     if (!ref) return ledgerHumanizeId(atom.id, bucket);
     if (ref.cardId) {
@@ -1713,18 +1713,17 @@
     }
     if (ref.taskId) {
       tids = Array.isArray(ref.taskId) ? ref.taskId : [ref.taskId];
-      tasks = bucket === 'frame' ? [] : P.tasksForSeg(plan, bucket);
       names = [];
-      for (i = 0; i < tids.length; i++) { tk = byId(tasks, tids[i]); names.push(tk ? nm(tk.name) : tids[i]); }
+      for (i = 0; i < tids.length; i++) { tk = ledgerTaskAcrossSegs(plan, tids[i]); names.push(tk ? nm(tk.name) : ledgerHumanizeId(atom.id, bucket)); }
       roleName = ref.roleId ? nm(P.role(ref.roleId).name) : '';
       return (roleName ? roleName + ': ' : '') + names.join(' · ');
     }
     if (ref.detectorId) return T()['e_' + ref.detectorId + '_label'] || ref.detectorId;
     return ledgerHumanizeId(atom.id, bucket);
   }
-  // status -> {sst_*} chip label; 'present-but-late' (a riskable socket drawn but late, 1/3
-  // partial credit) has no dedicated chip key, so it reads as the existing 'late' chip.
-  var LEDGER_STATUS_KEY = { ok: 'ok', missing: 'missing', late: 'late', broken: 'broken', overlap: 'overlap', compressed: 'compressed', decoy: 'decoy', 'present-but-late': 'late' };
+  // status -> {sst_*} chip label; 'present-but-late' (a riskable socket drawn but late, 1/3 partial
+  // credit) gets its own "Partial / 部分点" chip (§7.4) + the amber 'partial' row tint (ledgerTier).
+  var LEDGER_STATUS_KEY = { ok: 'ok', missing: 'missing', late: 'late', broken: 'broken', overlap: 'overlap', compressed: 'compressed', decoy: 'decoy', 'present-but-late': 'partial' };
   function ledgerChip(status) { return T()['sst_' + (LEDGER_STATUS_KEY[status] || 'missing')] || status; }
   // reasonKey is almost always a plain scr_* string; a couple may be function-valued (take
   // reasonParams) per the ledger contract, so honor both.
@@ -1741,10 +1740,7 @@
   }
   function renderLedger(trip, segment) {
     var plan = currentPlan(), buckets = ledgerBucketsFor(segment), i, a;
-    var titleEl = $('ledger-title'); if (titleEl) titleEl.textContent = LEDGER_TITLE[L] || LEDGER_TITLE.en;
-    // hide the legacy 8-cat scorecard now that the ledger is the primary breakdown (code kept,
-    // just hidden — nothing else that reads/writes #scorecard's innerHTML is touched).
-    var scCard = $('scorecard') && $('scorecard').closest('.card'); if (scCard) scCard.classList.add('hidden');
+    var titleEl = $('ledger-title'); if (titleEl) titleEl.textContent = T().ledgerTitle;
     var byBucketDim = {};
     for (i = 0; i < trip.atoms.length; i++) {
       a = trip.atoms[i]; if (buckets.indexOf(a.bucket) < 0) continue;
@@ -1772,17 +1768,17 @@
   }
 
   function renderReport(res) {
-    // the individuals table has no coarse-day (scoreDay) analogue — hide its card for a coarse
-    // report, and restore it for the animated fishday/whole-trip paths (idempotent either way).
+    // the individuals table has no coarse-day analogue — hide its card for a coarse report, and
+    // restore it for the animated fishday/whole-trip paths (idempotent either way).
     var indivCard = $('individuals').closest('.card');
     if (res.coarse) { if (indivCard) indivCard.classList.add('hidden'); renderDayReport(res); return; }
     if (indivCard) indivCard.classList.remove('hidden');
     var t = T(), sc = res.trip, day = res.day;
-    // §Phase3a — SWITCH: the headline grade/score/verdict now comes from the whole-trip ledger
-    // (scoreTrip) — one currency across the trip. A single-day (fishday) run sees that day's SLICE
-    // of the trip 100 (the day-slice line below); a whole-trip ('all') run sees the full total.
-    // The scorecard/fix-pack/individuals panels below stay on the legacy per-run scorers (sc/day) —
-    // the itemized-ledger swap for those is a later phase.
+    // §7.2 — the headline grade/score/verdict all come from the whole-trip ledger (scoreTrip) — one
+    // currency across the trip. A single-day (fishday) run sees that day's SLICE of the trip 100 (the
+    // day-slice line below); a whole-trip ('all') run sees the full total. The verdict reads ledger
+    // data only (no mixing with score()'s .reason). The fix-pack/individuals panels below still read
+    // the legacy per-run scorer (sc) for their own content — never its total/grade.
     var trip = P.scoreTrip(currentPlan());
     $('r-grade').textContent = trip.grade; $('r-grade').style.color = GRADE_COLOR[trip.grade];
     var perfect = trip.gate.clean && trip.grade === 'A';
@@ -1792,7 +1788,7 @@
     } else if (day) {
       $('r-verdict').textContent = day.clean ? t.rDayScoreOk(dayLabel(res.segment), trip.total) : t.rDayScoreGaps(dayLabel(res.segment), trip.total, day.gaps);
     } else {
-      $('r-verdict').textContent = trip.total + ' / 100 — ' + (sc.reason === 'done' ? t.rDone : t.rIncomplete);
+      $('r-verdict').textContent = trip.total + ' / 100 — ' + (trip.gate.clean ? t.rDone : t.rIncomplete);
     }
     if (day) {
       $('r-conds').innerHTML = '<span class="cond ' + (day.clean ? 'met' : 'unmet') + '">' + (day.clean ? '✓' : '✗') + ' ' + t.dayTasksLine(day.tasksDone, day.tasksTotal) + '</span>';
@@ -1809,15 +1805,12 @@
       var b = trip.byBucket[res.segment];
       if (b) $('r-conds').innerHTML += '<span class="cond">' + t.daySliceLine(b.earned, b.maxPts, dayLabel(res.segment)) + '</span>';
     } else {
-      $('r-conds').innerHTML = sc.conditions.map(function (c) {
-        return '<span class="cond ' + (c.met ? 'met' : 'unmet') + '">' + (c.met ? '✓' : '✗') + ' ' + nm(c.text) + '</span>';
-      }).join('');
+      // whole-trip ('all') run: a trip-scoped efficiency chip (§7.3) + the classic condition list.
+      $('r-conds').innerHTML = '<span class="cond">' + t.effTripLbl + ' ' + P.tripEfficiency(currentPlan()) + '%</span>' +
+        sc.conditions.map(function (c) {
+          return '<span class="cond ' + (c.met ? 'met' : 'unmet') + '">' + (c.met ? '✓' : '✗') + ' ' + nm(c.text) + '</span>';
+        }).join('');
     }
-    // overall trip scorecard (8 categories) — the whole plan; improves as you fix any day
-    $('scorecard').innerHTML = CAT_ORDER.map(function (k) {
-      var val = sc.categories[k], max = P.CAT_MAX[k], pct = Math.round(val / max * 100);
-      return '<div class="pillar"><div class="pl-top"><span>' + t[CAT_KEY[k]] + '</span><b>' + val + '<small>/' + max + '</small></b></div><div class="pl-bar"><i style="width:' + pct + '%"></i></div></div>';
-    }).join('');
     // fix-pack: the rehearsed day's gaps (or all gaps for a whole-trip run)
     var fixes = day ? day.fixes : sc.fixes;
     if (!fixes.length) $('fixpack').innerHTML = '<div class="fix-clean">' + (day ? t.fixpackCleanDay(dayLabel(res.segment)) : t.fixpackClean) + '</div>';
@@ -1839,20 +1832,21 @@
   }
 
   // §20 Phase 5: coarse-day (arrival/ops/return) report — scored straight off the authored
-  // plan.days arrangement via P.scoreDay, no sim/animation involved. Reuses the same DOM the
-  // animated fishday/whole-trip report renders into (renderReport branches to this for res.coarse).
+  // plan.days arrangement, no sim/animation involved. Reuses the same DOM the animated fishday/
+  // whole-trip report renders into (renderReport branches to this for res.coarse).
   function renderDayReport(res) {
-    var t = T(), seg = res.segment, sc = res.day, plan = currentPlan();
-    var hints = P.dayReadiness(plan, seg);
-    // §Phase3a — SWITCH: headline grade/score/verdict from the whole-trip ledger (scoreTrip); this
-    // day's own 8-category scorecard + fix-list below still read the legacy sc (P.scoreDay)/hints —
-    // that swap is a later phase.
+    var t = T(), seg = res.segment, plan = currentPlan();
+    var hints = P.dayReadiness(plan, seg), ds = P.daySchedule(plan, seg);
+    // §7.2 — headline grade/score/verdict come from the whole-trip ledger (scoreTrip); the day's own
+    // efficiency chips come from that day's daySchedule (§7.3); the fix-list is dayReadiness. scoreDay's
+    // grade/score/89-cap and its 8-category scorecard are gone from this player-facing path.
     var trip = P.scoreTrip(plan);
+    var dayClean = hints.length === 0 && ds.unresolved === 0;
     $('r-grade').textContent = trip.grade; $('r-grade').style.color = GRADE_COLOR[trip.grade];
     if (trip.gate.withheldA) {
       $('r-verdict').textContent = t.gradeGateB(trip.total);
     } else {
-      $('r-verdict').textContent = sc.clean ? t.rDayScoreOk(dayLabel(seg), trip.total) : t.rDayScoreGaps(dayLabel(seg), trip.total, hints.length);
+      $('r-verdict').textContent = dayClean ? t.rDayScoreOk(dayLabel(seg), trip.total) : t.rDayScoreGaps(dayLabel(seg), trip.total, hints.length);
     }
     var perfectD = trip.gate.clean && trip.grade === 'A';
     var bd = $('r-badge'); bd.textContent = perfectD ? t.badgeDayClean : ''; bd.classList.toggle('show', perfectD);
@@ -1860,17 +1854,10 @@
     var b = trip.byBucket[seg];
     $('r-conds').innerHTML =
       (b ? '<span class="cond">' + t.daySliceLine(b.earned, b.maxPts, dayLabel(seg)) + '</span>' : '') +
-      '<span class="cond ' + (sc.efficiency === 100 ? 'met' : 'unmet') + '">' + t.rcEff(sc.efficiency) + '</span>' +
-      '<span class="cond ' + (sc.idleMin === 0 ? 'met' : 'unmet') + '">' + t.rcIdle(sc.idleMin) + '</span>' +
-      '<span class="cond ' + (sc.reworkMin === 0 ? 'met' : 'unmet') + '">' + t.rcRework(sc.reworkMin) + '</span>' +
-      (sc.dinnerMin != null ? '<span class="cond ' + (sc.dinnerMin <= 1080 ? 'met' : 'unmet') + '">' + t.rcDinner(hhmm(sc.dinnerMin)) + '</span>' : '');
-    // the day's own 8-category rule-based score (§20.4) — same renderer + CAT_MAX as the trip scorecard.
-    // scoreDay's per-category values are clamped floats (only its total is rounded), unlike score()'s
-    // pre-rounded categories — round here at the display layer so the pillar numbers read as whole points.
-    $('scorecard').innerHTML = CAT_ORDER.map(function (k) {
-      var val = Math.round(sc.categories[k]), max = P.CAT_MAX[k], pct = Math.round(val / max * 100);
-      return '<div class="pillar"><div class="pl-top"><span>' + t[CAT_KEY[k]] + '</span><b>' + val + '<small>/' + max + '</small></b></div><div class="pl-bar"><i style="width:' + pct + '%"></i></div></div>';
-    }).join('');
+      '<span class="cond ' + (ds.efficiency === 100 ? 'met' : 'unmet') + '">' + t.rcEff(ds.efficiency) + '</span>' +
+      '<span class="cond ' + (ds.idleTotal === 0 ? 'met' : 'unmet') + '">' + t.rcIdle(ds.idleTotal) + '</span>' +
+      '<span class="cond ' + (ds.reworkTotal === 0 ? 'met' : 'unmet') + '">' + t.rcRework(ds.reworkTotal) + '</span>' +
+      (ds.dinnerMin != null ? '<span class="cond ' + (ds.dinnerMin <= 1080 ? 'met' : 'unmet') + '">' + t.rcDinner(hhmm(ds.dinnerMin)) + '</span>' : '');
     // fix-list: every dayReadiness hint, worded with the same rh* strings the live editor uses
     var segT = P.tasksForSeg(plan, seg);
     function tn(id) { var x = byId(segT, id); return x ? nm(x.name) : id; }
@@ -1895,11 +1882,15 @@
   }
 
   // "Auto-arrange the arrows ▶" — the coarse-day analogue of the fishday fix-pack: heal this
-  // day's arrows to face-to-face (P.applyDayFix), persist the patch into dayOv, then re-score.
+  // day's arrows to face-to-face AND place any unplaced required tasks (P.applyDayFix), persist
+  // BOTH patches into dayOv (so a gappy day can reach 100, not cap ~92 on a dropped placement),
+  // then re-score.
   function applyDayFixAndRerun() {
     var seg = daySel, cfg = P.applyDayFix(buildCfg(), seg);
-    var patch = (cfg.overrides.days && cfg.overrides.days[seg] && cfg.overrides.days[seg].handoffs) || {};
-    for (var k in patch) dayOv[seg].handoffs[k] = Object.assign({}, dayOv[seg].handoffs[k], patch[k]);
+    var d = (cfg.overrides.days && cfg.overrides.days[seg]) || {};
+    var hpatch = d.handoffs || {}, ppatch = d.placement || {};
+    for (var k in hpatch) dayOv[seg].handoffs[k] = Object.assign({}, dayOv[seg].handoffs[k], hpatch[k]);
+    for (var pk in ppatch) dayOv[seg].placement[pk] = ppatch[pk];
     launch();
   }
 
@@ -2329,7 +2320,7 @@
       '<div class="ld-spot-head"><h3>' + t.spotTitle(cname) + '</h3><p class="ld-sub">' +
       t.spotSub(from ? personName(from) : nm(P.role('chef').name), personName(to), hhmm(to.startMin)) + '</p></div>' +
       '<div class="ld-opts" id="ld-opts">' + chips + '</div>' +
-      '<div class="ld-preview" id="ld-preview"><span class="pv-lbl">' + t.pvLbl + '</span><span id="ld-pv-txt">' + t.spotHover + '</span></div>';
+      '<div class="ld-preview" id="ld-preview"><span class="pv-lbl">' + t.pvLbl + '</span><span id="ld-pv-txt">' + t.spotHover + '</span><span class="pv-slice" id="ld-pv-slice"></span></div>';
     var opts = $('ld-opts');
     opts.querySelectorAll('.ld-opt').forEach(function (b) {
       var ch = b.dataset.ch;
@@ -2367,6 +2358,10 @@
     var pv = $('ld-preview'), txt = $('ld-pv-txt');
     pv.className = 'ld-preview ' + (onTime ? 'fast' : 'slow');
     txt.innerHTML = onTime ? t.spotOnTime(hhmm(arr)) : (assume ? t.spotLateWrong(hhmm(arr), arr - to.startMin) : t.spotLateIdle(hhmm(arr), arr - to.startMin));
+    // §7.1: the blast-radius preview shows the projected Fishing-Day SLICE of the trip 100 for this
+    // hypothetical channel choice (run scoreTrip on the merged hypothetical plan) — ledger currency.
+    var slice = $('ld-pv-slice'), fb = P.scoreTrip(plan2).byBucket.fishday;
+    if (slice) slice.textContent = t.daySliceLine(fb.earned, fb.maxPts, dayLabel('fishday'));
     var old = pv.querySelector('.ld-send'); if (old) old.remove();
     if (persist) {
       var b = document.createElement('button'); b.className = 'btn primary ld-send'; b.type = 'button';
@@ -2424,9 +2419,10 @@
 
   function liveFinish() {
     if (timer) { clearInterval(timer); timer = null; }
-    var sc = P.score(sim), fd = P.fishdaySchedule(currentPlan());
-    var win = sc.efficiency === 100 && sc.wrongFishCount === 0 && (fd.dinnerMin == null || fd.dinnerMin <= 1080);
-    liveState.phase = 'result'; liveState.result = { win: win, sc: sc, fd: fd };
+    // §7.1: win = the Fishing-Day bucket is fully earned in the ledger AND dinner is served by 18:00.
+    var trip = P.scoreTrip(currentPlan()), fd = P.fishdaySchedule(currentPlan()), fb = trip.byBucket.fishday;
+    var win = fb.earned === fb.maxPts && (fd.dinnerMin == null || fd.dinnerMin <= 1080);
+    liveState.phase = 'result'; liveState.result = { win: win, trip: trip, fd: fd };
     renderResult();
     if (win && !anim.fanfared) { anim.fanfared = true; fireFanfare(); }   // one beat only — 18:00 already fired it on a clean serve
   }
@@ -2434,8 +2430,9 @@
   function renderResult() {
     var t = T(), r = liveState.result, el = $('ld-result'); if (!r) return;
     if (r.win) {
+      var fb = r.trip.byBucket.fishday;
       el.className = 'ld-panel result win';
-      el.innerHTML = '<div class="ld-txt"><h3>' + t.resWinT + '</h3><p>' + t.resWinP(r.sc.efficiency) + '</p></div>' +
+      el.innerHTML = '<div class="ld-txt"><h3>' + t.resWinT + '</h3><p>' + t.resWinP2(fb.earned, fb.maxPts) + '</p></div>' +
         '<div class="ld-actions"><button class="btn primary" id="ld-rerun">' + t.ldRerun + '</button><button class="btn ghost" id="ld-report">' + t.ldReport + '</button></div>';
     } else {
       var fd = r.fd, g = (fd.missing[0] || fd.late[0]), gapText, pl = currentPlan();

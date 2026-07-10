@@ -680,6 +680,7 @@ button{font-family:inherit;}
 .ld-preview.slow{background:rgba(161,61,47,.08);border-color:rgba(161,61,47,.4);color:var(--wait-dark);}
 .ld-preview.fast{background:rgba(91,107,69,.1);border-color:rgba(91,107,69,.4);color:var(--build-dark);}
 .ld-preview .pv-lbl{font-size:10px;letter-spacing:1px;text-transform:uppercase;font-weight:800;opacity:.7;}
+.ld-preview .pv-slice{width:100%;font-size:11.5px;font-weight:700;opacity:.85;}
 .ld-send{margin-left:auto;}
 .ld-actions{display:flex;gap:9px;flex-wrap:wrap;}
 .result.win .ld-txt h3{color:var(--build-dark);} .result.miss .ld-txt h3{color:var(--idle-dark);}
