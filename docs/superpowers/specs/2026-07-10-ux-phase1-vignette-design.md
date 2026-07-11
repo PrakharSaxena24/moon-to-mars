@@ -1,6 +1,6 @@
 # UX Phase 1 + Stage Vignette — ledger rail, receipt-as-control, living inspectable cast, cold-open intro
 
-**Status:** APPROVED (owner picks 2026-07-10: Phase 1 full build · intro = full 15s stage vignette ·
+**Status (updated 2026-07-11): SHIPPED — see the matching CLAUDE.md as-built section.** Original status: APPROVED (owner picks 2026-07-10: Phase 1 full build · intro = full 15s stage vignette ·
 plan-on-the-harbor deferred until Phase 1 is playable).
 **Design inputs:** 3-track design panel (planning/intro/stage) + Fable one-stage-architecture verdict, both
 2026-07-10. This spec is the buildable subset; the plan-on-harbor architecture (command tray, physical

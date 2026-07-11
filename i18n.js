@@ -52,8 +52,6 @@
       runDayBtn: function (d) { return 'Run ' + d + ' ▶'; },
       planDayLine: function (d, n) { return 'Planning ' + d + ' — ' + n + ' decision' + (n === 1 ? '' : 's') + ' for this day.'; },
       hintReadyDay: function (d) { return '✅ ' + d + ' is ready — run it to confirm.'; },
-      rDayDone: function (d) { return d + ' ran clean — everyone could move.'; },
-      rDayGaps: function (d) { return d + ' stalled — close the gaps and re-run.'; },
       badgeDayClean: '✓ DAY READY',
       dayTasksLine: function (done, total) { return done + ' / ' + total + ' of the day’s tasks ran clean'; },
       fixpackCleanDay: function (d) { return '✅ ' + d + ' has no gaps — ready to run for real.'; },
@@ -99,10 +97,6 @@
       rsPawnRework: function (n) { return 'rework ' + n + ' min'; },
       rsPawnWaited: 'Waited on',
       rsPawnClean: 'No time lost',
-
-      // --- 8 categories (spec §16) ---
-      catObjective: 'Goal achievement', catSchedule: 'Schedule', catRoles: 'Roles & authority', catInfo: 'Info & comms',
-      catBudget: 'Budget & resources', catSafety: 'Safety & risk', catQuality: 'Quality & satisfaction', catHealth: 'Team health',
 
       // --- 6 individual values (spec §17) ---
       ivName: 'Member', ivAction: 'Can-act', ivDecision: 'Can-decide', ivLoad: 'Load', ivFatigue: 'Fatigue', ivCoop: 'Coordination', ivContribution: 'Contribution',
@@ -268,7 +262,7 @@
 
       // --- problem panel + fixpack labels ---
       pnCause: 'Why it stalls', pnNeeded: 'Needed', pnFix: 'The fix',
-      fixGapLbl: 'gap', fixGapLblN: 'gaps', gapChip: 'gap',
+      fixGapLbl: 'gap', fixGapLblN: 'gaps',
       detailDecoy: 'Running clean — no gap here.',
       sec_food_t: '🍱 Food', sec_food_b: 'The kitchen at Hinata — the chefs (Akiyama · Nao · Kaito) cook here; meals are served morning and night, and the packed lunches are made each morning with help from the AIBOS team.',
       sec_rod_t: '🎣 Fishing/Gear', sec_rod_b: 'The supply & assignment point — all the fishing gear is prepared here and it’s decided who carries what. The food, drinks, medicine and the rest of the kit are packed here too, ready to move out.',
@@ -367,7 +361,6 @@
       objFlag: 'Abort authority', objSeal: 'Budget seal', objFerry: 'Ferry info card',
       objRoute: 'Illness report route', objRelief: 'Load relief', objParcel: 'Return shipping',
       objStrongbox: 'Cash strongbox', objSatchel: 'The info arrows',
-      objSatchelCta: 'Open the Fishing Day',
       // placement grammar
       rejLine: function (name, role, obj, needed) { return name + ' is ' + role + '. ' + obj + ' → ' + needed + '.'; },
       trayOrganizer: 'an AIBOS organizer (chefs & guests hold no duties)',
@@ -425,8 +418,6 @@
       runDayBtn: function (d) { return d + ' を実行 ▶'; },
       planDayLine: function (d, n) { return d + ' を計画——この日の判断 ' + n + ' 件。'; },
       hintReadyDay: function (d) { return '✅ ' + d + ' は準備OK——実行で確認しましょう。'; },
-      rDayDone: function (d) { return d + ' はうまく回りました——全員が動けました。'; },
-      rDayGaps: function (d) { return d + ' で停止——ギャップを閉じて再実行。'; },
       badgeDayClean: '✓ この日OK',
       dayTasksLine: function (done, total) { return 'この日のタスク ' + done + ' / ' + total + ' が順調'; },
       fixpackCleanDay: function (d) { return '✅ ' + d + ' はギャップなし——本番で実行できます。'; },
@@ -474,8 +465,6 @@
       rsPawnClean: '時間損失なし',
 
       // --- 8 categories ---
-      catObjective: '目的達成度', catSchedule: 'スケジュール', catRoles: '役割・権限', catInfo: '情報・報連相',
-      catBudget: '予算・資源', catSafety: '安全・リスク', catQuality: '品質・満足度', catHealth: 'チーム健康度',
 
       // --- 6 individual values ---
       ivName: 'メンバー', ivAction: '行動可能度', ivDecision: '判断可能度', ivLoad: '負荷指数', ivFatigue: '疲労値', ivCoop: '連携値', ivContribution: '貢献値',
@@ -641,7 +630,7 @@
 
       // --- problem panel + fixpack ---
       pnCause: '止まる理由', pnNeeded: '必要な役割', pnFix: '修正',
-      fixGapLbl: '件', fixGapLblN: '件', gapChip: '要修正',
+      fixGapLbl: '件', fixGapLblN: '件',
       detailDecoy: '順調——ここにギャップはありません。',
       sec_food_t: '🍱 食事', sec_food_b: 'ひなたの厨房——料理長（秋山・ナオ・カイト）がここで調理。朝夕に食事を提供し、昼のお弁当はAIBOSメンバーの手伝いで毎朝用意します。',
       sec_rod_t: '🎣 釣り・装備', sec_rod_b: '装備・分担の拠点——釣り道具をここで準備し、誰が何を持つかを決める。食料・飲み物・薬などの荷物もここで荷造りし、出発の準備を整える。',
@@ -740,7 +729,6 @@
       objFlag: '中止権限の旗', objSeal: '予算の判子', objFerry: '船便情報カード',
       objRoute: '体調報告ルート', objRelief: '負荷分散トークン', objParcel: '返送手配の小包',
       objStrongbox: '現金金庫', objSatchel: '情報の矢筒',
-      objSatchelCta: '釣行日を開く',
       // 受け渡しの文法
       rejLine: function (name, role, obj, needed) { return name + 'は' + role + '。' + obj + ' → ' + needed + '。'; },
       trayOrganizer: '運営メンバー（料理長・ゲストは担当なし）',

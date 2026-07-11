@@ -1,6 +1,6 @@
 # Plan-on-the-Harbor — the stage becomes the planning surface
 
-**Status:** APPROVED (owner 2026-07-10: "proceed to build"). Design source: the Fable one-stage architecture
+**Status (updated 2026-07-11): SHIPPED — see the matching CLAUDE.md as-built section.** Original status: APPROVED (owner 2026-07-10: "proceed to build"). Design source: the Fable one-stage architecture
 verdict (2026-07-10) with its two locked amendments — (1) the persistent spine is the LEDGER RAIL + the cast,
 not the map pixels: day editors and finance stay panel-shaped, anchored to the stage; (2) no fake depth —
 binary decisions get **snap-to-valid one-move placement** with teaching rejection copy, never wrong-target

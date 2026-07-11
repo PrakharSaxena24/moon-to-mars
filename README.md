@@ -119,7 +119,8 @@ OgasawaraSim/
 ├─ index.html   screens (canvas/editors → site map + dashboard → report)
 ├─ style.css    calm light business theme + site map + character states
 ├─ engine.js    window.PRS — deterministic sim: data model, detectors, scoreTrip ledger (no DOM)
-├─ stage.js     window.PRS_STAGE — the Canvas 2D site-map renderer (reads sim state, writes nothing back)
+├─ stage.js     window.PRS_STAGE — the Canvas 2D harbor renderer (reads sim state, writes nothing back)
+├─ sprites.js   window.PRS_SPRITES — the SVG sprite cast (optional enhancement; game runs without it)
 ├─ i18n.js      all EN/JP strings (full parity)
 ├─ app.js       wires PRS + PRS_STAGE + i18n to the DOM (setup / run / report / fix-and-rerun)
 ├─ verify.js    Node-only headless test of the teaching curve (not loaded by the page)
@@ -135,7 +136,7 @@ teaching curve is **headless-verified**: `node verify.js` (258 checks) pins the 
 both matrix axes (bucket totals 14/15/18/41/12, dimension totals 34/25/20/10/10/1), that earned
 atoms always sum to the shown total, the exact seed scores below, a monotone fix ladder, a
 battery of constructed edge cases (withheld-A, skip-a-fix, drawn-but-late, redundant-arrow,
-collapsed-socket, decoy/overlap/dep-broken/compressed), and full EN/JA i18n parity (361/361).
+collapsed-socket, decoy/overlap/dep-broken/compressed), and full EN/JA i18n parity (419/419).
 Verified seed curve:
 
 ```

@@ -454,15 +454,20 @@ plan flag, never RNG) and ships as a scenario variant so the branch is playable,
 ## 14. Files
 ```
 OgasawaraSim/                   (at /Users/tanakai/aibos/OgasawaraSim — moved 2026-07-02)
-├─ index.html   screens: setup (canvas/org/timeline+arrows editor) → site map + dashboard → report
-├─ style.css    calm light business theme + site map + character states (+ lane/arrow/checkpoint classes)
-├─ engine.js    window.PRS — deterministic sim: data model, detectors, scoring (no DOM, Node-runnable)
-├─ i18n.js      all EN/JP strings (full parity)
-├─ app.js       wires PRS + i18n to the DOM (setup / run / report / fix-and-rerun)
-├─ verify.js    Node-only headless test of the teaching gradient (node verify.js)
+├─ index.html   screens: setup (plan stage + tray + drawers) → harbor stage + dashboard → report-on-stage
+├─ style.css    calm light business theme + stage/tray/drawer/ledger/report classes
+├─ engine.js    window.PRS — deterministic sim: data model, detectors, scoreTrip constitution (Node-runnable)
+├─ i18n.js      all EN/JP strings (full parity, verify-asserted)
+├─ app.js       wires PRS + i18n to the DOM (plan / run / report / Live / fix-and-rerun)
+├─ stage.js     window.PRS_STAGE — the Canvas 2D harbor renderer (world, lighting, camera, §21/§27)
+├─ sprites.js   window.PRS_SPRITES — the SVG sprite cast (§27; strict procedural-fallback contract)
+├─ verify.js    Node-only headless test suite (node verify.js — the committed guardrail)
+├─ _config.yml  GitHub Pages: publish only the game (docs/WORLD/CLAUDE/archive excluded)
 ├─ README.md
 ├─ CLAUDE.md    ← this concept + build plan
-└─ archive/moon_to_mars/   earlier "Moon → Mars" prototype (kept, not loaded)
+├─ WORLD.md     the world bible (names/story; NOT published to Pages)
+├─ docs/superpowers/   specs + implementation plans (NOT published to Pages)
+└─ archive/moon_to_mars/   earlier "Moon → Mars" prototype (kept, not loaded, not published)
 ```
 Design source (kept out of git via `.gitignore`): `シミュレーション型プロジェクト管理ゲーム_アプリ概要書_v1.0.docx`.
 
@@ -474,15 +479,16 @@ rebuild 2026-07-03 (§17). Polish pass 2026-07-05 (§18). All-day grid 2026-07-0
 hour-level all-days rebuild SHIPPED 2026-07-06 (§20). Canvas 2D stage + coarse-day animation + graphic
 onboarding SHIPPED 2026-07-07/08 (§21.11/§21.12/§22). Whole-trip scoreTrip ledger SHIPPED 2026-07-09 (§23),
 re-derived as scoring rubric v1.0 SHIPPED 2026-07-10 (§24).**
-**LIVE on GitHub Pages: https://prakharsaxena24.github.io/moon-to-mars/** (pushed 2026-07-06; `main` → Pages
-serves `main`/root, auto-deploys on push; `gh` authed as PrakharSaxena24 — §23/§24 not yet pushed).
+**LIVE on GitHub Pages: https://prakharsaxena24.github.io/moon-to-mars/** (`main` → Pages serves `main`/root,
+auto-deploys on push; `gh` authed as PrakharSaxena24 — everything through §27 is pushed and live;
+`_config.yml` excludes CLAUDE.md/WORLD.md/docs/archive/verify.js from the published site).
 Headless-verified `node verify.js` **258 checks** (classic D→A gradient; the fishday temporal block — gappy
 plan idleTotal 1450 person-min, fishday-day efficiency 68%; the rubric v1.0 constitution — 89 atoms Σ=100,
 gappy trip 54/D, canonical 100/A/clean, arrow-draw the largest single fix jump; Layer 0 helpers; the §20
 authorable-day anchors: per-day 100 via canonDay, cleared→D, monotone gradient, channel-at-hour pricing,
 façade equality, purity). Prior DOM passes: **69-check Playwright E2E** (§20.8) + headless-Chrome screenshot
 passes for §21/§22 + a 19-check runtime smoke for §24. Next: §13 contingency branches, Layers 2–4 (§16), and
-the §23/§24 "Deferred / known" items (Live gap convergence-grouping, coarse `applyDayFix` cap) remain the
+the §23/§24 "Deferred / known" items (coarse `applyDayFix` cap; Live gap convergence-grouping SHIPPED in §27) remain the
 backlog.
 
 ---
@@ -1152,7 +1158,7 @@ by fixed rule, from the flagged template data**, and make every number in it pin
   added to verify as regression guards for both.
 - **Verified:** `node verify.js` **258/258** — the pinned constitution (exact atom count, both matrix axes,
   Σearned≡total, exact seed pins: gappy 54/D, canonical 100/A/clean, monotone fix ladder, arrow-draw the
-  strictly-largest single jump, i18n EN/JA parity 361/361) + constructed edge cases (withheld-A, skip-Return,
+  strictly-largest single jump, i18n EN/JA parity 361/361 at the time — 419/419 after §25–§27) + constructed edge cases (withheld-A, skip-Return,
   drawn-but-late, redundant-arrow, collapsed-socket, decoy/overlap/dep-broken/compressed) + a **19-check
   runtime smoke** exercising the live report/dashboard/Live-mode surfaces. §21.8a dead code
   (`dayLayout`/`derivedHandoffs`/`HOUR_DT`) retired.

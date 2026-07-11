@@ -1161,3 +1161,9 @@ body.canvas-stage .sitemap::after{display:none;} /* vignette is drawn on the can
   .rs-marker:hover::before,.rs-marker:focus-visible::before{animation:none;}
   .rs-stamp.thock{animation:none;}
 }
+
+/* ---- deep-check: in-drawer day tabs (the bottom day-bar is covered while a drawer is open) ---- */
+.dd-tabs{display:flex;gap:6px;flex-wrap:wrap;margin:0 12px;flex:1 1 auto;justify-content:center;}
+.dd-tabs .dd-tab{padding:5px 10px;font-size:12px;}
+.dd-tabs .dd-tab.on{background:var(--accent);color:#fff;border-color:var(--accent);}
+@media(max-width:760px){ .dd-tabs{display:none;} }  /* narrow drawers keep the close button; Escape still hops */

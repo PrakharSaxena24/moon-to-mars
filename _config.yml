@@ -1,0 +1,10 @@
+# GitHub Pages (Jekyll) config — publish ONLY the game.
+# Internal design/build docs and the world bible name real people and business
+# context; they stay in the repo but are excluded from the published site.
+exclude:
+  - CLAUDE.md
+  - WORLD.md
+  - README.md
+  - docs/
+  - archive/
+  - verify.js

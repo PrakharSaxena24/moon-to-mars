@@ -2434,7 +2434,8 @@
     RSTG.ctx = PRS_STAGE.initStage(cv, { w: d.w, h: d.h });
     RSTG.fig = {}; rsSyncFigs();
     RSTG.markers = rsStalls();
-    $('rs-chip').textContent = t.rsChip;
+    // a clean day lost no time — the chip must not claim it did (deep-check finding)
+    $('rs-chip').textContent = RSTG.markers.length ? t.rsChip : t.rsClean;
     var note = $('rs-note');
     if (note) {
       if (wholeTrip) { note.textContent = t.rsWholeTrip; note.classList.remove('hidden'); note.classList.remove('good'); }
@@ -2671,6 +2672,7 @@
     d.innerHTML =
       '<div id="dd-head" class="dd-head">' +
         '<h2 id="dd-title" class="dd-title"></h2>' +
+        '<div id="dd-tabs" class="dd-tabs"></div>' +
         '<button id="dd-close" class="dd-close" type="button">×</button>' +
       '</div>' +
       '<div id="dd-body" class="dd-body"></div>';
@@ -2693,6 +2695,19 @@
     drawerSeg = seg;
     var ttl = $('dd-title'); if (ttl) ttl.textContent = T().ddTitle(dayLabel(seg));
     var cl = $('dd-close'); if (cl) cl.setAttribute('aria-label', T().ddClose);
+    // in-drawer day switching (spec §3's tab-hop promise — the bottom day-bar is covered
+    // by an open drawer, so the drawer header carries its own compact day tabs + whole-trip)
+    var tabs = $('dd-tabs');
+    if (tabs) {
+      var segs = ['arrival', 'ops', 'fishday', 'return'];
+      var html = '';
+      for (var ti = 0; ti < segs.length; ti++) {
+        html += '<button type="button" class="btn sm dd-tab' + (segs[ti] === seg ? ' on' : '') + '" data-dseg="' + segs[ti] + '" data-day="' + segs[ti] + '">' +
+          dayLabel(segs[ti]) + '</button>';
+      }
+      html += '<button type="button" class="btn sm ghost dd-tab" data-dseg="all" data-day="all">' + T().wholeTrip + '</button>';
+      tabs.innerHTML = html;
+    }
     // integration seam: the shell ships aria-hidden="true" and a display:none guard keys off it —
     // flip it (and force a reflow) BEFORE .open so the slide transition starts from the base state
     d.setAttribute('aria-hidden', 'false');
@@ -2748,6 +2763,15 @@
     // §WB drawer chrome: close button, and Escape (capture-phase so the drawer wins over the pawn
     // popover, but never over an open modal — a modal owns its own Escape via the bubbling handler)
     $('dd-close').addEventListener('click', closeDayDrawer);
+    // in-drawer day tabs: hop between day drawers without closing; whole-trip / active re-click closes
+    $('dd-head').addEventListener('click', function (e) {
+      var b = e.target.closest('.dd-tab'); if (!b) return;
+      var s2 = b.getAttribute('data-dseg');
+      if (s2 === 'all') { daySel = 'all'; placingChip = null; removeGhost(); removeDropSlot(); paintSetup(); closeDayDrawer(); return; }
+      if (s2 === daySel && drawerSeg === s2) { closeDayDrawer(); return; }   // spec §3: active-tab re-click closes
+      daySel = s2; placingChip = null; removeGhost(); removeDropSlot(); paintSetup();
+      openDayDrawer(s2, b);
+    });
     document.addEventListener('keydown', function (e) {
       if (e.key !== 'Escape' || !drawerIsOpen()) return;
       if (topModal()) return;                           // a dialog is open → let it own the keypress

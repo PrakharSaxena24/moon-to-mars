@@ -94,7 +94,8 @@
       </div>
     </div>
 
-    <!-- day selector stays visible in the top strip (an open ~85vh day drawer leaves it clickable) -->
+    <!-- day selector: while a drawer is open it is covered — the drawer's own #dd-tabs
+         header row carries day switching + whole-trip close (deep-check finding) -->
     <div class="day-bar card">
       <div class="day-bar-h" data-i18n="designTitle"></div>
       <div id="day-select" class="day-select"></div>
@@ -154,6 +155,7 @@
     <div class="day-drawer" id="day-drawer" aria-hidden="true">
       <div class="dd-head" id="dd-head">
         <h2 id="dd-title"></h2>
+        <div class="dd-tabs" id="dd-tabs"></div>
         <button class="btn sm ghost" id="dd-close" type="button" data-i18n="ddClose"></button>
       </div>
       <div class="dd-body" id="dd-body">

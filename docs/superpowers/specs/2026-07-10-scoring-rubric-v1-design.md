@@ -1,6 +1,6 @@
 # Scoring Rubric v1.0 — the derived constitution
 
-**Status:** v1.0 APPROVED (owner sign-off 2026-07-10: Approach A rule-based derivation + keep the matrix).
+**Status (updated 2026-07-11): SHIPPED — see the matching CLAUDE.md as-built section.** Original status: v1.0 APPROVED (owner sign-off 2026-07-10: Approach A rule-based derivation + keep the matrix).
 **Supersedes:** the *enumeration and pricing* of `2026-07-09-scoring-blueprint-design.md` (v0.3). That spec's
 principles (§0–§2), grade gate (§6), Efficiency separation (§5), and one-currency rule (§8) are inherited
 unchanged and restated here where needed. Where v0.3 and this doc disagree on any count, price, or atom, **this

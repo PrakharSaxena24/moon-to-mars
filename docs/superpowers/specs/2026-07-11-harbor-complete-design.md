@@ -1,6 +1,6 @@
 # Harbor Complete — master-grade graphics, sprites, cinematics, and the finished one-stage arc
 
-**Status:** APPROVED (owner 2026-07-11: master-grade washi + sprites with a dedicated Fable sprite atelier ·
+**Status (updated 2026-07-11): SHIPPED — see the matching CLAUDE.md as-built section.** Original status: APPROVED (owner 2026-07-11: master-grade washi + sprites with a dedicated Fable sprite atelier ·
 auto-cinematics · full completion incl. backlog · pawns ~30% bigger).
 **Constraints (absolute):** offline/no-build/no-libs, vanilla ES5, engine.js + verify.js untouched (258/258),
 EN/JP parity, deterministic sim (rendering may use time-based animation but NEVER writes back), reduced-motion
