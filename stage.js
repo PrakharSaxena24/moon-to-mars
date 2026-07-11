@@ -1010,12 +1010,41 @@ function drawGround(ctx, sim, t, view) {
 // NEW GEOGRAPHY (map redesign, first draft): LAND on the LEFT, OCEAN on the RIGHT. The
 // shoreline is a gently curved edge near x=0.55, passing just seaward of the port station
 // (0.50,0.55) so the port reads as the water's edge.
+// the ONE set of shoreline control points — the ocean fill, wet-line, foam, and the
+// figures' over-water test (shoreNX below) all derive from these five points.
+var SHORE_PTS = [[0.57, -0.02], [0.555, 0.25], [0.53, 0.52], [0.512, 0.78], [0.575, 1.02]];
 function drawSea_traceShore(ctx, w, h) {
   // trace the shoreline top->bottom into the CURRENT path (no beginPath here) so the ocean
   // fill, the ink wet-line, the foam glow and the dashed foam all share one curve.
-  ctx.moveTo(w * 0.57, -0.02 * h);
-  ctx.quadraticCurveTo(w * 0.555, 0.25 * h, w * 0.53, 0.52 * h);
-  ctx.quadraticCurveTo(w * 0.512, 0.78 * h, w * 0.575, 1.02 * h);
+  ctx.moveTo(w * SHORE_PTS[0][0], SHORE_PTS[0][1] * h);
+  ctx.quadraticCurveTo(w * SHORE_PTS[1][0], SHORE_PTS[1][1] * h, w * SHORE_PTS[2][0], SHORE_PTS[2][1] * h);
+  ctx.quadraticCurveTo(w * SHORE_PTS[3][0], SHORE_PTS[3][1] * h, w * SHORE_PTS[4][0], SHORE_PTS[4][1] * h);
+}
+// shoreline x (normalized) at a normalized y — 33-sample LUT over the same two quadratics,
+// linearly interpolated; used by the figures' water test (a pawn east of this is at sea)
+var _shoreLUT = null;
+function shoreNX(ny) {
+  if (!_shoreLUT) {
+    _shoreLUT = [];
+    var segs = [[SHORE_PTS[0], SHORE_PTS[1], SHORE_PTS[2]], [SHORE_PTS[2], SHORE_PTS[3], SHORE_PTS[4]]];
+    for (var s = 0; s < 2; s++) {
+      var a = segs[s][0], b = segs[s][1], c = segs[s][2];
+      for (var i = 0; i <= 16; i++) {
+        var tt = i / 16, u = 1 - tt;
+        _shoreLUT.push([u * u * a[1] + 2 * u * tt * b[1] + tt * tt * c[1],   // y
+                        u * u * a[0] + 2 * u * tt * b[0] + tt * tt * c[0]]); // x
+      }
+    }
+  }
+  if (ny <= _shoreLUT[0][0]) return _shoreLUT[0][1];
+  for (var j = 1; j < _shoreLUT.length; j++) {
+    if (ny <= _shoreLUT[j][0]) {
+      var p0 = _shoreLUT[j - 1], p1 = _shoreLUT[j];
+      var k = (ny - p0[0]) / Math.max(1e-6, p1[0] - p0[0]);
+      return p0[1] + (p1[1] - p0[1]) * k;
+    }
+  }
+  return _shoreLUT[_shoreLUT.length - 1][1];
 }
 
 function drawSea_oceanPath(ctx, w, h) {
@@ -3030,13 +3059,22 @@ function drawFigures(ctx, sim, t, view) {
     ctx.save();
     if (!spr && f.faceL) { ctx.translate(cx, 0); ctx.scale(-1, 1); ctx.translate(-cx, 0); }
 
+    // over-water: nobody walks on the sea — crew east of the shoreline ride a small
+    // skiff (crossings row, iso-rock crews bob at anchor). Purely presentational.
+    var afloat = view.w > 0 && (cx / view.w) > shoreNX(feetY / view.h) + 0.004;
+
     var shRx = (f.walking && !rm) ? 6 : 7.5;
-    contactShadow(ctx, cx, feetY + 3 * scale, shRx * 2 * figs, 5 * figs, 0.42);
-    // low-sun long cast shadow (spec §2 lighting) — same rig as the stations',
-    // so at dawn every pawn stretches the same way; no-op at midday/night.
-    // Pawns get a stronger mul than stations: a small caster needs the darker
-    // core for the stretch to read at all (the 07:00 departure is the money shot).
-    longShadow(ctx, cx, feetY + 2 * scale, 11 * figs, 1.2);
+    if (!afloat) {
+      contactShadow(ctx, cx, feetY + 3 * scale, shRx * 2 * figs, 5 * figs, 0.42);
+      // low-sun long cast shadow (spec §2 lighting) — same rig as the stations',
+      // so at dawn every pawn stretches the same way; no-op at midday/night.
+      // Pawns get a stronger mul than stations: a small caster needs the darker
+      // core for the stretch to read at all (the 07:00 departure is the money shot).
+      longShadow(ctx, cx, feetY + 2 * scale, 11 * figs, 1.2);
+    } else {
+      // hull shadow sits in the water instead of a land contact shadow
+      contactShadow(ctx, cx, feetY + 4.5 * scale, 13 * 2 * figs * 0.8, 4 * figs, 0.30);
+    }
 
     // walk trot / working idle-breath bob (t-driven ambience per contract §2); none under rm
     var bobOffset = 0, swayX = 0;
@@ -3058,6 +3096,29 @@ function drawFigures(ctx, sim, t, view) {
     ctx.save();
     ctx.translate(swayX, bobOffset);
 
+    if (afloat) {
+      // ---- the skiff: a small washi hull under the pawn (reuses the boat's hull path).
+      // Crossings read as rowing; a crew at the iso rock bobs at anchor. Legs are
+      // suppressed/cropped below — the pawn stands IN the hull, feet at the gunwale.
+      var hw2 = 15 * figs, hh2 = 5.5 * figs, hy2 = feetY - 4 * figs;
+      ctx.save();
+      drawBoat_hullPath(ctx, cx - hw2, hy2, hw2 * 2, hh2, 1.5 * figs, 1.5 * figs, 5 * figs, 5 * figs);
+      var hullG = ctx.createLinearGradient(0, hy2, 0, hy2 + hh2);
+      hullG.addColorStop(0, '#4a382a'); hullG.addColorStop(1, '#2e2118');
+      ctx.fillStyle = hullG; ctx.fill();
+      ctx.strokeStyle = 'rgba(212,180,124,0.55)'; ctx.lineWidth = Math.max(1, 0.8 * figs);
+      ctx.beginPath(); ctx.moveTo(cx - hw2 * 0.94, hy2 + 0.5); ctx.lineTo(cx + hw2 * 0.94, hy2 + 0.5); ctx.stroke();
+      if (f.walking && !rm) {   // rowing wake: two faint trailing strokes off the stern
+        var dir = f.faceL ? 1 : -1;
+        ctx.strokeStyle = 'rgba(233,241,244,0.30)'; ctx.lineWidth = Math.max(1, 0.7 * figs);
+        ctx.beginPath();
+        ctx.moveTo(cx + dir * hw2, hy2 + hh2 * 0.5); ctx.lineTo(cx + dir * (hw2 + 8 * figs), hy2 + hh2 * 0.15);
+        ctx.moveTo(cx + dir * hw2, hy2 + hh2 * 0.7); ctx.lineTo(cx + dir * (hw2 + 6 * figs), hy2 + hh2 * 1.05);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
     if (spr) {
       // ---- SPRITE PAWN (spec §1): feet-centre anchor at meta (24,52) of a
       // 48×56 box, display scale = figs so the sprite torso (~12-15 units wide)
@@ -3074,7 +3135,14 @@ function drawFigures(ctx, sim, t, view) {
         else if (swapK < 0) swapK = 0;
       }
       var mh = 0.72 + 0.28 * swapK;
-      ctx.drawImage(spr, cx - sm.feetX * figs * mh, feetY - sm.feetY * figs * mh, sm.w * figs * mh, sm.h * figs * mh);
+      if (afloat) {
+        // crop the sprite's legs (bottom ~8 units) so the pawn stands IN the skiff hull
+        var res2 = sm.res || 2, cropU = 8;
+        ctx.drawImage(spr, 0, 0, sm.w * res2, (sm.h - cropU) * res2,
+          cx - sm.feetX * figs * mh, feetY - sm.feetY * figs * mh, sm.w * figs * mh, (sm.h - cropU) * figs * mh);
+      } else {
+        ctx.drawImage(spr, cx - sm.feetX * figs * mh, feetY - sm.feetY * figs * mh, sm.w * figs * mh, sm.h * figs * mh);
+      }
     } else {
       // ---- PROCEDURAL PAWN (the permanent fallback — byte-equivalent art,
       // sized by figs): legs, coat, head, cap, work gesture. ----
@@ -3086,8 +3154,10 @@ function drawFigures(ctx, sim, t, view) {
         angR = -angL;
       }
 
-      drawFigures_leg(ctx, cx - 2 * figs, feetY - 7.5 * figs, 3 * figs, 7.5 * figs, 1.5 * figs, angL, '#2b241c');
-      drawFigures_leg(ctx, cx + 2 * figs, feetY - 7.5 * figs, 3 * figs, 7.5 * figs, 1.5 * figs, angR, '#2b241c');
+      if (!afloat) {   // in the skiff the legs live inside the hull
+        drawFigures_leg(ctx, cx - 2 * figs, feetY - 7.5 * figs, 3 * figs, 7.5 * figs, 1.5 * figs, angL, '#2b241c');
+        drawFigures_leg(ctx, cx + 2 * figs, feetY - 7.5 * figs, 3 * figs, 7.5 * figs, 1.5 * figs, angR, '#2b241c');
+      }
 
       // torso (coat) — role-colour lacquer bevel (liftRGB top/bottom), ink outline, washi sash, upper-left rim light
       var trX = cx - 6 * figs, trY = feetY - 18 * figs, trW = 12 * figs, trH = 12.5 * figs, trR = 3.5 * figs;
