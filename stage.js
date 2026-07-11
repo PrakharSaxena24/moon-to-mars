@@ -3013,6 +3013,48 @@ function drawFigures(ctx, sim, t, view) {
   var chipFont = '600 ' + Math.round(10 * scale) + 'px system-ui,sans-serif';
   var chipPad = 4 * scale, chipH = 14 * scale, chipR = 2 * scale, chipTail = 4 * scale;
 
+  // ---- only the named boats go to sea (WORLD.md: Nobu-san / Kimura-san) — no individual
+  // ever crosses water. Crew STATIONED at sea share ONE boat hull per station (drawn here,
+  // under everyone); crew WALKING to a sea station board at the dock — they fade out at the
+  // shoreline (aboard, below deck) and fade back in on the deck (the per-figure loop below).
+  function isAfloat(x, y) { return view.w > 0 && (x / view.w) > shoreNX(y / view.h) + 0.004; }
+  var boatGroups = {};
+  for (var bg = 0; bg < sim.participants.length; bg++) {
+    var bpp = sim.participants[bg], bff = view.fig[bpp.id];
+    if (!bff) continue;
+    var gx = null, gy = null;
+    if (!bff.walking && isAfloat(bff.cx, bff.cy)) { gx = bff.cx; gy = bff.cy; }
+    else if (bff.walking && typeof bff.tx === 'number' && isAfloat(bff.tx, bff.ty)) { gx = bff.tx; gy = bff.ty; }
+    if (gx === null) continue;
+    var gk = bpp.station || 'sea';
+    var g0 = boatGroups[gk] || (boatGroups[gk] = { minX: gx, maxX: gx, y: gy });
+    if (gx < g0.minX) g0.minX = gx;
+    if (gx > g0.maxX) g0.maxX = gx;
+    if (gy > g0.y) g0.y = gy;
+  }
+  for (var gkk in boatGroups) {
+    var gb = boatGroups[gkk];
+    var bw = (gb.maxX - gb.minX) / 2 + 20 * figs, bcx = (gb.minX + gb.maxX) / 2, bhy = gb.y - 3.5 * figs, bhh = 6 * figs;
+    ctx.save();
+    contactShadow(ctx, bcx, gb.y + 4 * scale, bw * 1.7, 4.5 * figs, 0.28);   // hull shadow on the water
+    drawBoat_hullPath(ctx, bcx - bw, bhy, bw * 2, bhh, 2 * figs, 2 * figs, 6 * figs, 6 * figs);
+    var bgr = ctx.createLinearGradient(0, bhy, 0, bhy + bhh);
+    bgr.addColorStop(0, '#4a382a'); bgr.addColorStop(1, '#2e2118');
+    ctx.fillStyle = bgr; ctx.fill();
+    ctx.strokeStyle = 'rgba(212,180,124,0.55)'; ctx.lineWidth = Math.max(1, 0.8 * figs);
+    ctx.beginPath(); ctx.moveTo(bcx - bw * 0.96, bhy + 0.5); ctx.lineTo(bcx + bw * 0.96, bhy + 0.5); ctx.stroke();
+    // stern mast + hanko-red pennant — this is a NAMED boat, not a dinghy
+    ctx.strokeStyle = 'rgba(43,36,28,0.85)'; ctx.lineWidth = Math.max(1, 0.7 * figs);
+    ctx.beginPath(); ctx.moveTo(bcx + bw * 0.9, bhy); ctx.lineTo(bcx + bw * 0.9, bhy - 8 * figs); ctx.stroke();
+    ctx.fillStyle = 'rgba(178,58,48,0.9)';
+    ctx.beginPath();
+    ctx.moveTo(bcx + bw * 0.9, bhy - 8 * figs);
+    ctx.lineTo(bcx + bw * 0.9 + 5 * figs, bhy - 6.6 * figs);
+    ctx.lineTo(bcx + bw * 0.9, bhy - 5.2 * figs);
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+
   for (var i = 0; i < sim.participants.length; i++) {
     var p = sim.participants[i];
     var f = view.fig[p.id];
@@ -3035,6 +3077,26 @@ function drawFigures(ctx, sim, t, view) {
     }
     var dim = (STATE_DIM[state] != null) ? STATE_DIM[state] : 1;
     var roleRGB = hexRGB(role.color);
+
+    // over-water fiction: stationed at sea = aboard the group hull (legs cropped below);
+    // walking over water = in transit BY BOAT — visible at the dockside, unseen mid-water,
+    // fading back in on the deck. Nobody is ever drawn walking on the sea.
+    var afloat = isAfloat(cx, feetY);
+    var aboard = afloat && !f.walking;
+    if (afloat && f.walking) {
+      var overW = (cx / view.w) - shoreNX(feetY / view.h);
+      var aShore = 1 - (overW - 0.004) / 0.05;
+      if (aShore < 0) aShore = 0; if (aShore > 1) aShore = 1;
+      var aBoat = 0;
+      if (typeof f.tx === 'number' && isAfloat(f.tx, f.ty)) {
+        var bdx = cx - f.tx, bdy = feetY - f.ty;
+        aBoat = 1 - Math.sqrt(bdx * bdx + bdy * bdy) / (52 * figs);
+        if (aBoat < 0) aBoat = 0; if (aBoat > 1) aBoat = 1;
+      }
+      var transitA = aShore > aBoat ? aShore : aBoat;
+      if (transitA < 0.05) continue;   // mid-crossing: below deck, not drawn
+      dim *= transitA;
+    }
 
     ctx.save();
     ctx.globalAlpha = dim;
@@ -3059,22 +3121,16 @@ function drawFigures(ctx, sim, t, view) {
     ctx.save();
     if (!spr && f.faceL) { ctx.translate(cx, 0); ctx.scale(-1, 1); ctx.translate(-cx, 0); }
 
-    // over-water: nobody walks on the sea — crew east of the shoreline ride a small
-    // skiff (crossings row, iso-rock crews bob at anchor). Purely presentational.
-    var afloat = view.w > 0 && (cx / view.w) > shoreNX(feetY / view.h) + 0.004;
-
     var shRx = (f.walking && !rm) ? 6 : 7.5;
-    if (!afloat) {
+    if (!aboard) {
       contactShadow(ctx, cx, feetY + 3 * scale, shRx * 2 * figs, 5 * figs, 0.42);
       // low-sun long cast shadow (spec §2 lighting) — same rig as the stations',
       // so at dawn every pawn stretches the same way; no-op at midday/night.
       // Pawns get a stronger mul than stations: a small caster needs the darker
       // core for the stretch to read at all (the 07:00 departure is the money shot).
       longShadow(ctx, cx, feetY + 2 * scale, 11 * figs, 1.2);
-    } else {
-      // hull shadow sits in the water instead of a land contact shadow
-      contactShadow(ctx, cx, feetY + 4.5 * scale, 13 * 2 * figs * 0.8, 4 * figs, 0.30);
     }
+    // aboard: no personal shadow — the group hull (drawn in the pre-pass) casts it
 
     // walk trot / working idle-breath bob (t-driven ambience per contract §2); none under rm
     var bobOffset = 0, swayX = 0;
@@ -3096,29 +3152,6 @@ function drawFigures(ctx, sim, t, view) {
     ctx.save();
     ctx.translate(swayX, bobOffset);
 
-    if (afloat) {
-      // ---- the skiff: a small washi hull under the pawn (reuses the boat's hull path).
-      // Crossings read as rowing; a crew at the iso rock bobs at anchor. Legs are
-      // suppressed/cropped below — the pawn stands IN the hull, feet at the gunwale.
-      var hw2 = 15 * figs, hh2 = 5.5 * figs, hy2 = feetY - 4 * figs;
-      ctx.save();
-      drawBoat_hullPath(ctx, cx - hw2, hy2, hw2 * 2, hh2, 1.5 * figs, 1.5 * figs, 5 * figs, 5 * figs);
-      var hullG = ctx.createLinearGradient(0, hy2, 0, hy2 + hh2);
-      hullG.addColorStop(0, '#4a382a'); hullG.addColorStop(1, '#2e2118');
-      ctx.fillStyle = hullG; ctx.fill();
-      ctx.strokeStyle = 'rgba(212,180,124,0.55)'; ctx.lineWidth = Math.max(1, 0.8 * figs);
-      ctx.beginPath(); ctx.moveTo(cx - hw2 * 0.94, hy2 + 0.5); ctx.lineTo(cx + hw2 * 0.94, hy2 + 0.5); ctx.stroke();
-      if (f.walking && !rm) {   // rowing wake: two faint trailing strokes off the stern
-        var dir = f.faceL ? 1 : -1;
-        ctx.strokeStyle = 'rgba(233,241,244,0.30)'; ctx.lineWidth = Math.max(1, 0.7 * figs);
-        ctx.beginPath();
-        ctx.moveTo(cx + dir * hw2, hy2 + hh2 * 0.5); ctx.lineTo(cx + dir * (hw2 + 8 * figs), hy2 + hh2 * 0.15);
-        ctx.moveTo(cx + dir * hw2, hy2 + hh2 * 0.7); ctx.lineTo(cx + dir * (hw2 + 6 * figs), hy2 + hh2 * 1.05);
-        ctx.stroke();
-      }
-      ctx.restore();
-    }
-
     if (spr) {
       // ---- SPRITE PAWN (spec §1): feet-centre anchor at meta (24,52) of a
       // 48×56 box, display scale = figs so the sprite torso (~12-15 units wide)
@@ -3135,8 +3168,8 @@ function drawFigures(ctx, sim, t, view) {
         else if (swapK < 0) swapK = 0;
       }
       var mh = 0.72 + 0.28 * swapK;
-      if (afloat) {
-        // crop the sprite's legs (bottom ~8 units) so the pawn stands IN the skiff hull
+      if (aboard) {
+        // crop the sprite's legs (bottom ~8 units) so the pawn stands IN the boat hull
         var res2 = sm.res || 2, cropU = 8;
         ctx.drawImage(spr, 0, 0, sm.w * res2, (sm.h - cropU) * res2,
           cx - sm.feetX * figs * mh, feetY - sm.feetY * figs * mh, sm.w * figs * mh, (sm.h - cropU) * figs * mh);
@@ -3154,7 +3187,7 @@ function drawFigures(ctx, sim, t, view) {
         angR = -angL;
       }
 
-      if (!afloat) {   // in the skiff the legs live inside the hull
+      if (!aboard) {   // aboard, the legs live inside the hull
         drawFigures_leg(ctx, cx - 2 * figs, feetY - 7.5 * figs, 3 * figs, 7.5 * figs, 1.5 * figs, angL, '#2b241c');
         drawFigures_leg(ctx, cx + 2 * figs, feetY - 7.5 * figs, 3 * figs, 7.5 * figs, 1.5 * figs, angR, '#2b241c');
       }
