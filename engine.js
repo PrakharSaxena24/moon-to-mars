@@ -57,10 +57,14 @@
   // DAY_WINDOWS: the authoring window [openMin,closeMin] per segment (mirrors DAY_START_MIN/
   // DAY_END_MIN for fishday and DAY_HOUR_START/DAY_HOUR_END for the coarse days, unified).
   // AUTHORABLE: the segment ids the future deck→arrange→connect editor will cover.
-  var SNAP_MIN = { arrival: 60, ops: 60, return: 60, fishday: 15 };
+  var SNAP_MIN = { load: 60, voyage: 60, arrival: 60, ops: 60, return: 60, fishday: 15 };
+  // ---- Voyage-program (spec 2026-07-13 §1) Day-0 windows: Load & Board runs 06:00–11:00 in Tokyo
+  // against the FIXED 11:00 sailing (SAIL_MIN); the Ship Day runs 11:00–21:00 aboard.
+  var LOAD_START_MIN = 360, SAIL_MIN = 660, VOYAGE_END_MIN = 1260;
   var DAY_WINDOWS = { fishday: [DAY_START_MIN, DAY_END_MIN], arrival: [DAY_HOUR_START, DAY_HOUR_END],
-    ops: [DAY_HOUR_START, DAY_HOUR_END], return: [DAY_HOUR_START, DAY_HOUR_END] };
-  var AUTHORABLE = ['arrival', 'ops', 'return', 'fishday'];
+    ops: [DAY_HOUR_START, DAY_HOUR_END], return: [DAY_HOUR_START, DAY_HOUR_END],
+    load: [LOAD_START_MIN, SAIL_MIN], voyage: [SAIL_MIN, VOYAGE_END_MIN] };
+  var AUTHORABLE = ['load', 'voyage', 'arrival', 'ops', 'fishday', 'return'];
 
   function mulberry32(seed) { var a = seed >>> 0; return function () { a |= 0; a = (a + 0x6D2B79F5) | 0; var t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
   function clone(o) { return JSON.parse(JSON.stringify(o)); }
@@ -81,10 +85,30 @@
     { id: 'finance', name: L('Finance', '会計'),    icon: '🧮', x: 0.30, y: 0.44, hidden: true },   // hidden for now (folded into the hub)
     { id: 'clinic',  name: L('Clinic', '診療所'),   icon: '⛑️', x: 0.30, y: 0.44, hidden: true }   // folded into Hinata (clinic is also Hinata)
   ];
-  function station(id) { for (var i = 0; i < STATIONS.length; i++) if (STATIONS[i].id === id) return STATIONS[i]; return STATIONS[0]; }
+  // ---- the SHIP map (Voyage spec §3): the 'voyage' segment defines its own station set, positioned
+  // over the water side of the map (nx > 0.55) — stations are data; the stage already renders at-sea
+  // crews aboard hulls, so the ship day reads as shipboard life without new stage architecture.
+  var VOYAGE_STATIONS = [
+    { id: 'hold',   name: L('Hold', '船倉'),               icon: '📦', x: 0.60, y: 0.72 },
+    { id: 'cabins', name: L('Cabins', '船室'),             icon: '🛏️', x: 0.66, y: 0.50 },
+    { id: 'dining', name: L('Dining saloon', '船内食堂'),  icon: '🍽️', x: 0.78, y: 0.62 },
+    { id: 'deck',   name: L('Deck', 'デッキ'),             icon: '🌊', x: 0.88, y: 0.42 },
+    { id: 'purser', name: L("Purser's desk", '事務長窓口'), icon: '🛎️', x: 0.72, y: 0.30 }
+  ];
+  function station(id) {
+    var i;
+    for (i = 0; i < STATIONS.length; i++) if (STATIONS[i].id === id) return STATIONS[i];
+    for (i = 0; i < VOYAGE_STATIONS.length; i++) if (VOYAGE_STATIONS[i].id === id) return VOYAGE_STATIONS[i];
+    return STATIONS[0];
+  }
 
   // The trip is rehearsed one DAY/segment at a time: pick a day, plan it, run it.
   var SEGMENTS = [
+    // Voyage program (spec §1): the two Day-0 segments. Inserted BEFORE the existing four so the
+    // narrative order reads Day 0 → Day 1 → …; the RELATIVE order of the four legacy entries is
+    // unchanged, so createSim's pre/post day-scoping over classic tasks is byte-identical.
+    { id: 'load',    phaseEn: 'Day 0 · Load & board',          name: L('Day 0 · Load & board (Tokyo)', '0日目・積込・乗船（東京）') },
+    { id: 'voyage',  phaseEn: 'Day 0 · Ship day',              name: L('Day 0 · Ship day (aboard)', '0日目・船上（航海）') },
     { id: 'arrival', phaseEn: 'Day 1 · Arrival',              name: L('Day 1 · Arrival', '1日目・到着') },
     { id: 'ops',     phaseEn: 'Days 2–9 · Daily operations',  name: L('Days 2–9 · Operations', '2〜9日目・運営') },
     { id: 'return',  phaseEn: 'Day 10 · Return & shipping',   name: L('Day 10 · Return', '10日目・帰着') },
@@ -218,7 +242,10 @@
         neededAuthority: o.auth || null, produces: o.produces || [], assumeOn: o.assumeOn || [],
         wrongFishPenaltyMin: o.wfPenalty || 0, guestFacing: !!o.guest,
         // rubric v1.0 §3.4 pricing flags (scoreTrip derives atoms from these; 0/falsy = none)
-        safetyGate: o.safetyGate || 0, qualityCheck: o.qualityCheck || 0, moneyCheck: o.moneyCheck || 0 };
+        safetyGate: o.safetyGate || 0, qualityCheck: o.qualityCheck || 0, moneyCheck: o.moneyCheck || 0,
+        // Voyage repack: flex:true = a deliberately low-stakes standby task, exempt from exec-lane
+        // pricing (§3.3 amendment — the two owner/pm fishday standbys; behavior untouched)
+        flex: !!o.flex };
     }
     // §20.3 — HD() mirrors FD() for the three authorable coarse days (arrival/ops/return):
     // same output shape as a fishday task (minus the day-clock startDay/dur/phase/day fields
@@ -236,7 +263,15 @@
         required: o.required === false ? false : true, guestFacing: !!o.guestFacing,
         safetyFlag: !!o.safetyFlag, // §13.1: decoy debit is safety-flavored (-3) when true, else -2
         // rubric v1.0 §3.4 pricing flags (scoreTrip derives atoms from these; 0/falsy = none)
-        safetyGate: o.safetyGate || 0, qualityCheck: o.qualityCheck || 0, moneyCheck: o.moneyCheck || 0 };
+        safetyGate: o.safetyGate || 0, qualityCheck: o.qualityCheck || 0, moneyCheck: o.moneyCheck || 0,
+        // Voyage additions (spec §2/§3), all inert on days that don't use them:
+        //   carries[]  — manifest item ids this task moves (custody legs + Pack & Sail mirror)
+        //   custody    — an OUTBOUND custody leg (packed→trucked→in hold); carryState folds these
+        //   care       — careGuestId: a per-VIP care task (starlink/escort); exempt from exec lanes,
+        //                priced by the per-VIP care atom; buddies auto-staff + re-home ownerRoleId
+        //   flex       — exempt from exec-lane pricing (see FD)
+        carries: o.carries ? o.carries.slice() : [], custody: !!o.custody,
+        careGuestId: o.care || null, flex: !!o.flex };
     }
     // §7/§13.4 P2 seed re-tune — Arrival ships PRE-CLEARED (empty board) as the tutorial: the
     // required tasks below are authored with their full canonical placement (assignedIds/
@@ -246,16 +281,18 @@
     // Arrival still reaches its full 15/15 (§13.4 acceptance).
     var arrivalReqTasks = [
       HD('hd_a_ferrycheck',   'Confirm ferry departure & manifest', '船便出港時刻・乗船名簿確認',       'port',    'pm',         ['p02'], 300, 60,  { produces: ['ic_ferry'] }),
-      HD('hd_a_board',        'Ferry boarding & assemble',          '乗船確認・集合',                   'port',    'logi',       ['p06'], 360, 60,  { deps: ['hd_a_ferrycheck'], info: ['ic_ferry'], moneyCheck: 1 }),
+      // Voyage repack: arrival's quality/money flags retired (bucket 15 -> 12; its weight is
+      // execution + information). Pricing-only — task data/behavior byte-identical.
+      HD('hd_a_board',        'Ferry boarding & assemble',          '乗船確認・集合',                   'port',    'logi',       ['p06'], 360, 60,  { deps: ['hd_a_ferrycheck'], info: ['ic_ferry'] }),
       HD('hd_a_cross',        'Sea crossing & seasickness watch',   '渡航・船酔い対応',                 'vessel',  'siteLead',   ['p03'], 420, 180, { deps: ['hd_a_board'], diff: 3 }),
       HD('hd_a_checkin',      'Check-in & room assignment',         '受付・部屋割り',                   'lodging', 'logi',       ['p06'], 600, 60,  { deps: ['hd_a_cross'], produces: ['ic_rooms'] }),
       HD('hd_a_foodsource',   'Food source & allergy check',        '食材調達・アレルギー確認',         'finance', 'budgetLead', ['p04'], 660, 60,  { produces: ['ic_food'] }),
       HD('hd_a_intake',       'Supply & gear intake (drinks, tackle, food, ice)', '物資・釣具搬入（飲料・釣具・食材・氷）', 'lodging', 'logi', ['p06'], 660, 60, { deps: ['hd_a_checkin'], produces: ['ic_tackle'], res: ['storage'] }),
       HD('hd_a_safety',       'Safety briefing',                    '安全説明会',                       'clinic',  'safetyLead', ['p05'], 660, 60,  { diff: 3, safetyGate: 1 }),
       HD('hd_a_gearstow',     'Gear stow',                          '道具収納',                         'port',    'specialist', ['p08'], 720, 60,  { deps: ['hd_a_intake'], info: ['ic_tackle'] }),
-      HD('hd_a_dinnerprep',   'First-night meal prep',              '初日夕食仕込み',                   'mess',    'chef',       ['p09', 'p10'], 720, 120, { deps: ['hd_a_intake'], info: ['ic_food'], res: ['food'], diff: 3, qualityCheck: 1 }),
+      HD('hd_a_dinnerprep',   'First-night meal prep',              '初日夕食仕込み',                   'mess',    'chef',       ['p09', 'p10'], 720, 120, { deps: ['hd_a_intake'], info: ['ic_food'], res: ['food'], diff: 3 }),
       HD('hd_a_headcount',    'Arrival headcount',                  '到着点呼',                         'port',    'comms',      ['p07'], 840, 60,  { deps: ['hd_a_checkin'], info: ['ic_rooms'] }),
-      HD('hd_a_dinnerserve',  'First-night meal service',           '初日夕食提供',                     'mess',    'chef',       ['p09', 'p10', 'p11'], 1080, 60, { deps: ['hd_a_dinnerprep'], res: ['food'], guestFacing: true, qualityCheck: 1 })
+      HD('hd_a_dinnerserve',  'First-night meal service',           '初日夕食提供',                     'mess',    'chef',       ['p09', 'p10', 'p11'], 1080, 60, { deps: ['hd_a_dinnerprep'], res: ['food'], guestFacing: true })
     ];
     var arrivalCanonPlacement = {};
     // §7/§13.4 refinement-3: HALF-clear (not all 11) — leave the early-morning chain placed
@@ -269,6 +306,117 @@
       arrivalCanonPlacement[t.id] = { assignedIds: t.assignedIds.slice(), startMin: t.startMin, durMin: t.durMin };
       if (ARRIVAL_CLEARED[t.id]) t.assignedIds = [];   // ships blank — the half-cleared tutorial board
     });
+
+    // =========================================================================
+    // VOYAGE PROGRAM (spec 2026-07-13) — Day-0 content: named guests, the physical
+    // manifest, and the Load & Board / Ship Day rosters. W1a ships them CANONICALLY
+    // complete with the spec-§4 seed gaps; the W2a content wave enriches (decoys,
+    // richer rosters).
+    // =========================================================================
+    // 13 named guests (WORLD.md §2/§3). The 4 VIPs = Nagatani + Kadou (the external
+    // counterparties the whole trip courts) + the two most senior rotation guests by
+    // WORLD.md §2 seniority (Watanabe (head) → Yamate). Kanji only where WORLD.md
+    // confirms it (渡邊 / 角谷); other guests stay katakana pending the owner's kanji
+    // pass (WORLD.md §8). Natsuki (cameraman) is the conscious 14th-person omission —
+    // the engine models exactly GUESTS = 13.
+    function GD(id, en, jp, vip, party) { return { id: id, name: L(en, jp), vip: !!vip, party: party }; }
+    var guests = [
+      GD('gd_nagatani', 'Nagatani', 'ナガタニ', true,  'external'),
+      GD('gd_kadou',    'Kadou',    '角谷',     true,  'external'),
+      GD('gd_watanabe', 'Watanabe', '渡邊',     true,  'aegis'),
+      GD('gd_yamate',   'Yamate',   'ヤマテ',   true,  'aegis'),
+      GD('gd_saito',    'Saito',    'サイトウ', false, 'aegis'),
+      GD('gd_maeda',    'Maeda',    'マエダ',   false, 'aegis'),
+      GD('gd_nobuaki',  'Nobuaki',  'ノブアキ', false, 'aegis'),
+      GD('gd_shimura',  'Shimura',  'シムラ',   false, 'aegis'),
+      GD('gd_tamaya',   'Tamaya',   'タマヤ',   false, 'aegis'),
+      GD('gd_nate',     'Nate',     'ネイト',   false, 'aegis'),
+      GD('gd_daisuke',  'Daisuke',  'ダイスケ', false, 'aegis'),
+      GD('gd_miki',     'Miki',     'ミキ',     false, 'aegis'),
+      GD('gd_megu',     'Megu',     'メグ',     false, 'aegis')
+    ];
+    // The physical manifest (spec §2). resourceId binds an item to the EXISTING
+    // neededResources tokens downstream: a resource with no manifest item is never
+    // carry-bound (inert — 'boat', 'storage', 'keys', …), and a task needing a bound
+    // resource stalls (手待ち-style) in any segment where a backing item is 'missing'.
+    function MI(id, en, jp, kind, resourceId, forSeg) { return { id: id, name: L(en, jp), kind: kind, resourceId: resourceId, forSeg: forSeg }; }
+    var manifest = [
+      MI('mi_rods',       'Rod sets ×6',           '竿セット×6',             'gear',    'tackle',  'fishday'),
+      MI('mi_jigcase',    'Jig case (60–100 g)',   'ジグケース（60〜100g）', 'gear',    'jigs',    'fishday'),
+      MI('mi_coolers',    'Coolers ×2',            'クーラーボックス×2',     'gear',    'ice',     'fishday'),
+      MI('mi_ice',        'Ice blocks 40 kg',      '氷40kg',                 'gear',    'ice',     'fishday'),
+      MI('mi_foodcrates', 'Food crates',           '食材ケース',             'food',    'food',    'ops'),
+      MI('mi_medkit',     'Medkit',                '救急セット',             'safety',  'medkit',  'ops'),
+      MI('mi_cashbox',    'Cash box',              '現金ボックス',           'money',   'cash',    'return'),
+      MI('mi_lug_gd_nagatani', "Nagatani's luggage", 'ナガタニ様の荷物',     'luggage', 'luggage', 'voyage'),
+      MI('mi_lug_gd_kadou',    "Kadou's luggage",    '角谷様の荷物',         'luggage', 'luggage', 'voyage'),
+      MI('mi_lug_gd_watanabe', "Watanabe's luggage", '渡邊様の荷物',         'luggage', 'luggage', 'voyage'),
+      MI('mi_lug_gd_yamate',   "Yamate's luggage",   'ヤマテ様の荷物',       'luggage', 'luggage', 'voyage')
+    ];
+    var ALL_ITEMS = manifest.map(function (m) { return m.id; });
+    // --- Day 0 · LOAD & BOARD (06:00–11:00 Tokyo, hour snap, fixed 11:00 sailing) ---
+    // Custody chain (custody:true): packed → trucked to the pier → in the hold. carryState folds
+    // this chain into per-item availability for every later segment.
+    var loadReqTasks = [
+      HD('hd_l_pack',      'Pack & check the manifest',               '積荷仕分け・現物照合',           'command', 'logi',     ['p06'], 360, 60,  { produces: ['ic_manifest'], custody: true, carries: ALL_ITEMS, moneyCheck: 1 }),
+      HD('hd_l_truck',     'Truck run to the pier',                   '埠頭へのトラック輸送',           'port',    'siteLead', ['p03'], 420, 60,  { deps: ['hd_l_pack'], info: ['ic_manifest'], custody: true, carries: ALL_ITEMS }),
+      HD('hd_l_cabins',    'Cabin assignment list',                   '船室割当リスト作成',             'command', 'pm',       ['p02'], 420, 60,  { produces: ['ic_cabins'] }),
+      HD('hd_l_hold',      'Hold loading & manifest check',           '船倉積込・積荷照合',             'port',    'siteLead', ['p03'], 480, 120, { deps: ['hd_l_truck'], info: ['ic_manifest'], custody: true, carries: ALL_ITEMS, diff: 3, safetyGate: 2 }),
+      HD('hd_l_headcount', 'Boarding headcount vs the 11:00 sailing', '出港前乗船点呼（11:00出港厳守）', 'port',    'comms',    ['p07'], 600, 60,  { deps: ['hd_l_hold'], info: ['ic_cabins'], safetyGate: 2 })
+    ];
+    var loadDecoys = [
+      HD('hd_l_dec_souvenir', 'Last-minute Tokyo souvenir run', '出発前の東京土産購入',   'command', 'logi',     [], 480, 60, { required: false }),
+      HD('hd_l_dec_pierfish', 'A few casts off the pier',       '埠頭でちょい投げ',       'port',    'specialist', [], 540, 60, { required: false, safetyFlag: true })
+    ];
+    var loadCanonPlacement = {};
+    loadReqTasks.forEach(function (t) {
+      loadCanonPlacement[t.id] = { assignedIds: t.assignedIds.slice(), startMin: t.startMin, durMin: t.durMin };
+      if (t.custody) loadCanonPlacement[t.id].carries = t.carries.slice();
+    });
+    // SEED GAP L1 (spec §4): the jig case is never assigned to the truck run — it misses the ship,
+    // and on Day 3 the gear check stalls on it ("what misses the ship cannot be fixed at sea").
+    loadReqTasks[1].carries = loadReqTasks[1].carries.filter(function (id) { return id !== 'mi_jigcase'; });
+    var loadCanonArrows = [
+      H('h_l_manifest', 'ic_manifest', 'logi', 'hd_l_pack',   'siteLead', 'hd_l_truck',     { type: 'onTaskDone', taskId: 'hd_l_pack' },   'faceToFace', 'idle', null,
+        '11 items packed & verified — manifest to the truck run', '積荷11点確認済・輸送班へ引き渡し'),
+      H('h_l_cabins',   'ic_cabins',   'pm',   'hd_l_cabins', 'comms',    'hd_l_headcount', { type: 'onTaskDone', taskId: 'hd_l_cabins' }, 'faceToFace', 'idle', null,
+        'Cabin list final — check boarders off against it', '船室割当確定・点呼で照合')
+    ];
+    // SEED GAP L2 (spec §4): the cabin list is UNSHARED (h_l_cabins withheld) — the boarding
+    // headcount idles past the fixed 11:00 sailing and the boarding gate fails on the seed.
+    var loadHandoffs = [clone(loadCanonArrows[0])];
+    // --- Day 0 · SHIP DAY (11:00–21:00 aboard, hour snap; the ship-map stations) ---
+    // The 12 per-VIP care tasks (t_v_star_/t_v_esc_l_/t_v_esc_d_) ship UNSTAFFED; assigning a
+    // buddy (plan.buddies / overrides.buddies) auto-staffs them onto the buddy (mergePlan).
+    var vipStarMin = { gd_nagatani: 780, gd_watanabe: 840, gd_yamate: 900, gd_kadou: 960 };
+    var voyageTasks = [
+      HD('hd_v_luggage',   'Luggage runs to the cabins',      '手荷物の船室搬入',       'cabins', 'logi',       ['p06'], 660, 120, { info: ['ic_cabins'], res: ['luggage'] }),
+      HD('hd_v_watch',     'Deck watch & seasickness rounds', 'デッキ監視・船酔い巡回', 'deck',   'safetyLead', ['p05'], 720, 420, { diff: 3, safetyGate: 2 }),
+      HD('hd_v_brief',     'Arrival briefing on deck',        '到着前ブリーフィング',   'deck',   'pm',         ['p02'], 1140, 60, {}),
+      HD('hd_v_headcount', 'Evening roll call aboard',        '船内夜間点呼',           'deck',   'comms',      ['p07'], 1200, 60, {})
+    ];
+    var voyageDecoys = [
+      HD('hd_v_dec_sternfish', 'Fishing off the stern underway', '航行中の船尾釣り',   'deck',   'specialist', [], 900, 60, { required: false, safetyFlag: true }),
+      HD('hd_v_dec_karaoke',   'Saloon karaoke hour',            '船内カラオケ大会',   'dining', 'comms',      [], 960, 60, { required: false })
+    ];
+    guests.forEach(function (g) {
+      if (!g.vip) return;
+      voyageTasks.push(
+        HD('t_v_star_' + g.id,  'Starlink registration — ' + g.name.en, 'スターリンク登録（' + g.name.jp + '様）', 'purser', 'pm', [], vipStarMin[g.id], 60, { care: g.id }),
+        HD('t_v_esc_l_' + g.id, 'Lunch escort — ' + g.name.en,          '昼食エスコート（' + g.name.jp + '様）',   'dining', 'pm', [], 720, 60,  { care: g.id, guestFacing: true }),
+        HD('t_v_esc_d_' + g.id, 'Dinner escort — ' + g.name.en,         '夕食エスコート（' + g.name.jp + '様）',   'dining', 'pm', [], 1080, 60, { care: g.id, guestFacing: true })
+      );
+    });
+    var voyageCanonPlacement = {};
+    voyageTasks.forEach(function (t) {
+      if (!t.careGuestId) voyageCanonPlacement[t.id] = { assignedIds: t.assignedIds.slice(), startMin: t.startMin, durMin: t.durMin };
+    });
+    var voyageCanonArrows = [
+      H('h_v_cabins', 'ic_cabins', 'pm', null, 'logi', 'hd_v_luggage', { type: 'atMinute', value: 660 }, 'faceToFace', 'idle', null,
+        'Cabin list re-shared at boarding — run the luggage by it', '乗船時に船室割当を再共有・荷物を配送')
+    ];
+    var voyageHandoffs = [clone(voyageCanonArrows[0])];   // drawn in the seed — voyage's seed gaps are the buddies + the card authority
+
     return {
       project: {
         id: 'ogasawara10',
@@ -346,18 +494,23 @@
         // --- Day 3 · THE representative fishing day, minute-level (§5.3, scores 100 as shipped-with-fixes) ---
         // PHASE 0 · pre-dawn intelligence (04:15–05:30)
         FD('t_f_food',       'Confirm supply & allergy list', '食材調達・アレルギー確認', 'finance', 'budgetLead', ['p04'], 255, 30, { produces: ['ic_food'] }),
-        FD('t_f_weather',    'Dawn weather & sea check, set abort', '早朝海況確認・中止基準設定', 'clinic', 'safetyLead', ['p05'], 270, 30, { produces: ['ic_weather'], auth: 'abort', diff: 3, safetyGate: 3 }),
+        // Voyage repack: safety-gate prices trimmed (3/2/2 -> 2/1/1) so the fishday bucket lands ~30
+        // while staying the heaviest; flag values are scoreTrip pricing only — zero behavior change.
+        FD('t_f_weather',    'Dawn weather & sea check, set abort', '早朝海況確認・中止基準設定', 'clinic', 'safetyLead', ['p05'], 270, 30, { produces: ['ic_weather'], auth: 'abort', diff: 3, safetyGate: 2 }),
         FD('t_f_orgfood',    'Collect organizer dinner requests', '運営の夕食希望とりまとめ', 'command', 'comms', ['p07'], 270, 15, { produces: ['ic_orgfood'], diff: 1 }),
         FD('t_f_menu',       'Menu & portions (18 = 13 guests + 5)', '献立・食数決定（13名＋運営5食）', 'mess', 'chef', ['p09'], 300, 30, { info: ['ic_food', 'ic_weather', 'ic_orgfood'], produces: ['ic_menu'], res: ['food'], diff: 3 }),
         FD('t_f_tackleprep', 'Morning tackle & ice prep', '釣具・氷の朝準備', 'port', 'logi', ['p06'], 300, 30, { produces: ['ic_tackle'], res: ['tackle', 'ice'] }),
         // PHASE 1 · rig to the menu, set the heading (05:30–07:00)
-        FD('t_f_gearload',   'Gear pre-check & load boat', '道具最終確認・積込', 'port', 'specialist', ['p08'], 330, 45, { info: ['ic_menu', 'ic_tackle'], produces: ['ic_target'], assumeOn: ['ic_menu'], diff: 3 }),
+        // Voyage §2: the gear check pre-checks the JIGS the Tokyo load day was supposed to put aboard
+        // ('jigs' is backed by manifest item mi_jigcase). Resources were previously unconsulted, so
+        // this is behavior-neutral until carryState says the item missed the ship.
+        FD('t_f_gearload',   'Gear pre-check & load boat', '道具最終確認・積込', 'port', 'specialist', ['p08'], 330, 45, { info: ['ic_menu', 'ic_tackle'], produces: ['ic_target'], assumeOn: ['ic_menu'], res: ['jigs'], diff: 3 }),
         FD('t_f_route',      'Route & heading plan (fold in hard return)', '進路・漁場計画（帰港時刻厳守）', 'vessel', 'siteLead', ['p03'], 375, 30, { info: ['ic_menu', 'ic_target', 'ic_weather'], produces: ['ic_ground'], assumeOn: ['ic_menu', 'ic_target'], diff: 3 }),
         FD('t_f_headcount1', 'Departure headcount', '出港点呼', 'port', 'comms', ['p07'], 405, 15, { produces: ['ic_headcount'], diff: 1 }),
         // PHASE 2 · depart & fish (07:00–12:45)
         FD('t_f_depart',     'Depart & transit to ground', '出港・漁場へ移動', 'vessel', 'siteLead', ['p03'], 420, 60, { deps: ['t_f_route'], info: ['ic_ground', 'ic_headcount'], res: ['boat'], diff: 3 }),
         FD('t_f_rig',        'Rig en route', '航行中の仕掛け準備', 'vessel', 'specialist', ['p08'], 420, 60, { deps: ['t_f_gearload'], info: ['ic_ground'], assumeOn: ['ic_ground'] }),
-        FD('t_f_seawatch',   'Sea watch (abort authority aboard)', '海上安全監視（中止権限）', 'vessel', 'safetyLead', ['p05'], 420, 420, { info: ['ic_weather'], auth: 'abort', diff: 4, safetyGate: 2 }),
+        FD('t_f_seawatch',   'Sea watch (abort authority aboard)', '海上安全監視（中止権限）', 'vessel', 'safetyLead', ['p05'], 420, 420, { info: ['ic_weather'], auth: 'abort', diff: 4, safetyGate: 1 }),
         FD('t_f_triplog',    'Trip log & shore contact', '航海記録・陸上連絡', 'command', 'comms', ['p07'], 420, 330, { diff: 1 }),
         FD('t_f_hold',       'Hold station at the ground', '漁場で操船保持', 'vessel', 'siteLead', ['p03'], 480, 270, { deps: ['t_f_depart'], res: ['boat'], diff: 3 }),
         FD('t_f_fish',       'FISHING — catch to target', '釣り（目標数まで）', 'vessel', 'specialist', ['p08'], 480, 270, { deps: ['t_f_rig'], info: ['ic_ground'], assumeOn: ['ic_ground'], res: ['tackle'], diff: 4 }),
@@ -366,8 +519,10 @@
         // PHASE 2b · owner & PM flex/standby (§13.1) — low-stakes, no neededInfo/deps, so they
         // cannot alter the canonical cascade: remote work on another project / join the fishing /
         // help the galley if needed (normally not needed). Gives 8 organizer lanes + galley = 9 exec atoms.
-        FD('t_f_flex_owner', 'Owner standby (remote work / join fishing / help galley if needed)', '代表待機（別件のリモート対応・釣り同行・厨房手伝いなど）', 'command', 'owner', ['p01'], 480, 60, { diff: 1 }),
-        FD('t_f_flex_pm',    'PM standby (remote coordination / join fishing / help galley if needed)', '総合責任者待機（リモート調整・釣り同行・厨房手伝いなど）', 'command', 'pm', ['p02'], 600, 60, { diff: 1 }),
+        // Voyage repack: flex-flagged -> exempt from exec-lane pricing (fishday 8 lanes -> 6; §3.3
+        // amendment reversing the §10-delta that added them for lane count). Tasks themselves stay.
+        FD('t_f_flex_owner', 'Owner standby (remote work / join fishing / help galley if needed)', '代表待機（別件のリモート対応・釣り同行・厨房手伝いなど）', 'command', 'owner', ['p01'], 480, 60, { diff: 1, flex: true }),
+        FD('t_f_flex_pm',    'PM standby (remote coordination / join fishing / help galley if needed)', '総合責任者待機（リモート調整・釣り同行・厨房手伝いなど）', 'command', 'pm', ['p02'], 600, 60, { diff: 1, flex: true }),
         // PHASE 3 · relay -> return -> cook backward from 18:00 (12:45–18:45)
         FD('t_f_return',     'Return transit (dockside 14:00)', '帰港（14:00接岸）', 'vessel', 'siteLead', ['p03'], 765, 75, { deps: ['t_f_tally'], res: ['boat'], diff: 3 }),
         FD('t_f_stow',       'Stow gear en route', '帰航中の道具収納', 'vessel', 'specialist', ['p08'], 765, 75, { deps: ['t_f_tally'], diff: 1 }),
@@ -375,7 +530,7 @@
         FD('t_f_land',       'Land & deliver catch', '接岸・漁獲引渡し', 'port', 'specialist', ['p08'], 840, 20, { deps: ['t_f_return', 't_f_stow'], diff: 1 }),
         FD('t_f_headcount2', 'Return headcount', '帰着点呼', 'port', 'comms', ['p07'], 840, 15, { deps: ['t_f_return'], info: ['ic_headcount'], diff: 1 }),
         FD('t_f_dock',       'Dock & secure the boat', '係留・船整理', 'port', 'siteLead', ['p03'], 840, 30, { deps: ['t_f_return'], res: ['boat'], diff: 1 }),
-        FD('t_f_health',     'Crew health check', '帰港後健康チェック', 'clinic', 'safetyLead', ['p05'], 840, 30, { deps: ['t_f_seawatch'], res: ['medkit'], diff: 1, safetyGate: 2 }),
+        FD('t_f_health',     'Crew health check', '帰港後健康チェック', 'clinic', 'safetyLead', ['p05'], 840, 30, { deps: ['t_f_seawatch'], res: ['medkit'], diff: 1, safetyGate: 1 }),
         FD('t_f_icing',      'Catch handling & icing to galley', '漁獲処理・氷詰め搬入', 'mess', 'logi', ['p06'], 860, 25, { deps: ['t_f_land'], info: ['ic_catch'], res: ['ice'] }),
         FD('t_f_fillet',     'Fillet & portion the catch', '捌き・切り分け', 'mess', 'chef', ['p09', 'p10', 'p11'], 885, 75, { deps: ['t_f_icing', 't_f_sideprep'], info: ['ic_catch'], diff: 3 }),
         FD('t_f_cook',       'COOK dinner main — 90 min = 5 × 18', '夕食メイン調理（90分＝5分×18食）', 'mess', 'chef', ['p09', 'p10', 'p11'], 960, 90, { deps: ['t_f_fillet'], info: ['ic_menu'], res: ['food'], wfPenalty: 30, diff: 3 }),
@@ -418,7 +573,12 @@
         { id: 'ic_catch',    name: L('Catch tally: species, count, weight', '漁獲集計：魚種・尾数・重量'), reason: L('Chef preps the right portions before the fish even lands.', '接岸前に正しい食数で仕込めるため。'),
           ownerRoleId: 'specialist', recipientRoleIds: ['chef', 'logi', 'comms', 'specialist'],      shareTiming: L('radioed ~12:45 at sea', '海上から12:45頃無線'), secrecy: 'all', impactIfUnshared: L('3 chefs idle at the galley; wrong portions.', '料理3名が手待ち・食数ミス。') },
         { id: 'ic_cash',     name: L('Cash reserve location & draw rule', '現金予備費の保管場所・使用ルール'), reason: L('Cards/comms unreliable on site — cash backstops ice, bait, fuel.', 'カード不安定な現地で氷・餌・燃料の裏付け。'),
-          ownerRoleId: 'budgetLead', recipientRoleIds: ['siteLead', 'logi', 'budgetLead'],           shareTiming: L('day before', '前日'), secrecy: 'role', impactIfUnshared: L('On-site purchase stalls when cards fail.', 'カード不通時に現地購入が止まる。') }
+          ownerRoleId: 'budgetLead', recipientRoleIds: ['siteLead', 'logi', 'budgetLead'],           shareTiming: L('day before', '前日'), secrecy: 'role', impactIfUnshared: L('On-site purchase stalls when cards fail.', 'カード不通時に現地購入が止まる。') },
+        // --- Voyage Day-0 cards (spec §1/§4) ---
+        { id: 'ic_manifest', name: L('Load manifest: items & custody', '積荷リスト（品目・引き渡し）'), reason: L('The truck run and the hold loading must move exactly what was packed.', '輸送と船倉積込は積荷リストどおりに動く必要がある。'),
+          ownerRoleId: 'logi',       recipientRoleIds: ['siteLead', 'logi'],                          shareTiming: L('at pack-out 07:00', '積荷確認時 07:00'), secrecy: 'all', impactIfUnshared: L('Items miss the truck — and the ship.', '積み漏れ→船に載らない。') },
+        { id: 'ic_cabins',   name: L('Cabin assignment list', '船室割当リスト'), reason: L('Boarding roll call and the luggage runs work off the cabin list.', '乗船点呼と荷物搬入は船室割当が前提。'),
+          ownerRoleId: 'pm',         recipientRoleIds: ['comms', 'logi', 'pm'],                       shareTiming: L('before boarding 10:00', '乗船前 10:00'), secrecy: 'all', impactIfUnshared: L('Boarding stalls; luggage piles up unsorted.', '点呼が停滞・荷物が仕分け不能。') }
       ],
 
       // --- fishday handoffs (§6.1): the drawn arrows. Ships GAPPY like everything else:
@@ -434,7 +594,9 @@
           { id: 'bl_meals',     name: L('Meals', '食事'),      cap: 700000,  spent: 0, approverRoleId: null,         payMethod: 'cash', receiptRule: 'required' }, // GAP B: no approver
           { id: 'bl_boat',      name: L('Boat charter', '船'), cap: 600000,  spent: 0, approverRoleId: 'budgetLead', payMethod: 'card', receiptRule: 'required' },
           { id: 'bl_tackle',    name: L('Gear / tackle', '道具'), cap: 200000, spent: 0, approverRoleId: 'logi',     payMethod: 'cash', receiptRule: 'photo' },
-          { id: 'bl_onsite',    name: L('On-site / misc', '現地費'), cap: 300000, spent: 0, approverRoleId: 'siteLead', payMethod: 'cash', receiptRule: 'lenient' }
+          { id: 'bl_onsite',    name: L('On-site / misc', '現地費'), cap: 300000, spent: 0, approverRoleId: 'siteLead', payMethod: 'cash', receiptRule: 'lenient' },
+          // Voyage §3: the company-card envelope the 4 VIP Starlink registrations draw on.
+          { id: 'bl_card',      name: L('Company card / ship Wi-Fi', '会社カード・船上Wi-Fi'), cap: 100000, spent: 0, approverRoleId: null, payMethod: 'card', receiptRule: 'required' } // SEED GAP V2 (spec §4): no card authority
         ],
         reserve: 0,   // GAP F: no cash reserve
         reserveTarget: 300000,
@@ -487,7 +649,29 @@
       // canonical arrangement is zero-idle — exactly the arrangement a slower channel
       // (chat +10 / board +30) would push late once Phase 2's daySchedule prices it.
       // ===========================================================================
+
+      // --- Voyage program: named guests, VIP buddies, and the physical manifest (spec §2/§3) ---
+      guests: guests,
+      // buddies {guestId: pid} — template default. SEED GAP V1 (spec §4): 2 of the 4 VIP buddies
+      // are unassigned — and they are Nagatani & Kadou, the counterparties the trip exists for.
+      buddies: { gd_watanabe: 'p01', gd_yamate: 'p04' },
+      manifest: manifest,
+
       days: {
+        load: {
+          tasks: loadReqTasks.concat(loadDecoys),
+          canonPlacement: loadCanonPlacement,
+          canonHandoffs: loadCanonArrows,   // full canonical arrow set (canonDay draws withheld ones)
+          handoffs: loadHandoffs,           // seed ships h_l_manifest only (h_l_cabins withheld — GAP L2)
+          decoys: ['hd_l_dec_souvenir', 'hd_l_dec_pierfish']   // W2a (content wave) may extend to 3
+        },
+        voyage: {
+          tasks: voyageTasks.concat(voyageDecoys),
+          canonPlacement: voyageCanonPlacement,
+          canonHandoffs: voyageCanonArrows,
+          handoffs: voyageHandoffs,
+          decoys: ['hd_v_dec_sternfish', 'hd_v_dec_karaoke']   // W2a may extend to 3
+        },
         arrival: {
           // required roster ships PRE-CLEARED (assignedIds:[] — see arrivalReqTasks above, §7/§13.4
           // P2); decoys (3, plausible-but-wrong, never in the required set) always start unplaced too.
@@ -514,13 +698,15 @@
           tasks: [
             // --- required roster (~12): a representative non-fishing ops day ---
             HD('hd_o_weather',     'Weather & safety check',           '天候・安全確認',           'clinic',  'safetyLead', ['p05'], 300, 60,  { produces: ['ic_weather'], diff: 3, safetyGate: 1 }),
-            HD('hd_o_tackleprep',  'Tackle prep',                      '釣具準備',                 'port',    'logi',       ['p06'], 300, 60,  { produces: ['ic_tackle'], res: ['tackle'], moneyCheck: 1 }),
+            // Voyage repack: ops money flags + the three non-guest-facing quality flags retired
+            // (bucket 18 -> 13; dinner service keeps its guest-facing quality check). Pricing-only.
+            HD('hd_o_tackleprep',  'Tackle prep',                      '釣具準備',                 'port',    'logi',       ['p06'], 300, 60,  { produces: ['ic_tackle'], res: ['tackle'] }),
             HD('hd_o_shorefish',   'Shore-fishing session',            '陸釣り',                   'port',    'specialist', ['p08'], 360, 240, { deps: ['hd_o_weather', 'hd_o_tackleprep'], info: ['ic_weather', 'ic_tackle'], produces: ['ic_catch'], res: ['tackle'], diff: 3 }),
             HD('hd_o_catchhandle', 'Catch handling & ice',             '漁獲処理・保管',           'mess',    'logi',       ['p06'], 600, 60,  { deps: ['hd_o_shorefish'], info: ['ic_catch'], res: ['ice'] }),
-            HD('hd_o_foodprep',    'Food prep',                        '食材仕込み',               'mess',    'chef',       ['p09', 'p10'], 300, 120, { res: ['food'], diff: 3, qualityCheck: 1 }),
-            HD('hd_o_foodsource',  'Food source & allergy check',      '食材調達・アレルギー確認', 'finance', 'budgetLead', ['p04'], 300, 60,  { produces: ['ic_food'], moneyCheck: 1 }),
-            HD('hd_o_lunch',       'Guest lunch service',              'ゲスト昼食提供',           'mess',    'chef',       ['p09', 'p10', 'p11'], 660, 60, { deps: ['hd_o_foodprep'], res: ['food'], guestFacing: true, qualityCheck: 1 }),
-            HD('hd_o_dinnerprep',  'Dinner prep',                      '夕食仕込み',               'mess',    'chef',       ['p09', 'p10'], 780, 120, { deps: ['hd_o_lunch'], info: ['ic_food'], res: ['food'], diff: 3, qualityCheck: 1 }),
+            HD('hd_o_foodprep',    'Food prep',                        '食材仕込み',               'mess',    'chef',       ['p09', 'p10'], 300, 120, { res: ['food'], diff: 3 }),
+            HD('hd_o_foodsource',  'Food source & allergy check',      '食材調達・アレルギー確認', 'finance', 'budgetLead', ['p04'], 300, 60,  { produces: ['ic_food'] }),
+            HD('hd_o_lunch',       'Guest lunch service',              'ゲスト昼食提供',           'mess',    'chef',       ['p09', 'p10', 'p11'], 660, 60, { deps: ['hd_o_foodprep'], res: ['food'], guestFacing: true }),
+            HD('hd_o_dinnerprep',  'Dinner prep',                      '夕食仕込み',               'mess',    'chef',       ['p09', 'p10'], 780, 120, { deps: ['hd_o_lunch'], info: ['ic_food'], res: ['food'], diff: 3 }),
             HD('hd_o_dinnerserve', 'Dinner service',                   '夕食提供',                 'mess',    'chef',       ['p09', 'p10', 'p11'], 1080, 60, { deps: ['hd_o_dinnerprep'], res: ['food'], guestFacing: true, qualityCheck: 1 }),
             HD('hd_o_accounting',  'Daily accounting & reconcile',     '日次精算・領収書',         'finance', 'budgetLead', ['p04'], 720, 60,  { res: ['cash'] }),
             HD('hd_o_report',      'Daily report & catch log',         '日次報告・釣果記録',       'command', 'comms',      ['p07'], 960, 60,  { deps: ['hd_o_catchhandle'], info: ['ic_catch'] }),
@@ -547,17 +733,31 @@
         },
 
         'return': {
+          // ===== Voyage §1/§5: Day 10 reshaped to PACK & SAIL — settle books → pack → hold loading
+          // → sail home → Tokyo headcount ("close the loop you opened"). Anchor migration record:
+          //   · every pre-Voyage required task is KEPT byte-identical in id/time/staffing/deps
+          //     (teardown/checkout/ship/settle/sitecash/headcount/ferrymarshal/boarding/finalreport);
+          //   · hd_r_teardown IS the "pack" phase step and now carries the homebound manifest
+          //     (carries data only — inert to scheduling);
+          //   · +3 new tasks: hd_r_hold (hold loading), hd_r_sail (sail home), hd_r_tokyocount
+          //     (Tokyo headcount) — all landing in EXISTING role lanes (no new exec atoms);
+          //   · pricing migrations (repack 12 -> 10): hd_r_sitecash moneyCheck retired (its cash
+          //     sign-off stays priced as the siteLead exec lane + its ic_cash socket); hd_r_boarding
+          //     safetyGate retired (its execution folds into the pm exec lane; the return safety
+          //     point is the headcount 点呼); hd_r_settle keeps the money check.
           tasks: [
-            // --- required roster (~9): teardown -> settle -> headcount -> ferry marshal ---
-            HD('hd_r_teardown',     'Teardown & pack',                        '撤収・荷造り',               'lodging', 'logi',       ['p06'], 300, 120, {}),
+            HD('hd_r_teardown',     'Teardown & pack',                        '撤収・荷造り',               'lodging', 'logi',       ['p06'], 300, 120, { carries: ['mi_rods', 'mi_jigcase', 'mi_coolers', 'mi_medkit', 'mi_cashbox'] }),
             HD('hd_r_checkout',     'Room checkout',                          '部屋チェックアウト',         'lodging', 'logi',       ['p06'], 420, 60,  { deps: ['hd_r_teardown'] }),
             HD('hd_r_ship',         'Ship remaining supplies',                '残置物の発送',               'port',    'logi',       ['p06'], 480, 60,  { deps: ['hd_r_checkout'], info: ['ic_cash'], res: ['shipping'] }),
-            HD('hd_r_settle',       'Final settlement & receipts',            '最終精算・領収書',           'finance', 'budgetLead', ['p04'], 300, 180, { res: ['cash'], produces: ['ic_cash'], diff: 3, moneyCheck: 1 }),
-            HD('hd_r_sitecash',     'Site-lead cash sign-off',                '現地責任者による現金確認',   'finance', 'siteLead',   ['p03'], 480, 60,  { deps: ['hd_r_settle'], info: ['ic_cash'], moneyCheck: 1 }),
+            HD('hd_r_settle',       'Final settlement & receipts',            '最終精算・領収書',           'finance', 'budgetLead', ['p04'], 300, 180, { res: ['cash'], produces: ['ic_cash'], diff: 3 }),   // Voyage §4.1: settle moneyCheck retired (lane+socket price the work)
+            HD('hd_r_sitecash',     'Site-lead cash sign-off',                '現地責任者による現金確認',   'finance', 'siteLead',   ['p03'], 480, 60,  { deps: ['hd_r_settle'], info: ['ic_cash'] }),
             HD('hd_r_headcount',    'Return headcount',                       '帰着点呼',                   'port',    'comms',      ['p07'], 540, 60,  { deps: ['hd_r_ship'], produces: ['ic_return'], safetyGate: 1 }),
             HD('hd_r_ferrymarshal', 'Ferry marshal & departure roll call',    '乗船整理・出発点呼',         'port',    'pm',         ['p02'], 600, 60,  { deps: ['hd_r_headcount'], info: ['ic_return'] }),
-            HD('hd_r_boarding',     'Ferry boarding for departure',           '出発乗船',                   'port',    'pm',         ['p02'], 660, 60,  { deps: ['hd_r_ferrymarshal'], safetyGate: 1 }),
+            HD('hd_r_hold',         'Hold loading for the sail home',         '帰路の船倉積込',             'port',    'siteLead',   ['p03'], 600, 60,  { deps: ['hd_r_ship'], carries: ['mi_rods', 'mi_jigcase', 'mi_coolers', 'mi_medkit', 'mi_cashbox'] }),
+            HD('hd_r_boarding',     'Ferry boarding for departure',           '出発乗船',                   'port',    'pm',         ['p02'], 660, 60,  { deps: ['hd_r_ferrymarshal'] }),
+            HD('hd_r_sail',         'Sail home',                              '帰航',                       'vessel',  'siteLead',   ['p03'], 720, 300, { deps: ['hd_r_boarding'], diff: 3 }),
             HD('hd_r_finalreport',  'Final report & sign-off',                '最終報告・締め',             'command', 'comms',      ['p07'], 720, 60,  { deps: ['hd_r_boarding'] }),
+            HD('hd_r_tokyocount',   'Tokyo arrival headcount',                '東京帰着点呼',               'port',    'comms',      ['p07'], 1080, 60, { deps: ['hd_r_sail'] }),
             // --- decoys (3) ---
             HD('hd_r_dec_sidetrip',     'Last-day sightseeing detour',   '最終日の観光立ち寄り', 'port',    'siteLead',   [], 300, 60, { required: false }),
             HD('hd_r_dec_extraservice', 'Extra souvenir shopping run',   'お土産追加購入',       'finance', 'budgetLead', [], 600, 60, { required: false }),
@@ -625,7 +825,7 @@
       if (od.placement) for (var pid in od.placement) {
         var dt = byId(dd.tasks, pid); if (!dt) continue; var pv = od.placement[pid];
         if (pv === null) { dt.assignedIds = []; }                                                 // back to the deck (unplaced)
-        else { if (typeof pv.startMin === 'number') dt.startMin = pv.startMin; if (typeof pv.durMin === 'number') dt.durMin = pv.durMin; if (pv.assignedIds) dt.assignedIds = pv.assignedIds.slice(); }
+        else { if (typeof pv.startMin === 'number') dt.startMin = pv.startMin; if (typeof pv.durMin === 'number') dt.durMin = pv.durMin; if (pv.assignedIds) dt.assignedIds = pv.assignedIds.slice(); if (pv.carries) dt.carries = pv.carries.slice(); } // carries: Voyage custody edits (jig case -> truck run)
       }
       if (od.handoffs) for (var dh in od.handoffs) {
         var eh = byId(dd.handoffs, dh);
@@ -665,6 +865,36 @@
         var dseg = plan.days[sseg]; if (!dseg || !dseg.tasks) continue;
         var placedIds = (o.days && o.days[sseg] && o.days[sseg].placement) || {};
         remapAssignees(dseg.tasks.filter(function (t) { return !(placedIds[t.id] && placedIds[t.id].assignedIds); }), seatRemap);
+      }
+    }
+    // ---- Voyage §3: VIP buddies. plan.buddies {guestId: pid} (template seeds 2 of the 4 VIPs);
+    // overrides.buddies assigns (pid) or clears (null) per guest. Assigning a buddy AUTO-INSTANTIATES
+    // that VIP's three voyage care tasks onto the buddy: assignedIds = [pid] and ownerRoleId re-homed
+    // to the buddy's CURRENT role, so ANY organizer may hold the duty without a misassignment.
+    // Runs LAST (after the seats pass) so participant.roleId is final — buddies are person-ids, not
+    // seats, so they never remap. Guards: only the 8 organizer pids are accepted; one organizer may
+    // buddy at most 2 VIPs (excess assignments are dropped deterministically in guest order);
+    // an unbuddied VIP's tasks stay unstaffed — the existing machinery prices that.
+    if (o.buddies && plan.buddies && plan.guests) for (k in o.buddies) {
+      var bg = byId(plan.guests, k);
+      if (!bg || !bg.vip) continue;
+      if (o.buddies[k] === null) delete plan.buddies[k];
+      else plan.buddies[k] = o.buddies[k];
+    }
+    if (plan.buddies && plan.guests && plan.days && plan.days.voyage) {
+      var vTasks = plan.days.voyage.tasks, roleOfPid = {}, buddyLoad = {}, bi, bj;
+      for (bi = 0; bi < plan.participants.length; bi++) roleOfPid[plan.participants[bi].id] = plan.participants[bi].roleId;
+      for (bi = 0; bi < plan.guests.length; bi++) {
+        var bGuest = plan.guests[bi]; if (!bGuest.vip) continue;
+        var bPid = plan.buddies[bGuest.id];
+        if (!bPid || !SEAT_DEFAULT_PIDS[bPid]) continue;              // organizers (p01–p08) only
+        buddyLoad[bPid] = (buddyLoad[bPid] || 0) + 1;
+        if (buddyLoad[bPid] > 2) continue;                            // at most 2 VIPs per organizer
+        var bPre = ['t_v_star_', 't_v_esc_l_', 't_v_esc_d_'];
+        for (bj = 0; bj < bPre.length; bj++) {
+          var bTask = byId(vTasks, bPre[bj] + bGuest.id);
+          if (bTask) { bTask.assignedIds = [bPid]; bTask.ownerRoleId = roleOfPid[bPid] || bTask.ownerRoleId; }
+        }
       }
     }
     return plan;
@@ -843,6 +1073,19 @@
     for (i = 0; i < allSeg.length; i++) if (isPlaced(allSeg[i])) fds.push(allSeg[i]);
     var fdById = {}; for (i = 0; i < fds.length; i++) fdById[fds[i].id] = fds[i];
     var segHandoffs = handoffsForSeg(plan, seg);
+    // Voyage §2 — manifest carryover consult. Pure and INTERNAL (no signature change): a task
+    // needing a resource whose backing item missed the ship stalls here, in the same visible
+    // language as a missing information arrow (wait to startMin + IDLE_CAP). Three guards keep the
+    // canonical all-aboard path byte-identical to the pre-Voyage engine: no manifest / the origin
+    // 'load' segment / no placed task needing a manifest-bound resource => carry is never computed;
+    // and an 'aboard' (or 'late'-but-aboard) item adds nothing to the cascade.
+    var carryByRes = null, carrySt = null;
+    if (seg !== 'load' && plan.manifest && plan.manifest.length) {
+      var resMap = {}, needCarry = false, mri, mrj;
+      for (mri = 0; mri < plan.manifest.length; mri++) { var mIt = plan.manifest[mri]; (resMap[mIt.resourceId] = resMap[mIt.resourceId] || []).push(mIt.id); }
+      for (mri = 0; mri < fds.length && !needCarry; mri++) { var mNr = fds[mri].neededResources || []; for (mrj = 0; mrj < mNr.length; mrj++) if (resMap[mNr[mrj]]) { needCarry = true; break; } }
+      if (needCarry) { carryByRes = resMap; carrySt = carryState(plan); }   // carryState -> daySchedule(plan,'load') only; 'load' never consults carry, so recursion terminates
+    }
     var owner = {}; for (i = 0; i < plan.infoCards.length; i++) owner[plan.infoCards[i].id] = plan.infoCards[i].ownerRoleId;
     var partRole = {}; for (i = 0; i < plan.participants.length; i++) partRole[plan.participants[i].id] = plan.participants[i].roleId;
     // seg-scoped arrow lookup + send/arrival (producer resolved within the seg, then plan.tasks)
@@ -910,6 +1153,20 @@
             if (best != null) { if (!arrivals[t.ownerRoleId]) arrivals[t.ownerRoleId] = {}; var cur = arrivals[t.ownerRoleId][cid]; if (cur == null || best < cur) arrivals[t.ownerRoleId][cid] = best; }
           }
           if (!ready) continue;
+          // Voyage §2: physical availability — a needed resource whose backing manifest item is
+          // 'missing' for this segment stalls the task like an undrawn arrow (手待ち, capped).
+          // Billed to Efficiency and the visible run only; scoreTrip never reads these waits.
+          if (carrySt) for (j = 0; j < (t.neededResources || []).length; j++) {
+            var crIds = carryByRes[t.neededResources[j]];
+            if (!crIds) continue;
+            for (k = 0; k < crIds.length; k++) {
+              if ((carrySt[crIds[k]] || {})[seg] === 'missing') {
+                var capR = t.startMin + IDLE_CAP;
+                waits.push({ resourceId: t.neededResources[j], itemId: crIds[k], missing: true, until: capR });
+                if (capR > start) start = capR;
+              }
+            }
+          }
           var ext = (extendWF && t.wrongFishPenaltyMin) ? t.wrongFishPenaltyMin : 0;
           if (wf) wrongFish.push(t.id);
           eff[t.id] = { start: start, end: start + t.durMin + ext, idleMin: start - t.startMin, waits: waits, extension: ext, wrongFish: wf };
@@ -936,7 +1193,9 @@
       var at = allSeg[i], placed = isPlaced(at);
       if (at.required !== false && !placed) unplacedRequired.push(at.id);
       if (at.required === false && placed) decoysPlaced.push(at.id);
-      if (placed) for (j = 0; j < at.assignedIds.length; j++) { var prid = partRole[at.assignedIds[j]]; if (prid && prid !== at.ownerRoleId) { misassigned.push(at.id); break; } }
+      // careGuestId tasks are exempt from misassignment — ANY organizer may buddy a VIP (Voyage §3;
+      // the buddies merge re-homes ownerRoleId anyway, this guards direct deck placements too)
+      if (placed && !at.careGuestId) for (j = 0; j < at.assignedIds.length; j++) { var prid = partRole[at.assignedIds[j]]; if (prid && prid !== at.ownerRoleId) { misassigned.push(at.id); break; } }
     }
     var perP = {}, overbookMin = 0;
     for (i = 0; i < fds.length; i++) { var pt = fds[i]; for (j = 0; j < pt.assignedIds.length; j++) { var pk = pt.assignedIds[j]; (perP[pk] = perP[pk] || []).push({ s: pt.startMin, e: pt.startMin + pt.durMin }); } }
@@ -948,6 +1207,64 @@
       guestWaitMin: guestWaitMin, dinnerMin: serve ? serve.start : null,
       unplacedRequired: unplacedRequired, decoysPlaced: decoysPlaced, misassigned: misassigned, overbookMin: overbookMin };
   }
+  // ===========================================================================
+  // Voyage §2 — MANIFEST CARRYOVER (pure, RNG-free, exported). carryState(plan) folds
+  // the ordered segments' load-day outcomes into per-item availability per segment:
+  //   {itemId: {load|voyage|arrival|ops|fishday|return: 'aboard'|'late'|'missing'}}
+  //   · 'missing' — a custody leg never carried the item / a leg is unplaced / the
+  //     chain finishes after the fixed 11:00 sailing (SAIL_MIN). Downstream consumers
+  //     of its resource stall (daySchedule consults this internally).
+  //   · 'late'    — the chain made the ship but ran behind its planned times (its idle
+  //     is already billed on the load day); downstream it behaves as available.
+  //   · 'aboard'  — the canonical case; carry adds nothing anywhere (pinned inert).
+  // The homebound Pack & Sail custody mirrors the chain as task data (carries on
+  // hd_r_teardown/hd_r_hold) and is priced by its own atoms; it has no downstream
+  // consumer segment, so carryState does not fold it.
+  // ===========================================================================
+  function manifestChainGaps(plan) {
+    // item ids whose OUTBOUND custody chain is broken: some custody leg is unplaced,
+    // or doesn't carry the item (e.g. the seed's jig case missing from the truck run).
+    var items = plan.manifest || [], gaps = [], custody = [], i, j;
+    var loadTasks = tasksForSeg(plan, 'load');
+    for (i = 0; i < loadTasks.length; i++) if (loadTasks[i].custody) custody.push(loadTasks[i]);
+    for (i = 0; i < items.length; i++) {
+      var bad = custody.length === 0;
+      for (j = 0; j < custody.length && !bad; j++) {
+        var ct = custody[j];
+        if (!isPlaced(ct) || (ct.carries || []).indexOf(items[i].id) < 0) bad = true;
+      }
+      if (bad) gaps.push(items[i].id);
+    }
+    return gaps;
+  }
+  function carryState(plan) {
+    var out = {}, items = plan.manifest || [], i, j;
+    if (!items.length) return out;
+    var chainGap = {}; manifestChainGaps(plan).forEach(function (id) { chainGap[id] = 1; });
+    var ds = daySchedule(plan, 'load');   // 'load' never consults carry -> no recursion
+    var custody = tasksForSeg(plan, 'load').filter(function (t) { return t.custody && isPlaced(t); });
+    var DOWN = ['voyage', 'arrival', 'ops', 'fishday', 'return'];
+    for (i = 0; i < items.length; i++) {
+      var it = items[i], st = null;
+      if (chainGap[it.id]) st = 'missing';
+      else {
+        var end = 0, delayed = false;
+        for (j = 0; j < custody.length; j++) {
+          if ((custody[j].carries || []).indexOf(it.id) < 0) continue;
+          var e = ds.byTask[custody[j].id];
+          if (!e) { st = 'missing'; break; }
+          if (e.end > end) end = e.end;
+          if (e.idleMin > 0 || e.unresolved) delayed = true;
+        }
+        if (!st) st = end > SAIL_MIN ? 'missing' : (delayed ? 'late' : 'aboard');
+      }
+      var rec = { load: 'aboard' };       // during Load & Board the items are at origin, in hand
+      for (j = 0; j < DOWN.length; j++) rec[DOWN[j]] = st;
+      out[it.id] = rec;
+    }
+    return out;
+  }
+
   function idleMinutes(plan) { var fd = fishdaySchedule(plan); return { total: fd.idleTotal, byTask: fd.byTask }; }
   function wrongFishTasks(plan) { return fishdaySchedule(plan).wrongFish; }
   function reworkMinutes(plan) { return fishdaySchedule(plan).reworkTotal; }
@@ -1007,7 +1324,10 @@
   // info (手待ち); green = working or done; none = nothing in scope yet.
   function stationReadiness(sim) {
     var out = {}, rank = { none: 0, green: 1, amber: 2, red: 3 }, i;
-    for (i = 0; i < STATIONS.length; i++) out[STATIONS[i].id] = 'none';
+    // read the sim's OWN station set (the voyage sim plays on the ship map); a land sim's set
+    // mirrors STATIONS, so existing output is byte-identical
+    var base = (sim && sim.stations && sim.stations.length) ? sim.stations : STATIONS;
+    for (i = 0; i < base.length; i++) out[base[i].id] = 'none';
     if (!sim || !sim.tasks) return out;
     for (i = 0; i < sim.tasks.length; i++) {
       var t = sim.tasks[i]; if (t.scope !== 'in') continue;
@@ -1094,6 +1414,8 @@
       for (i = 0; i < fd.unplacedRequired.length; i++) out.push({ type: 'UNPLACED_REQUIRED', taskId: fd.unplacedRequired[i] });
       for (i = 0; i < fd.decoysPlaced.length; i++) out.push({ type: 'DECOY_PLACED', taskId: fd.decoysPlaced[i] });
       for (i = 0; i < fd.misassigned.length; i++) out.push({ type: 'MISASSIGNED', taskId: fd.misassigned[i] });
+      // Voyage §2: a broken custody chain is a LOAD-day authoring gap (the item will miss the ship)
+      if (seg === 'load') { var cgap = manifestChainGaps(plan); for (i = 0; i < cgap.length; i++) out.push({ type: 'CARRY_GAP', itemId: cgap[i] }); }
     }
     for (i = 0; i < fd.missing.length; i++) {
       var m = fd.missing[i], mt = segById[m.taskId];
@@ -1122,9 +1444,20 @@
   // its canonPlacement) so the day's required roster is back on the board. applyDayFix writes both.
   function canonDay(seg) {
     var tpl = makeTemplate(), dd = tpl.days && tpl.days[seg]; if (!dd) return {};
-    var hoff = {}; for (var i = 0; i < dd.handoffs.length; i++) hoff[dd.handoffs[i].id] = { channel: 'faceToFace' };
+    var hoff = {}, i;
+    // Voyage days keep their full canonical arrow set on the day (canonHandoffs), so the fix can
+    // DRAW arrows the seed withheld (h_l_cabins), not just re-time existing ones. Legacy days keep
+    // the §20 channel-patch behavior (their seeds never withhold arrows).
+    if (dd.canonHandoffs) for (i = 0; i < dd.canonHandoffs.length; i++) hoff[dd.canonHandoffs[i].id] = clone(dd.canonHandoffs[i]);
+    else for (i = 0; i < dd.handoffs.length; i++) hoff[dd.handoffs[i].id] = { channel: 'faceToFace' };
     var o = { days: {} }; o.days[seg] = { handoffs: hoff };
     if (dd.canonPlacement) o.days[seg].placement = clone(dd.canonPlacement);
+    // Voyage §3: authoring the ship day canonically = the 4 VIP buddies (one distinct organizer
+    // each, staggered purser windows already in the template) + the company-card authority.
+    if (seg === 'voyage') {
+      o.buddies = { gd_nagatani: 'p02', gd_kadou: 'p07', gd_watanabe: 'p01', gd_yamate: 'p04' };
+      o.budget = { lines: { bl_card: { approverRoleId: 'budgetLead', payMethod: 'card' } } };
+    }
     return o;
   }
   function applyDayFix(cfg, seg) {
@@ -1134,7 +1467,13 @@
     var cur = cfg.overrides.days[seg] || {}; cur.handoffs = cur.handoffs || {}; cur.placement = cur.placement || {};
     for (var id in fix.days[seg].handoffs) cur.handoffs[id] = fix.days[seg].handoffs[id];
     if (fix.days[seg].placement) for (var pid in fix.days[seg].placement) cur.placement[pid] = fix.days[seg].placement[pid];
-    cfg.overrides.days[seg] = cur; return cfg;
+    cfg.overrides.days[seg] = cur;
+    if (fix.buddies) { cfg.overrides.buddies = cfg.overrides.buddies || {}; for (var bgid in fix.buddies) cfg.overrides.buddies[bgid] = fix.buddies[bgid]; }
+    if (fix.budget && fix.budget.lines) {
+      cfg.overrides.budget = cfg.overrides.budget || {}; cfg.overrides.budget.lines = cfg.overrides.budget.lines || {};
+      for (var blid in fix.budget.lines) cfg.overrides.budget.lines[blid] = fix.budget.lines[blid];
+    }
+    return cfg;
   }
   // scoreDay(plan, seg) — rule-based day score (§20.4). Perfect = every required task placed on the
   // right role, deps ordered, cards delivered on time, nobody double-booked, no decoys; folds the
@@ -1212,9 +1551,13 @@
           progress: scope === 'pre' ? 1 : 0, state: scope === 'pre' ? 'done' : 'pending', stalled: false, problem: probByTask[t.id] || null, blocked: !!blocked[t.id] };
       });
     }
+    // Voyage §3: the ship day plays on its own station set (stations are data — the stage already
+    // renders at-sea crews aboard hulls); everyone idles in the cabins instead of the lodging.
+    var stationSet = (segment === 'voyage') ? VOYAGE_STATIONS : STATIONS;
+    var idleStation = (segment === 'voyage') ? 'cabins' : 'lodging';
     var participants = plan.participants.map(function (p) {
       return { id: p.id, name: p.name, roleId: p.roleId, company: p.company, constraints: p.constraints,
-        station: 'lodging', x: station('lodging').x, y: station('lodging').y, state: 'idle', fatigue: 0, taskId: null };
+        station: idleStation, x: station(idleStation).x, y: station(idleStation).y, state: 'idle', fatigue: 0, taskId: null };
     });
 
     // clock window of the chosen day (or the whole trip)
@@ -1229,9 +1572,9 @@
       cfg: { seed: (cfg.seed >>> 0) || 1, overrides: clone(cfg.overrides || {}) },
       plan: plan, rng: mulberry32((cfg.seed >>> 0) || 1),
       segment: segment || 'all', segTaskIds: inTasks.map(function (t) { return t.id; }), segEnd: segEnd,
-      day: d0, clock: d0, tick: 0, finished: null, phaseLabel: null,
+      day: d0, clock: d0, tick: 0, finished: null, phaseLabel: null, idleStation: idleStation,
       tasks: tasks, participants: participants, problems: problems,
-      stations: STATIONS.map(function (s) { return { id: s.id, name: s.name, icon: s.icon, x: s.x, y: s.y, crewIds: [], dominantProblem: null }; }),
+      stations: stationSet.map(function (s) { return { id: s.id, name: s.name, icon: s.icon, x: s.x, y: s.y, crewIds: [], dominantProblem: null }; }),
       budget: { total: plan.budget.total, spent: 0, reserve: plan.budget.reserve },
       events: [], bannerOn: false, bannerEverFired: false
     };
@@ -1284,12 +1627,12 @@
       if (!cur) {
         var anyDone = false, anyFuture = false;
         for (var m = 0; m < sim.tasks.length; m++) { var tm = sim.tasks[m]; if (tm.scope === 'in' && tm.assignedIds.indexOf(p.id) >= 0) { if (tm.state === 'done') anyDone = true; if (tm.state === 'pending') anyFuture = true; } }
-        p.taskId = null; p.station = 'lodging'; p.state = (anyDone && !anyFuture) ? 'resolved' : 'idle';
+        p.taskId = null; p.station = sim.idleStation || 'lodging'; p.state = (anyDone && !anyFuture) ? 'resolved' : 'idle';
       } else {
         p.taskId = cur.id; p.station = cur.station;
         p.state = cur.problem ? cur.problem.state : (cur.state === 'waitinfo' ? 'waitInfo' : cur.state);
       }
-      var st = station(p.station); p.x = st.x; p.y = st.y; bucket[p.station].push(p.id);
+      var st = station(p.station); p.x = st.x; p.y = st.y; (bucket[p.station] || (bucket[p.station] = [])).push(p.id);
     }
     for (i = 0; i < sim.stations.length; i++) {
       var s = sim.stations[i]; s.crewIds = bucket[s.id]; s.dominantProblem = null;
@@ -1395,14 +1738,14 @@
       for (var k = 0; k < sim.tasks.length; k++) { t = sim.tasks[k]; if (t.assignedIds.indexOf(p.id) >= 0 && (t.state === 'working' || t.state === 'stalled')) { cur = t; break; } }
       if (!cur) { // none active now: any finished work? → done, else idle at lodging
         var anyDone = false; for (var m = 0; m < sim.tasks.length; m++) { if (sim.tasks[m].assignedIds.indexOf(p.id) >= 0 && sim.tasks[m].state === 'done') anyDone = true; }
-        p.taskId = null; p.station = 'lodging'; p.state = anyDone ? 'resolved' : 'idle';
+        p.taskId = null; p.station = sim.idleStation || 'lodging'; p.state = anyDone ? 'resolved' : 'idle';
       } else {
         p.taskId = cur.id; p.station = cur.station;
         if (cur.stalled) { p.state = cur.problem.state; if (cur.problem.id === 'fatigue') { p.fatigue = Math.min(100, p.fatigue + FATIGUE_RATE); if (p.fatigue > 45) p.state = 'tired'; } }
         else { p.state = (cur.state === 'done') ? 'resolved' : 'working'; }
       }
       var st = station(p.station); p.x = st.x; p.y = st.y;
-      bucket[p.station].push(p.id);
+      (bucket[p.station] || (bucket[p.station] = [])).push(p.id);
     }
     // station crew + dominant problem
     for (i = 0; i < sim.stations.length; i++) {
@@ -1548,8 +1891,10 @@
   // deriver (deriveSegAtoms) that MINTS atoms mechanically from the template's required tasks,
   // their neededInfo sockets, and the §3.4 pricing flags now carried as task fields
   // (safetyGate/qualityCheck/moneyCheck). The frame's 7 detector-derived gates stay hand-listed
-  // (they have no owning task). Exactly 89 atoms (80 scoring + 9 decoy debits) summing to 100;
-  // frozen matrix asserted by verify.js on both axes.
+  // (they have no owning task). Voyage repack (spec 2026-07-13 §4): the matrix now spans 7 buckets
+  // (frame 12 · load 11 · voyage 12 · arrival 12 · ops 13 · fishday 30 · return 10 = 100, fishday
+  // heaviest, Information the heaviest dimension) — 94 atoms (85 scoring + 9 decoy debits); the
+  // exact frozen values are re-pinned by the W1b verify wave.
   //
   // Homing rules (§3.3): socket→Info; a safetyGate-flagged task LEAVES its exec lane and becomes
   // a Safety atom (replace); a qualityCheck/moneyCheck task STAYS in its lane and ALSO mints an
@@ -1610,6 +1955,9 @@
   }
   function tripSocketAtom(id, bucket, plan, ds, taskIds, roleId, cardId, riskable, livePlaced) {
     var st = tripSocketStatus(ds, taskIds, cardId, livePlaced);
+    // Voyage §4.1 (senior-dev gate ruling): the riskable tier STAYS 3 — the 1 "specified" +
+    // 2 "on time" split is the thesis's own pricing (rubric-v1 §3.4, frozen). Drawn-but-late
+    // riskable earns 1 of 3.
     var maxPts = riskable ? 3 : 1, earned, status, reasonKey;
     if (st === 'missing') { earned = 0; status = 'missing'; reasonKey = 'scr_info_missing'; }
     else if (st === 'late') {
@@ -1677,7 +2025,7 @@
       status: placed ? 'decoy' : 'ok', reasonKey: placed ? 'scr_decoy' : 'scr_exec_ok', reasonParams: {} };
   }
 
-  // ---- Trip Frame (14 = Safety 8, Money 5, People 1) — standing, timeless authorities ----
+  // ---- Trip Frame (Voyage repack: 12 = Safety 8, Money 3, People 1) — standing authorities ----
   function tripFrameAtoms(plan) {
     var out = [];
     var sl = plan.roles.safetyLead, sea = byId(plan.risks, 'rk_sea'), night = byId(plan.risks, 'rk_night');
@@ -1685,16 +2033,17 @@
     out.push(tripGateAtom('frame_abort_sea', 'frame', 'safety', 2, seaOk, { type: 'gate', detectorId: 'safety' }, 'scr_safety_ok', 'scr_safety_gap'));
     // MAKE-REAL (§13.1): rk_night.abortCriterion present, mirroring rk_sea's shape exactly
     var nightOk = !!(sl.holder && sl.deputyId && sl.authority && sl.authority.canAbort && night && night.ownerRoleId && night.abortCriterion);
-    out.push(tripGateAtom('frame_abort_night', 'frame', 'safety', 2, nightOk, { type: 'gate', detectorId: 'safety' }, 'scr_safety_ok', 'scr_safety_gap'));
+    out.push(tripGateAtom('frame_abort_night', 'frame', 'safety', 1, nightOk, { type: 'gate', detectorId: 'safety' }, 'scr_safety_ok', 'scr_safety_gap'));   // Voyage §4.1: 2->1 (sea abort keeps 2)
     var health = byId(plan.commRules, 'cr_health');
     out.push(tripGateAtom('frame_health_report', 'frame', 'safety', 2, !!(health && health.reportToRoleId), { type: 'gate', detectorId: 'report' }, 'scr_safety_ok', 'scr_safety_gap'));
     // MAKE-REAL (§13.1): ic_hospital.recipientRoleIds ⊇ {pm,siteLead,comms,safetyLead}
     var hosp = byId(plan.infoCards, 'ic_hospital'), hospNeed = ['pm', 'siteLead', 'comms', 'safetyLead'];
     var hospOk = !!hosp && hospNeed.every(function (r) { return hosp.recipientRoleIds.indexOf(r) >= 0; });
     out.push(tripGateAtom('frame_hospital_shared', 'frame', 'safety', 2, hospOk, { type: 'gate', cardId: 'ic_hospital' }, 'scr_safety_ok', 'scr_safety_gap'));
+    // Voyage repack: budget authority 3 -> 2, reserve 2 -> 1 (frame 14 -> 12).
     var meals = byId(plan.budget.lines, 'bl_meals');
-    out.push(tripGateAtom('frame_budget_authority', 'frame', 'money', 3, !!(meals && meals.approverRoleId && meals.payMethod), { type: 'gate', detectorId: 'budgetAuth' }, 'scr_money_ok', 'scr_money_gap'));
-    out.push(tripGateAtom('frame_reserve_drawrule', 'frame', 'money', 2, plan.budget.reserve >= (plan.budget.reserveTarget || 300000), { type: 'gate', detectorId: 'reserve' }, 'scr_money_ok', 'scr_money_gap'));
+    out.push(tripGateAtom('frame_budget_authority', 'frame', 'money', 2, !!(meals && meals.approverRoleId && meals.payMethod), { type: 'gate', detectorId: 'budgetAuth' }, 'scr_money_ok', 'scr_money_gap'));
+    out.push(tripGateAtom('frame_reserve_drawrule', 'frame', 'money', 1, plan.budget.reserve >= (plan.budget.reserveTarget || 300000), { type: 'gate', detectorId: 'reserve' }, 'scr_money_ok', 'scr_money_gap'));
     var siteLeadRole = plan.roles.siteLead;
     var reliefOk = !!siteLeadRole.deputyId || loadOf(plan, siteLeadRole.holder) < LOAD_CAP;
     out.push(tripGateAtom('frame_load_relief', 'frame', 'people', 1, reliefOk, { type: 'gate', detectorId: 'fatigue' }, 'scr_people_ok', 'scr_people_overload'));
@@ -1719,6 +2068,18 @@
     var ok = placedRight;
     if (task.id === 't_f_weather') { var sea = byId(plan.risks, 'rk_sea'); ok = placedRight && !!(sea && sea.abortCriterion); }
     else if (task.id === 't_f_seawatch') { ok = placedRight && live.startMin <= 420; }
+    // Voyage load-day gates (spec §4 flag table):
+    else if (task.id === 'hd_l_hold') {
+      // the HOLD MANIFEST CHECK — you count the crates in the hold and find what never made the
+      // truck. Earns only when every item's outbound custody chain is complete.
+      ok = placedRight && manifestChainGaps(plan).length === 0;
+    } else if (task.id === 'hd_l_headcount') {
+      // the SAILING-TIME BOARDING GATE — the 11:00 sailing is fixed; boarding must FINISH by it
+      // on the solved schedule (idle from an unshared cabin list blows straight through this).
+      var eB = ds.byTask[task.id];
+      ok = placedRight && !!eB && !eB.unresolved && eB.end <= SAIL_MIN;
+      if (placedRight && eB && eB.end > SAIL_MIN) fail = 'late';
+    }
     return tripGateAtom(bucket + '_safety_' + task.id, bucket, 'safety', task.safetyGate, ok,
       { type: 'gate', taskId: task.id }, 'scr_safety_ok', 'scr_safety_gap', fail);
   }
@@ -1726,15 +2087,14 @@
   // on top of the task's execution. Task-homed id + itemRef.taskId so the ledger name resolves
   // from the task (§10 delta #4). Each check ports its as-built earn criterion verbatim.
   function tripMoneyCheckAtom(bucket, plan, seg, task, tmplDur, ds, rd) {
-    var ok = false, l, fail = 'missing';
-    if (task.id === 'hd_a_board') { l = byId(plan.budget.lines, 'bl_transport'); ok = !!(l && l.approverRoleId && l.payMethod); }
-    else if (task.id === 'hd_o_foodsource') { l = byId(plan.budget.lines, 'bl_onsite'); ok = !!(l && l.approverRoleId && l.payMethod); }
-    else if (task.id === 'hd_o_tackleprep') { l = byId(plan.budget.lines, 'bl_tackle'); ok = !!(l && l.approverRoleId && l.payMethod); }
-    else if (task.id === 'hd_r_sitecash') {
-      var all = tasksForSeg(plan, seg), sc = byId(all, 'hd_r_sitecash');
-      var broken = rd.some(function (r) { return (r.type === 'DEP_BROKEN' || r.type === 'MISASSIGNED') && r.taskId === 'hd_r_sitecash'; });
-      ok = !!(sc && isPlaced(sc) && !broken);
-      if (sc && isPlaced(sc) && broken) fail = 'broken'; // §7.4: dep/role breakage is 'broken', not 'missing'
+    // Voyage repack pruned the retired money flags' branches (hd_a_board / hd_o_foodsource /
+    // hd_o_tackleprep / hd_r_sitecash — see the template migration notes); the settle check stays
+    // and the load day adds the cash-box packing check.
+    var ok = false, fail = 'missing';
+    if (task.id === 'hd_l_pack') {
+      // the CASH BOX travels: earned iff the pack-out is placed and actually carries mi_cashbox
+      var pk = byId(tasksForSeg(plan, seg), 'hd_l_pack');
+      ok = !!(pk && isPlaced(pk) && (pk.carries || []).indexOf('mi_cashbox') >= 0);
     } else if (task.id === 'hd_r_settle') {
       var all2 = tasksForSeg(plan, seg), st = byId(all2, 'hd_r_settle');
       ok = !!(st && isPlaced(st) && st.durMin >= tmplDur.hd_r_settle);
@@ -1756,19 +2116,16 @@
     var dinnerOk = ds.dinnerMin != null && ds.dinnerMin <= 1080;
     var cookOk = cookFloorOk && dinnerOk;
     var cookStatus = !cookPlaced ? 'missing' : (!cookFloorOk ? 'compressed' : (!dinnerOk ? 'late' : 'ok'));
+    // Voyage repack: cookblock 2 -> 1 and the portions gate retired (it was a defensive atom that
+    // could not fail on a well-formed plan — rubric §13.4 note); allergy (a §13 showcase) stays.
     out.push({ id: 'fishday_quality_cookblock', bucket: 'fishday', dimension: 'quality', itemRef: { type: 'lane', taskId: 't_f_cook' },
-      maxPts: 2, earned: cookOk ? 2 : 0, status: cookStatus, reasonKey: cookOk ? 'scr_qual_ok' : 'scr_qual_fail', reasonParams: {} });
+      maxPts: 1, earned: cookOk ? 1 : 0, status: cookStatus, reasonKey: cookOk ? 'scr_qual_ok' : 'scr_qual_fail', reasonParams: {} });
     // allergy — committed menu species -> allergen CATEGORY (SPECIES_CATEGORIES) must not intersect
     // ic_food.allergens (category tokens); 'skipjack'(fish) never hits a 'shellfish' allergen.
     var menuCard = byId(plan.infoCards, 'ic_menu'), foodCard = byId(plan.infoCards, 'ic_food');
     var menuCats = (menuCard && SPECIES_CATEGORIES[menuCard.species]) || [];
     var allergyOk = !!(menuCard && menuCard.species) && !(foodCard && foodCard.allergens && foodCard.allergens.some(function (a) { return menuCats.indexOf(a) >= 0; }));
     out.push(tripGateAtom('fishday_quality_allergy', 'fishday', 'quality', 1, allergyOk, { type: 'gate', cardId: 'ic_menu' }, 'scr_qual_ok', 'scr_qual_fail'));
-    // portions — committed ic_menu.portions must equal GUESTS + ic_orgfood.addOns.
-    var orgfoodCard = byId(plan.infoCards, 'ic_orgfood');
-    var expectedPortions = GUESTS + (orgfoodCard && typeof orgfoodCard.addOns === 'number' ? orgfoodCard.addOns : 0);
-    var portionsOk = !!(menuCard && menuCard.portions === expectedPortions);
-    out.push(tripGateAtom('fishday_quality_portions', 'fishday', 'quality', 1, portionsOk, { type: 'gate', cardId: 'ic_menu' }, 'scr_qual_ok', 'scr_qual_fail'));
     return out;
   }
 
@@ -1799,7 +2156,9 @@
     for (i = 0; i < reqTasks.length; i++) {
       var t = reqTasks[i];
       if (t.safetyGate) { out.push(tripSafetyGateAtom(bucket, plan, seg, t, tmplDur, ds)); }
-      else {
+      // Voyage §3.3 amendments: flex standbys and per-VIP care tasks are exempt from exec-lane
+      // pricing (care tasks are priced by the per-VIP care atoms below; flex is deliberately free)
+      else if (!t.flex && !t.careGuestId) {
         if (!laneTasks[t.ownerRoleId]) { laneTasks[t.ownerRoleId] = []; laneOrder.push(t.ownerRoleId); }
         laneTasks[t.ownerRoleId].push(t.id);
       }
@@ -1813,8 +2172,41 @@
       out.push(tripLaneAtom(bucket + '_exec_' + rid, bucket, plan, seg, rid, laneTasks[rid], tmplDur, ds, rd));
     }
 
-    // 5. fishday computed quality gates (cookblock/allergy/portions) — no owning single task.
+    // 5. fishday computed quality gates (cookblock/allergy) — no owning single task.
     if (seg === 'fishday') out = out.concat(tripFishdayQualityGates(plan, tmplDur, ds));
+
+    // 5b. voyage computed atoms (Voyage §3/§4): one 1-pt CARE atom per VIP guest — earned iff all
+    // three of the VIP's care tasks (starlink + both meal escorts) are staffed at template floor
+    // (the worst task decides, like a collapsed socket). A DOUBLE-BOOKED buddy is deliberately NOT
+    // billed here — spec §3 maps it to "overload/idle", i.e. the generic per-person overlap
+    // machinery (overbookMin / OVERLOAD readiness / efficiency), never a second Score row. The id
+    // is task-homed on the VIP's starlink task (the constitution's convention for derivable ids);
+    // itemRef carries the guest + all three task ids for the ledger.
+    if (seg === 'voyage') {
+      var careBy = {}, careOrder = [], liveById = {};
+      for (i = 0; i < liveTasks.length; i++) liveById[liveTasks[i].id] = liveTasks[i];
+      for (i = 0; i < reqTasks.length; i++) {
+        var cT = reqTasks[i];
+        if (!cT.careGuestId) continue;
+        if (!careBy[cT.careGuestId]) { careBy[cT.careGuestId] = []; careOrder.push(cT.careGuestId); }
+        careBy[cT.careGuestId].push(cT.id);
+      }
+      for (i = 0; i < careOrder.length; i++) {
+        var gid = careOrder[i], cTids = careBy[gid], cOk = true, cSt = 'ok', cj;
+        for (cj = 0; cj < cTids.length && cOk; cj++) {
+          var cLive = liveById[cTids[cj]], cFloor = tmplDur[cTids[cj]];
+          if (!cLive || !isPlaced(cLive)) { cOk = false; cSt = 'missing'; }
+          else if (typeof cFloor === 'number' && cLive.durMin < cFloor) { cOk = false; cSt = 'compressed'; }
+        }
+        out.push({ id: 'voyage_quality_t_v_star_' + gid, bucket: 'voyage', dimension: 'quality',
+          itemRef: { type: 'gate', guestId: gid, taskId: cTids }, maxPts: 1, earned: cOk ? 1 : 0,
+          status: cSt, reasonKey: cOk ? 'scr_qual_ok' : 'scr_qual_fail', reasonParams: {} });
+      }
+      var cardLine = byId(plan.budget.lines, 'bl_card');
+      out.push(tripGateAtom('voyage_money_bl_card', 'voyage', 'money', 1,   // Voyage §4.1: 2->1
+        !!(cardLine && cardLine.approverRoleId && cardLine.payMethod),
+        { type: 'gate', lineId: 'bl_card' }, 'scr_money_ok', 'scr_money_gap'));
+    }
 
     // 6. decoy debits — from the template deck (fishday has none).
     var decoyIds = (tmpl.days && tmpl.days[seg]) ? (tmpl.days[seg].decoys || []) : [];
@@ -1829,6 +2221,8 @@
     var tmpl = makeTemplate(), tmplDur = tripTemplateDurMap();
     return [].concat(
       tripFrameAtoms(plan),
+      deriveSegAtoms(plan, tmpl, tmplDur, 'load', 'load'),
+      deriveSegAtoms(plan, tmpl, tmplDur, 'voyage', 'voyage'),
       deriveSegAtoms(plan, tmpl, tmplDur, 'arrival', 'arrival'),
       deriveSegAtoms(plan, tmpl, tmplDur, 'ops', 'ops'),
       deriveSegAtoms(plan, tmpl, tmplDur, 'fishday', 'fishday'),
@@ -1838,7 +2232,7 @@
 
   function scoreTrip(plan) {
     var atoms = deriveTripAtoms(plan);
-    var BUCKETS = ['frame', 'arrival', 'ops', 'fishday', 'return'];
+    var BUCKETS = ['frame', 'load', 'voyage', 'arrival', 'ops', 'fishday', 'return'];
     var DIMS = ['info', 'exec', 'safety', 'quality', 'money', 'people'];
     var byBucket = {}, byDimension = {}, i;
     for (i = 0; i < BUCKETS.length; i++) byBucket[BUCKETS[i]] = { maxPts: 0, earned: 0 };
@@ -1861,10 +2255,10 @@
       atoms: atoms, byBucket: byBucket, byDimension: byDimension };
   }
 
-  // minute-weighted Sigma productive / Sigma available across the four modeled days;
+  // minute-weighted Sigma productive / Sigma available across the six modeled days;
   // unplaced tasks contribute neither avail nor idle (daySchedule already excludes them).
   function tripEfficiency(plan) {
-    var segs = ['arrival', 'ops', 'fishday', 'return'], avail = 0, cost = 0;
+    var segs = ['load', 'voyage', 'arrival', 'ops', 'fishday', 'return'], avail = 0, cost = 0;
     for (var i = 0; i < segs.length; i++) {
       var ds = daySchedule(plan, segs[i]);
       avail += ds.availMin; cost += ds.idleTotal + ds.reworkTotal + ds.overbookMin;
@@ -1896,7 +2290,10 @@
     // §20.3 — authorable all-days tunables (the deck→arrange→connect editor + minute clock read these)
     SNAP_MIN: SNAP_MIN, DAY_WINDOWS: DAY_WINDOWS, AUTHORABLE: AUTHORABLE,
     // rubric v1.0 — the whole-trip 100-point derived ledger + trip-wide efficiency
-    scoreTrip: scoreTrip, tripEfficiency: tripEfficiency
+    scoreTrip: scoreTrip, tripEfficiency: tripEfficiency,
+    // Voyage program (spec 2026-07-13): Day-0 segments, the ship map, and manifest carryover
+    VOYAGE_STATIONS: VOYAGE_STATIONS, SAIL_MIN: SAIL_MIN,
+    carryState: carryState, manifestChainGaps: manifestChainGaps
   };
   global.PRS = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

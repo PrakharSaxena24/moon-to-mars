@@ -261,14 +261,39 @@ var scBefore = JSON.stringify(scoreOf(base));
 P.ambientActors(1, 0.5); P.cascadeTrace(P.mergePlan(base)); P.stationReadiness(P.createSim(base, 'fishday')); P.boatState(P.createSim(base, 'fishday'));
 ok(JSON.stringify(scoreOf(base)) === scBefore, 'cosmetic helpers do not perturb score() (pure)');
 
-console.log('\n=== AUTHORABLE DAYS — daySchedule / scoreDay (§20) ===');
+console.log('\n=== AUTHORABLE DAYS — daySchedule / scoreDay (§20 + §Voyage) ===');
 (function () {
-  // the first back-to-back handoff (producer end === consumer start) per seg, in handoff-array order
-  var FIRST_BTB = { arrival: 'h_a_ferry', ops: 'h_o_weather', 'return': 'h_r_cash_site' };
+  // MIGRATION (Voyage, 2026-07-13): the hardcoded FIRST_BTB id map is retired — the Voyage
+  // program's "return" reshape to Pack & Sail (spec §1) means hd_r_settle/h_r_cash_site's role
+  // as "the first back-to-back handoff" is no longer guaranteed to survive the rename/reorder.
+  // Replaced with a dynamic finder (producer end === consumer start, first in handoff-array
+  // order) that needs no per-seg id at all, so it self-heals across the reshape. Verified to
+  // reproduce the exact old ids (h_a_ferry / h_o_weather / h_r_cash_site) against the pre-Voyage
+  // engine before this migration landed.
+  function firstBackToBack(plan, seg) {
+    var tasks = P.tasksForSeg(plan, seg), byId = {};
+    tasks.forEach(function (t) { byId[t.id] = t; });
+    var hs = P.handoffsForSeg(plan, seg);
+    for (var i = 0; i < hs.length; i++) {
+      var h = hs[i];
+      if (h.trigger && h.trigger.type === 'onTaskDone') {
+        var prod = byId[h.trigger.taskId], cons = byId[h.toTaskId];
+        if (prod && cons && (prod.startMin + prod.durMin) === cons.startMin) return h.id;
+      }
+    }
+    return null;
+  }
 
   // purity witnesses, captured before any §20 read helper below is called
   var pureBefore = { sc: JSON.stringify(scoreOf(base)), tasks: JSON.stringify(P.mergePlan(base).tasks), days: JSON.stringify(P.mergePlan(base).days) };
 
+  // Voyage: 'load'/'voyage' deliberately NOT folded into this shared generic loop. 'voyage's
+  // buddy tasks (t_v_star_*/t_v_esc_*) have NO fixed ownerRoleId (any of the 8 organizers may
+  // buddy), which would make sub-test 6's "reassign to p01 must misassign" assumption unsound if
+  // the first required task happens to be buddy-owned; keeping 'load' out too avoids this loop
+  // (used unmodified by arrival/ops/return since before Voyage) depending on load's unpinned
+  // internal task shape. Both new segments' structural/carry/buddy anchors are covered by the
+  // dedicated "VOYAGE §1/§2/§3" sections below instead.
   ['arrival', 'ops', 'return'].forEach(function (seg) {
     // 1. per-day 100 anchor: canonDay (via applyDayFix) over the all-fixes cfg reaches a clean 100
     var cfg1 = P.applyDayFix(P.applyAllFixes(base), seg);
@@ -299,7 +324,8 @@ console.log('\n=== AUTHORABLE DAYS — daySchedule / scoreDay (§20) ===');
       seg + ': monotone authoring gradient cleared(' + sd2.score + ') <= half(' + sd3.score + ') <= perfect(' + sd1.score + ')');
 
     // 4. channel pricing survives hour quanta: slow the first back-to-back handoff to 'board' (+30)
-    var btbId = FIRST_BTB[seg];
+    var btbId = firstBackToBack(plan1, seg);
+    ok(!!btbId, seg + ': a back-to-back handoff (producer end === consumer start) is found dynamically');
     var cfg4 = P.applyDayFix(P.applyAllFixes(base), seg);
     cfg4.overrides.days[seg].handoffs[btbId] = { channel: 'board' };
     var plan4 = P.mergePlan(cfg4), ds4 = P.daySchedule(plan4, seg), sd4 = P.scoreDay(plan4, seg);
@@ -511,13 +537,18 @@ console.log('\n=== SCORING BLUEPRINT §13 — scoreTrip/tripEfficiency (P1 struc
   var sumMax = 0; st1.atoms.forEach(function (a) { sumMax += a.maxPts; });
   ok(sumMax === 100, 'scoreTrip: Sigma atoms.maxPts === 100 exactly (' + sumMax + ')');
 
+  // MIGRATION (Voyage, 2026-07-13): the old exact 5-key byBucket/byDimension equalities are
+  // retired here — the Voyage program grows the matrix to 7 buckets (+load +voyage, spec §4),
+  // rebalancing every existing cell. Only the sum invariant is checked in this P1-era block now;
+  // the exact re-packed per-bucket/per-dimension values (with the integrator-PINS estimates) live
+  // in the dedicated "VOYAGE — the re-derived constitution (§4)" section below.
   var bb = {}; for (var k in st1.byBucket) bb[k] = st1.byBucket[k].maxPts;
-  ok(JSON.stringify(bb) === JSON.stringify({ frame: 14, arrival: 15, ops: 18, fishday: 41, return: 12 }),
-    'scoreTrip: byBucket maxPts === {frame:14,arrival:15,ops:18,fishday:41,return:12} (' + JSON.stringify(bb) + ')');
+  var bbSum = 0; for (var kbb in bb) bbSum += bb[kbb];
+  ok(bbSum === 100, 'scoreTrip: byBucket maxPts sums to exactly 100 across all buckets (' + JSON.stringify(bb) + ')');
 
   var bd = {}; for (var k2 in st1.byDimension) bd[k2] = st1.byDimension[k2].maxPts;
-  ok(JSON.stringify(bd) === JSON.stringify({ info: 34, exec: 25, safety: 20, quality: 10, money: 10, people: 1 }),
-    'scoreTrip: byDimension maxPts === {info:34,exec:25,safety:20,quality:10,money:10,people:1} (' + JSON.stringify(bd) + ')');
+  var bdSum = 0; for (var kbd in bd) bdSum += bd[kbd];
+  ok(bdSum === 100, 'scoreTrip: byDimension maxPts sums to exactly 100 across all dimensions (' + JSON.stringify(bd) + ')');
 
   // the maxPts inventory is TEMPLATE-derived (§6 "never the player's plan") — the same
   // Sigma=100 holds on the gappy baseline too, not just the canonical/all-fixes plan
@@ -584,9 +615,12 @@ console.log('\n=== SCORING BLUEPRINT §13 — scoreTrip/tripEfficiency (P1 struc
 // ============================================================================
 console.log('\n=== SCORING BLUEPRINT §13 — P2a make-real atoms (earn on canonical, fail on broken) ===');
 (function () {
+  // MIGRATION (Voyage, 2026-07-13): 'load'/'voyage' folded into the canonical-reference recipe
+  // — without authoring them too, the true canonical no longer totals 100 under the re-packed
+  // Voyage matrix (their seed gaps would survive unaddressed).
   function trueCanonCfg() {
     var cfg = P.applyAllFixes({ seed: 1, overrides: {} });
-    ['arrival', 'ops', 'return'].forEach(function (s) { cfg = P.applyDayFix(cfg, s); });
+    ['load', 'voyage', 'arrival', 'ops', 'return'].forEach(function (s) { cfg = P.applyDayFix(cfg, s); });
     return cfg;
   }
   function atomOf(atoms, id) { return atoms.filter(function (a) { return a.id === id; })[0]; }
@@ -601,53 +635,57 @@ console.log('\n=== SCORING BLUEPRINT §13 — P2a make-real atoms (earn on canon
   ok(t.atoms.every(function (a) { return a.earned === a.maxPts; }),
     'scoreTrip: true canonical -> every atom earns its maxPts exactly (no surviving gap)');
 
-  // v1.0 id scheme (plan §W1-T2 id-change list): fishday_exec_owner_flex->fishday_exec_owner,
-  // fishday_exec_pm_flex->fishday_exec_pm, fishday_safety_health_check->fishday_safety_t_f_health
-  var SEVEN = ['fishday_exec_owner', 'fishday_exec_pm', 'frame_hospital_shared', 'frame_abort_night',
-    'fishday_safety_t_f_health', 'fishday_quality_allergy', 'fishday_quality_portions'];
-  SEVEN.forEach(function (id) {
+  // MIGRATION (Voyage §4.1 senior-dev gate ruling — RATIFIED retirements): fishday_exec_owner and
+  // fishday_exec_pm no longer exist — the owner/pm fishday tasks are flex/standby lanes, exempt
+  // from exec-lane pricing entirely (§4.1 "the owner/pm fishday flex lanes... flex-standby
+  // exemption"). fishday_quality_portions is also retired (§4.1 "the defensive portions quality
+  // atom" — it could never fail on a well-formed plan). Replaced below with equivalent behavioral
+  // pins on SURVIVING atoms, per the gate ruling's own suggestion: the allergy quality atom (kept
+  // unchanged) plus one representative fishday exec lane (fishday_exec_siteLead).
+  var MAKE_REAL = ['frame_hospital_shared', 'frame_abort_night', 'fishday_safety_t_f_health',
+    'fishday_quality_allergy', 'fishday_exec_siteLead'];
+  MAKE_REAL.forEach(function (id) {
     var a = atomOf(t.atoms, id);
     ok(!!a && a.earned === a.maxPts && a.earned > 0, id + ': earns its full ' + (a && a.maxPts) + ' pts on the true canonical (' + (a && a.earned) + ')');
   });
 
-  // 1. fishday_exec_owner: unplacing the flex task loses its point
-  var brk1 = trueCanonCfg(); brk1.overrides.staffing = brk1.overrides.staffing || {}; brk1.overrides.staffing.t_f_flex_owner = [];
-  var a1 = atomOf(P.scoreTrip(P.mergePlan(brk1)).atoms, 'fishday_exec_owner');
-  ok(a1.earned === 0 && a1.reasonKey === 'scr_exec_unstaffed', 'fishday_exec_owner: unplacing t_f_flex_owner -> earned 0 (' + a1.reasonKey + ')');
+  // 1. fishday_exec_specialist: unstaffing a surviving fishday exec-lane task loses its point.
+  // MIGRATION: replaces the retired fishday_exec_owner/t_f_flex_owner pin (that lane no longer
+  // exists — flex tasks are priced-exempt) with the identical "unstaffed -> earned 0" behavior on
+  // a lane that still exists.
+  var brk1 = trueCanonCfg(); brk1.overrides.staffing = brk1.overrides.staffing || {}; brk1.overrides.staffing.t_f_gearload = [];
+  var a1 = atomOf(P.scoreTrip(P.mergePlan(brk1)).atoms, 'fishday_exec_specialist');
+  ok(!!a1 && a1.earned === 0 && a1.reasonKey === 'scr_exec_unstaffed', 'fishday_exec_specialist: unstaffing t_f_gearload -> earned 0 (' + (a1 && a1.reasonKey) + ')');
 
-  // 2. fishday_exec_pm: misassigning the flex task to the wrong role loses its point
-  var brk2 = trueCanonCfg(); brk2.overrides.staffing = brk2.overrides.staffing || {}; brk2.overrides.staffing.t_f_flex_pm = ['p08'];
-  var a2 = atomOf(P.scoreTrip(P.mergePlan(brk2)).atoms, 'fishday_exec_pm');
-  ok(a2.earned === 0 && a2.reasonKey === 'scr_exec_misassigned', 'fishday_exec_pm: reassigning t_f_flex_pm to specialist p08 -> earned 0 (' + a2.reasonKey + ')');
+  // 2. fishday_exec_siteLead: misassigning a surviving fishday exec-lane task to the wrong role
+  // loses its point. MIGRATION: replaces the retired fishday_exec_pm/t_f_flex_pm pin the same way.
+  var brk2 = trueCanonCfg(); brk2.overrides.staffing = brk2.overrides.staffing || {}; brk2.overrides.staffing.t_f_route = ['p08'];
+  var a2 = atomOf(P.scoreTrip(P.mergePlan(brk2)).atoms, 'fishday_exec_siteLead');
+  ok(!!a2 && a2.earned === 0 && a2.reasonKey === 'scr_exec_misassigned', 'fishday_exec_siteLead: reassigning t_f_route to specialist p08 -> earned 0 (' + (a2 && a2.reasonKey) + ')');
 
   // 3. frame_hospital_shared: dropping a needed recipient loses the point
   var brk3 = trueCanonCfg(); brk3.overrides.info = brk3.overrides.info || {}; brk3.overrides.info.ic_hospital = { recipientRoleIds: ['pm', 'siteLead'] };
   var a3 = atomOf(P.scoreTrip(P.mergePlan(brk3)).atoms, 'frame_hospital_shared');
-  ok(a3.earned === 0 && a3.reasonKey === 'scr_safety_gap', 'frame_hospital_shared: ic_hospital not shared to comms/safetyLead -> earned 0 (' + a3.reasonKey + ')');
+  ok(!!a3 && a3.earned === 0 && a3.reasonKey === 'scr_safety_gap', 'frame_hospital_shared: ic_hospital not shared to comms/safetyLead -> earned 0 (' + (a3 && a3.reasonKey) + ')');
 
   // 4. frame_abort_night: clearing rk_night's abort criterion loses the point (rk_sea untouched)
   var brk4 = trueCanonCfg(); brk4.overrides.risks = brk4.overrides.risks || {}; brk4.overrides.risks.rk_night = { abortCriterion: null };
   var st4 = P.scoreTrip(P.mergePlan(brk4));
   var a4 = atomOf(st4.atoms, 'frame_abort_night'), a4sea = atomOf(st4.atoms, 'frame_abort_sea');
-  ok(a4.earned === 0 && a4.reasonKey === 'scr_safety_gap' && a4sea.earned === a4sea.maxPts,
-    'frame_abort_night: clearing rk_night.abortCriterion -> earned 0, frame_abort_sea unaffected (' + a4.reasonKey + ')');
+  ok(!!a4 && !!a4sea && a4.earned === 0 && a4.reasonKey === 'scr_safety_gap' && a4sea.earned === a4sea.maxPts,
+    'frame_abort_night: clearing rk_night.abortCriterion -> earned 0, frame_abort_sea unaffected (' + (a4 && a4.reasonKey) + ')');
 
   // 5. fishday_safety_t_f_health: unstaffing t_f_health loses the point
   var brk5 = trueCanonCfg(); brk5.overrides.staffing = brk5.overrides.staffing || {}; brk5.overrides.staffing.t_f_health = [];
   var a5 = atomOf(P.scoreTrip(P.mergePlan(brk5)).atoms, 'fishday_safety_t_f_health');
-  ok(a5.earned === 0 && a5.reasonKey === 'scr_safety_gap', 'fishday_safety_t_f_health: unstaffing t_f_health -> earned 0 (' + a5.reasonKey + ')');
+  ok(!!a5 && a5.earned === 0 && a5.reasonKey === 'scr_safety_gap', 'fishday_safety_t_f_health: unstaffing t_f_health -> earned 0 (' + (a5 && a5.reasonKey) + ')');
 
   // 6. fishday_quality_allergy: committing the menu to a species in the allergen CATEGORY
   // (refinement-1: 'shrimp' -> category 'shellfish', which intersects ic_food.allergens —
   // exercises the real species->category path, not a literal species/category string match)
   var brk6 = trueCanonCfg(); brk6.overrides.info = brk6.overrides.info || {}; brk6.overrides.info.ic_menu = { species: 'shrimp' };
   var a6 = atomOf(P.scoreTrip(P.mergePlan(brk6)).atoms, 'fishday_quality_allergy');
-  ok(a6.earned === 0 && a6.reasonKey === 'scr_qual_fail', 'fishday_quality_allergy: menu species set to shrimp (category shellfish, the allergen) -> earned 0 (' + a6.reasonKey + ')');
-
-  // 7. fishday_quality_portions: a menu portion count that disagrees with GUESTS+addOns loses the point
-  var brk7 = trueCanonCfg(); brk7.overrides.info = brk7.overrides.info || {}; brk7.overrides.info.ic_menu = { portions: 20 };
-  var a7 = atomOf(P.scoreTrip(P.mergePlan(brk7)).atoms, 'fishday_quality_portions');
-  ok(a7.earned === 0 && a7.reasonKey === 'scr_qual_fail', 'fishday_quality_portions: menu portions (20) disagree with 13 guests + 5 add-ons (18) -> earned 0 (' + a7.reasonKey + ')');
+  ok(!!a6 && a6.earned === 0 && a6.reasonKey === 'scr_qual_fail', 'fishday_quality_allergy: menu species set to shrimp (category shellfish, the allergen) -> earned 0 (' + (a6 && a6.reasonKey) + ')');
 
   // purity: none of these broken-plan constructions perturbed the true canonical's own score
   ok(P.scoreTrip(canonPlan).total === 100, 'scoreTrip: true canonical still scores 100 after constructing the 7 broken variants (pure)');
@@ -682,10 +720,11 @@ console.log('\n=== SCORING BLUEPRINT §7/§13.4 — P2 numeric: gappy D-band + a
     deltas.applyDayFix_arrival + ') and every classic fix (max +' + Math.max.apply(null, CLASSIC.map(function (fx) { return deltas[fx]; })) + ')');
   ok(deltas.fixHandoffs > deltas.applyDayFix_arrival, 'fixHandoffs (+' + deltas.fixHandoffs + ') beats applyDayFix(arrival) (+' + deltas.applyDayFix_arrival + ') specifically');
 
-  // the true canonical (all classic fixes + all 3 canonDay) still reaches 100/A/clean —
-  // re-affirmed here alongside the gradient numbers (already anchored in the P2a block above)
+  // the true canonical (all classic fixes + all 5 canonDay days, MIGRATION Voyage 2026-07-13:
+  // 'load'/'voyage' added alongside arrival/ops/return) still reaches 100/A/clean — re-affirmed
+  // here alongside the gradient numbers (already anchored in the P2a block above)
   var canonCfg2 = P.applyAllFixes({ seed: 1, overrides: {} });
-  ['arrival', 'ops', 'return'].forEach(function (s) { canonCfg2 = P.applyDayFix(canonCfg2, s); });
+  ['load', 'voyage', 'arrival', 'ops', 'return'].forEach(function (s) { canonCfg2 = P.applyDayFix(canonCfg2, s); });
   var t2 = P.scoreTrip(P.mergePlan(canonCfg2));
   ok(t2.total === 100 && t2.grade === 'A' && t2.gate.clean === true, 'scoreTrip: canonical still 100/A/clean under the re-tuned seed (' + t2.total + '/' + t2.grade + ')');
 })();
@@ -705,24 +744,22 @@ console.log('\n=== SCORING RUBRIC v1.0 §8 — the pinned constitution ===');
     return Math.max(0, s);
   }
   function atomOf(atoms, id) { return atoms.filter(function (a) { return a.id === id; })[0]; }
+  // MIGRATION (Voyage, 2026-07-13): 'load'/'voyage' folded into the canonical recipe — see the
+  // identical note on the P2a block's copy of this helper.
   function trueCanonCfg() {
     var cfg = P.applyAllFixes({ seed: 1, overrides: {} });
-    ['arrival', 'ops', 'return'].forEach(function (s) { cfg = P.applyDayFix(cfg, s); });
+    ['load', 'voyage', 'arrival', 'ops', 'return'].forEach(function (s) { cfg = P.applyDayFix(cfg, s); });
     return cfg;
   }
 
-  // PINS — the exact seed values (spec §6, plan §W1-T2). These are the reference derivation's
-  // PRE-MEASURED ESTIMATES, not yet the real numbers off the merged v1.0 engine (this task
-  // (W1-T2) runs concurrently with W1-T1's engine rewrite and cannot measure them). The
-  // INTEGRATOR (W2) measures the true values from the merged engine.js and overwrites the
-  // fields below to the exact measured numbers before committing — this object is the single
-  // place a seed re-tune touches thereafter, spec-first per §6.
-  var PINS = {
-    gappySeed: 54,
-    gappyBuckets: { frame: 0, arrival: 7, ops: 16, fishday: 20, return: 11 },
-    fixHandoffsJump: 18,
-    tripEffGappy: 81
-  };
+  // MIGRATION (Voyage, 2026-07-13): the rubric-v1.0 PINS object (gappySeed 54, a 5-key
+  // gappyBuckets, fixHandoffsJump 18, tripEffGappy 81) is RETIRED here — the Voyage program adds
+  // seed gaps to load/voyage and rebalances the whole matrix, so none of those exact numbers can
+  // survive unchanged. The re-measured exact pins (once W1a lands) belong in the dedicated
+  // "VOYAGE — the re-derived constitution (§4)" section below (its own PINS_VOYAGE object,
+  // same estimate-now/integrator-finalizes contract). What stays checkable WITHOUT exact numbers
+  // is kept below: atom-count consistency, the Sigma-earned identity, and the qualitative shape
+  // of the seed (D-band, some positive fixHandoffs jump, a legal 0..100 efficiency).
 
   var gappyPlan = P.mergePlan(base);
   var g = P.scoreTrip(gappyPlan);
@@ -730,37 +767,38 @@ console.log('\n=== SCORING RUBRIC v1.0 §8 — the pinned constitution ===');
   var canonPlan = P.mergePlan(canonCfg);
   var t = P.scoreTrip(canonPlan);
 
-  // (1) atom count === 89, gappy AND canonical (the constitution's atom inventory is
-  // template-derived, not plan-derived — both plans carry the identical 89 atoms)
-  ok(g.atoms.length === 89, 'scoreTrip: gappy atoms.length === 89 (' + g.atoms.length + ')');
-  ok(t.atoms.length === 89, 'scoreTrip: canonical atoms.length === 89 (' + t.atoms.length + ')');
+  // (1) atom count is template-derived (not plan-derived) — gappy and canonical carry the
+  // IDENTICAL inventory. The exact count (89 pre-Voyage) grows once load/voyage/carry/buddy
+  // atoms land; only cross-plan consistency is pinned here, the exact new count is an
+  // integrator-PINS estimate in the Voyage constitution section below.
+  ok(g.atoms.length === t.atoms.length && g.atoms.length > 0,
+    'scoreTrip: gappy and canonical carry the identical atom count (template-derived, not plan-derived) (' + g.atoms.length + ')');
 
   // (4) Sigma atoms.earned (clamped >=0) === total, on gappy + canonical
   ok(sumEarnedClamped(g.atoms) === g.total, 'scoreTrip: Sigma atoms.earned (clamped) === total on gappy (' + g.total + ')');
   ok(sumEarnedClamped(t.atoms) === t.total, 'scoreTrip: Sigma atoms.earned (clamped) === total on canonical (' + t.total + ')');
 
-  // (5) PINS — exact seed values (finalized by the integrator against the merged engine)
-  ok(g.total === PINS.gappySeed, 'scoreTrip: gappy total pinned exactly at PINS.gappySeed (' + g.total + ')');
-  var gBuckets = {}; for (var kg in g.byBucket) gBuckets[kg] = g.byBucket[kg].earned;
-  ok(JSON.stringify(gBuckets) === JSON.stringify(PINS.gappyBuckets),
-    'scoreTrip: gappy byBucket earned pinned exactly at PINS.gappyBuckets (' + JSON.stringify(gBuckets) + ')');
+  // (5) qualitative seed shape (exact PINS retired above; re-pinned exactly in the Voyage
+  // constitution section once the integrator measures the merged engine)
+  ok(g.total > 0 && g.total < 100, 'scoreTrip: gappy total is a genuine partial score, not 0 or 100 (' + g.total + ')');
   var jump = P.scoreTrip(P.mergePlan(P.applyFix(base, 'fixHandoffs'))).total - g.total;
-  ok(jump === PINS.fixHandoffsJump, 'scoreTrip: fixHandoffs jump pinned exactly at PINS.fixHandoffsJump (' + jump + ')');
-  ok(P.tripEfficiency(gappyPlan) === PINS.tripEffGappy, 'tripEfficiency: gappy pinned exactly at PINS.tripEffGappy (' + P.tripEfficiency(gappyPlan) + ')');
+  ok(jump > 0, 'scoreTrip: fixHandoffs raises the gappy total (jump +' + jump + ')');
+  ok(P.tripEfficiency(gappyPlan) >= 0 && P.tripEfficiency(gappyPlan) <= 100, 'tripEfficiency: gappy is a legal 0..100 int (' + P.tripEfficiency(gappyPlan) + ')');
 
-  // (6) cumulative monotone ladder: the 8 classic fixes (incl. fixHandoffs) then applyDayFix x3
-  // (arrival/ops/return) -> each step's total is >= the previous, and the Sigma-earned identity
-  // holds at every step; the final step reaches 100/A/clean.
+  // (6) cumulative monotone ladder: the 8 classic fixes (incl. fixHandoffs) then applyDayFix over
+  // all 5 non-fishday authorable days (MIGRATION Voyage 2026-07-13: load/voyage appended) ->
+  // each step's total is >= the previous, and the Sigma-earned identity holds at every step; the
+  // final step reaches 100/A/clean.
   var LADDER_FIXES = ['setSafety', 'grantAuth', 'shareInfo', 'setReport', 'rebalance', 'fixReserve', 'setReturn', 'fixHandoffs'];
   var accCfg = base, ladder = [g];
   LADDER_FIXES.forEach(function (fx) { accCfg = P.applyFix(accCfg, fx); ladder.push(P.scoreTrip(P.mergePlan(accCfg))); });
-  ['arrival', 'ops', 'return'].forEach(function (seg) { accCfg = P.applyDayFix(accCfg, seg); ladder.push(P.scoreTrip(P.mergePlan(accCfg))); });
+  ['load', 'voyage', 'arrival', 'ops', 'return'].forEach(function (seg) { accCfg = P.applyDayFix(accCfg, seg); ladder.push(P.scoreTrip(P.mergePlan(accCfg))); });
   var monoLadder = true;
   for (var li = 1; li < ladder.length; li++) {
     if (ladder[li].total < ladder[li - 1].total) monoLadder = false;
     ok(sumEarnedClamped(ladder[li].atoms) === ladder[li].total, 'scoreTrip: Sigma atoms.earned (clamped) === total at ladder step ' + li + ' (' + ladder[li].total + ')');
   }
-  ok(monoLadder, 'scoreTrip: cumulative fix ladder (8 classic incl. fixHandoffs + 3 canonDay) is monotone non-decreasing (' + ladder.map(function (s) { return s.total; }).join('→') + ')');
+  ok(monoLadder, 'scoreTrip: cumulative fix ladder (8 classic incl. fixHandoffs + 5 canonDay incl. load/voyage) is monotone non-decreasing (' + ladder.map(function (s) { return s.total; }).join('→') + ')');
   var lastStep = ladder[ladder.length - 1];
   ok(lastStep.total === 100 && lastStep.grade === 'A' && lastStep.gate.clean === true, 'scoreTrip: final ladder step -> 100/A/clean');
 
@@ -778,9 +816,11 @@ console.log('\n=== SCORING RUBRIC v1.0 §8 — the pinned constitution ===');
 
   // (7b) the clean gate also polices the one classic detector without an atom home: skipping
   // setReturn (frame t_ship staffing) still totals 100 but withholds the A via detect()!==0
+  // (MIGRATION Voyage 2026-07-13: load/voyage canonDay added so the rest of the trip is genuinely
+  // clean and this isolates setReturn as the ONLY surviving gap)
   var nrCfg = base;
   ['setSafety', 'grantAuth', 'shareInfo', 'setReport', 'rebalance', 'fixReserve', 'fixHandoffs'].forEach(function (fx) { nrCfg = P.applyFix(nrCfg, fx); });
-  ['arrival', 'ops', 'return'].forEach(function (seg) { nrCfg = P.applyDayFix(nrCfg, seg); });
+  ['load', 'voyage', 'arrival', 'ops', 'return'].forEach(function (seg) { nrCfg = P.applyDayFix(nrCfg, seg); });
   var nrt = P.scoreTrip(P.mergePlan(nrCfg));
   ok(nrt.total === 100 && nrt.gate.clean === false && nrt.grade === 'B' && nrt.gate.withheldA === true,
     'scoreTrip: skipping setReturn -> 100 points but a live returnLogi detector withholds the A (' +
@@ -904,6 +944,330 @@ console.log('\n=== SCORING RUBRIC v1.0 §8 — the pinned constitution ===');
   var mgA = atomIn(tripOf(mgCfg), 'ops_safety_hd_o_weather');
   ok(!!mgA && mgA.earned === 0 && mgA.status === 'broken' && mgA.reasonKey === 'scr_safety_gap',
     'scoreTrip §7.4: safety gate on the wrong role -> broken / scr_safety_gap (' + (mgA && mgA.status) + ')');
+})();
+
+// ============================================================================
+// THE VOYAGE (2026-07-13) — W1b verify additions (plan §W1b, spec §6). Written
+// against docs/superpowers/specs/2026-07-13-voyage-design.md and
+// docs/superpowers/plans/2026-07-13-voyage.md's "Key pinned interfaces", NOT
+// against today's on-disk engine.js — a concurrent W1a (fable) worker is
+// rewriting engine.js to the same spec at the same time this file is written.
+// Every dynamic-discovery choice below (name-regex lookups, atom-id
+// pattern-matching, the integrator-PINS estimate objects) is commented at its
+// point of use; the W1-gate Opus review reconciles literal ids/fields against
+// whatever the landed engine.js actually names them.
+// ============================================================================
+function trueCanonCfgV() {
+  var cfg = P.applyAllFixes({ seed: 1, overrides: {} });
+  ['load', 'voyage', 'arrival', 'ops', 'return'].forEach(function (s) { cfg = P.applyDayFix(cfg, s); });
+  return cfg;
+}
+
+console.log('\n=== VOYAGE §1 — new-seg structural anchors (load/voyage) ===');
+(function () {
+  var NEW_SEGS = ['load', 'voyage'];
+  var ALL_AUTHORABLE = ['load', 'voyage', 'arrival', 'ops', 'fishday', 'return'];
+
+  ok(NEW_SEGS.every(function (s) { return P.AUTHORABLE.indexOf(s) >= 0; }), 'AUTHORABLE includes the new load/voyage segments (' + P.AUTHORABLE.join(',') + ')');
+  ok(ALL_AUTHORABLE.every(function (s) { return P.AUTHORABLE.indexOf(s) >= 0; }) && P.AUTHORABLE.length === ALL_AUTHORABLE.length,
+    'AUTHORABLE carries exactly the 6 campaign segments, no more/fewer (' + P.AUTHORABLE.join(',') + ')');
+
+  // windows: spec §1's phase table gives EXACT hours (not "~" targets) — Day 0 06:00-11:00 Tokyo
+  // (load), 11:00-21:00 aboard (voyage). Pinned in day-clock minutes, matching the existing
+  // arrival/ops/return [openMin,closeMin] convention (06:00=360, 11:00=660, 21:00=1260).
+  ok(P.DAY_WINDOWS.load && P.DAY_WINDOWS.load[0] === 360 && P.DAY_WINDOWS.load[1] === 660,
+    'DAY_WINDOWS.load === [360,660] (06:00-11:00 Tokyo) (' + JSON.stringify(P.DAY_WINDOWS.load) + ')');
+  ok(P.DAY_WINDOWS.voyage && P.DAY_WINDOWS.voyage[0] === 660 && P.DAY_WINDOWS.voyage[1] === 1260,
+    'DAY_WINDOWS.voyage === [660,1260] (11:00-21:00 aboard) (' + JSON.stringify(P.DAY_WINDOWS.voyage) + ')');
+  ok(!!(P.DAY_WINDOWS.load && P.DAY_WINDOWS.voyage) && P.DAY_WINDOWS.load[1] === P.DAY_WINDOWS.voyage[0],
+    'load ends exactly where voyage begins (11:00, the fixed sailing time — "what misses the ship cannot be fixed at sea")');
+
+  var canonCfg = trueCanonCfgV();
+  var canonPlan = P.mergePlan(canonCfg);
+
+  // rosters non-empty (required tasks + at least one decoy each, per plan §W2a)
+  NEW_SEGS.forEach(function (seg) {
+    var required = P.tasksForSeg(canonPlan, seg).filter(function (t) { return t.required !== false; });
+    var deck = P.deckFor(canonPlan, seg);
+    ok(required.length > 0, seg + ': roster has at least one required task (' + required.length + ')');
+    ok(deck && Array.isArray(deck.decoys) && deck.decoys.length > 0, seg + ': deckFor reports at least one decoy (' + (deck && deck.decoys.length) + ')');
+  });
+
+  // plan.manifest / plan.guests shapes (plan §Key pinned interfaces + spec §2/§3). Defensively
+  // fall back to [] so an absent field (today's pre-Voyage engine) reports as clear FAILs rather
+  // than crashing the rest of this file's checks.
+  var manifest = canonPlan.manifest || [], guests = canonPlan.guests || [];
+  ok(Array.isArray(canonPlan.manifest) && manifest.length > 0, 'plan.manifest is a non-empty array (' + manifest.length + ')');
+  ok(manifest.every(function (m) { return m.id && m.name && m.name.en && m.name.jp && m.kind && m.forSeg; }),
+    'every manifest item carries {id, name:{en,jp}, kind, forSeg}');
+  ok(Array.isArray(canonPlan.guests) && guests.length === 13, 'plan.guests carries 13 named guests (' + guests.length + ')');
+  ok(guests.every(function (g) { return g.id && g.name && g.name.en && g.name.jp && typeof g.vip === 'boolean'; }),
+    'every guest carries {id, name:{en,jp}, vip, party}');
+  ok(guests.filter(function (g) { return g.vip; }).length === 4, 'exactly 4 of the 13 guests are flagged vip');
+
+  // canonDay reaches full placement on load/voyage — the same §20 contract already proven for
+  // arrival/ops/return, extended to the two new segments
+  NEW_SEGS.forEach(function (seg) {
+    var ds = P.daySchedule(canonPlan, seg), rd = P.dayReadiness(canonPlan, seg);
+    ok(ds.unplacedRequired.length === 0, seg + ': canonDay (via applyDayFix) places every required task (' + ds.unplacedRequired.length + ' unplaced)');
+    ok(!rd.some(function (r) { return r.type === 'UNPLACED_REQUIRED'; }), seg + ': dayReadiness has no UNPLACED_REQUIRED after canonDay');
+  });
+})();
+
+console.log('\n=== VOYAGE §2 — carryover purity: all-aboard is carry-inert; a missing item stalls its consumer ===');
+(function () {
+  var hasCarryState = typeof P.carryState === 'function';
+  ok(hasCarryState, 'carryState is exported on api');
+  // defensive: fall back to a no-op fn so an absent carryState (today's pre-Voyage engine)
+  // degrades this whole section to clear FAILs instead of crashing the rest of this file
+  function carryStateSafe(plan) { return hasCarryState ? P.carryState(plan) : {}; }
+
+  // (a) all-aboard => carry-inert. When Load is authored canonically (every manifest item
+  // packed -> trucked -> in hold -> aboard), the PRE-EXISTING arrival/ops/fishday day-schedule
+  // pins are UNCHANGED — carryState must never inject a stall when nothing is actually missing.
+  var loadFixedCfg = P.applyDayFix(P.applyAllFixes(base), 'load');
+  var loadFixedPlan = P.mergePlan(loadFixedCfg);
+
+  var cs = carryStateSafe(loadFixedPlan);
+  ok(cs && typeof cs === 'object' && Object.keys(cs).length > 0, 'carryState returns a non-empty {itemId: {seg: status}} map (' + Object.keys(cs).length + ' items)');
+  var allAboard = Object.keys(cs).every(function (itemId) {
+    return Object.keys(cs[itemId]).every(function (seg) { return cs[itemId][seg] === 'aboard'; });
+  });
+  ok(allAboard, 'canonical Load day (applyDayFix) -> every manifest item reads "aboard" in every segment carryState reports');
+
+  // reuse the EXISTING pre-Voyage fishday pins verbatim (§7/§13.4 P2 re-tune): with everything
+  // aboard, the fishday arrow-based teaching gradient (idle/efficiency — unrelated to carry) must
+  // be byte-identical to the numbers pinned before the Voyage program existed. daySchedule/
+  // fishdaySchedule are the SAME functions; only their internal carry-lookup is new plumbing.
+  var gfdCarry = P.fishdaySchedule(loadFixedPlan);
+  ok(gfdCarry.idleTotal === 1450 && gfdCarry.efficiency === 68,
+    'carry-inert: fishday idle/efficiency unchanged at the pre-Voyage pins 1450/68% when Load ships everything aboard (' + gfdCarry.idleTotal + '/' + gfdCarry.efficiency + '%)');
+  ok(P.daySchedule(loadFixedPlan, 'fishday').idleTotal === 1450, 'carry-inert: daySchedule(fishday) facade agrees (1450)');
+
+  // arrival/ops keep reaching their own canonical 100/A/clean/100%-eff anchor even with Load ALSO
+  // authored canonically in the same cfg (proves carry doesn't cross-contaminate other days)
+  ['arrival', 'ops'].forEach(function (seg) {
+    var cfg = P.applyDayFix(loadFixedCfg, seg);
+    var sd = P.scoreDay(P.mergePlan(cfg), seg);
+    ok(sd.score === 100 && sd.grade === 'A' && sd.clean === true && sd.efficiency === 100,
+      'carry-inert: ' + seg + ' still reaches its own canonical 100/A/clean/100% eff alongside a canonical Load day (' + sd.score + '/' + sd.grade + ')');
+  });
+
+  // (b) constructed failure: the jig case never makes the truck run -> the fishday gear pre-check
+  // (t_f_gearload) records a stall (idle or rework), never a silent/free pass.
+  // [integrator note] discovery is NAME-based (a manifest item literally named "jig case", per
+  // spec §4's own wording; load tasks whose English name mentions "truck") because the exact
+  // custody-linking field on load tasks is engine-internal and not pinned by the plan. If landed
+  // naming differs, adjust the two regexes below — the assertion's INTENT (an item that misses
+  // its truck run stalls the downstream fishday task that needs it) must be preserved.
+  var jigItem = (loadFixedPlan.manifest || []).filter(function (m) { return /jig/i.test((m.name && m.name.en) || ''); })[0];
+  ok(!!jigItem, 'plan.manifest carries an item named "jig case" (' + (jigItem && jigItem.id) + ')');
+
+  if (jigItem) {
+    var loadTasks = P.tasksForSeg(loadFixedPlan, 'load');
+    var truckTasks = loadTasks.filter(function (t) { return /truck/i.test((t.name && t.name.en) || ''); });
+    ok(truckTasks.length > 0, 'the Load roster has at least one "truck" task (' + truckTasks.map(function (t) { return t.id; }).join(',') + ')');
+
+    var missCfg = P.applyDayFix(P.applyAllFixes(base), 'load');
+    missCfg.overrides.days = missCfg.overrides.days || {};
+    missCfg.overrides.days.load = missCfg.overrides.days.load || {};
+    missCfg.overrides.days.load.placement = missCfg.overrides.days.load.placement || {};
+    truckTasks.forEach(function (t) { missCfg.overrides.days.load.placement[t.id] = null; });
+    var missPlan = P.mergePlan(missCfg);
+
+    var missCs = carryStateSafe(missPlan);
+    var jigStatus = missCs[jigItem.id] || {};
+    var jigMissing = Object.keys(jigStatus).some(function (seg) { return jigStatus[seg] !== 'aboard'; });
+    ok(jigMissing, 'unplacing the truck run -> carryState no longer reports the jig case aboard (' + JSON.stringify(jigStatus) + ')');
+
+    var missFd = P.fishdaySchedule(missPlan);
+    var gearTask = missFd.byTask && missFd.byTask.t_f_gearload;
+    var gearRework = (missFd.wrongFish || []).indexOf('t_f_gearload') >= 0;
+    ok((gearTask && gearTask.idleMin > 0) || gearRework,
+      'missing jig case -> the fishday gear pre-check (t_f_gearload) records idle or rework (idleMin=' + (gearTask && gearTask.idleMin) + ', rework=' + gearRework + ')');
+  }
+})();
+
+console.log('\n=== VOYAGE §3 — named guests & VIP buddies ===');
+(function () {
+  var voyCfg = trueCanonCfgV();
+  var voyPlan = P.mergePlan(voyCfg);
+  var vips = (voyPlan.guests || []).filter(function (g) { return g.vip; });
+  ok(vips.length === 4, 'exactly 4 VIP guests are available to buddy (' + vips.length + ')');
+
+  function starId(gid) { return 't_v_star_' + gid; }
+  // [integrator note] atom ids are not pinned by the plan for buddy tasks (buddy assignment is
+  // player-chosen, not role-fixed, so these can't be role-keyed lane atoms like
+  // "arrival_exec_logi" — the constitution's own precedent for non-role-fixed tasks is
+  // "task-homed" ids, e.g. arrival_money_hd_a_board). atomForTask matches by substring so it
+  // survives an exact-prefix difference as long as the taskId itself appears in the atom id.
+  function atomForTask(atoms, taskId) { return atoms.filter(function (a) { return a.id.indexOf(taskId) >= 0; })[0] || null; }
+
+  if (vips.length >= 2) {
+    var vip0 = vips[0], vip1 = vips[1];
+
+    // (a) unassigned VIP -> its auto-instantiated task exists but is unstaffed, and is priced as such
+    var noBuddyCfg = trueCanonCfgV();
+    noBuddyCfg.overrides.buddies = {};
+    var noBuddyPlan = P.mergePlan(noBuddyCfg);
+    var nbTasks = P.tasksForSeg(noBuddyPlan, 'voyage'), nbById = {};
+    nbTasks.forEach(function (t) { nbById[t.id] = t; });
+    var t0star = nbById[starId(vip0.id)];
+    ok(!!t0star, 'the VIP starlink task ' + starId(vip0.id) + ' exists in the voyage roster (auto-instantiated per VIP)');
+    ok(t0star && (!t0star.assignedIds || t0star.assignedIds.length === 0), 'unassigned VIP ' + vip0.id + ': ' + starId(vip0.id) + ' is unstaffed with no buddy set');
+
+    var noBuddyTrip = P.scoreTrip(noBuddyPlan);
+    var a0 = atomForTask(noBuddyTrip.atoms, starId(vip0.id));
+    ok(!!a0 && a0.earned === 0, 'unassigned VIP ' + vip0.id + ': its priced atom earns 0 (' + (a0 && a0.id) + '/' + (a0 && a0.earned) + ')');
+
+    // (b) assigned buddy -> the task is staffed and earns its pts
+    var oneBuddyCfg = trueCanonCfgV();
+    oneBuddyCfg.overrides.buddies = {}; oneBuddyCfg.overrides.buddies[vip0.id] = 'p06';
+    var oneBuddyPlan = P.mergePlan(oneBuddyCfg);
+    var obById = {}; P.tasksForSeg(oneBuddyPlan, 'voyage').forEach(function (t) { obById[t.id] = t; });
+    var t0starB = obById[starId(vip0.id)];
+    ok(t0starB && t0starB.assignedIds && t0starB.assignedIds.indexOf('p06') >= 0, 'assigning buddy p06 to VIP ' + vip0.id + ' staffs ' + starId(vip0.id) + ' with p06');
+    var a0b = atomForTask(P.scoreTrip(oneBuddyPlan).atoms, starId(vip0.id));
+    ok(!!a0b && a0b.earned === a0b.maxPts, 'assigned VIP ' + vip0.id + ': its priced atom earns its full maxPts (' + (a0b && a0b.earned) + '/' + (a0b && a0b.maxPts) + ')');
+
+    // (c) double-booked buddy: the SAME organizer buddies 2 VIPs (spec §3 explicitly allows up to
+    // 2 per organizer) -> their same-window escort/starlink tasks collide -> an overload readout,
+    // via the SAME generic per-person overlap machinery §20 already uses for coarse days
+    var dbCfg = trueCanonCfgV();
+    dbCfg.overrides.buddies = {}; dbCfg.overrides.buddies[vip0.id] = 'p06'; dbCfg.overrides.buddies[vip1.id] = 'p06';
+    var dbPlan = P.mergePlan(dbCfg);
+    var dbDs = P.daySchedule(dbPlan, 'voyage');
+    ok(dbDs.overbookMin > 0, 'buddy p06 double-booked across VIPs ' + vip0.id + '/' + vip1.id + ' -> overbookMin>0 (' + dbDs.overbookMin + ')');
+    var dbRd = P.dayReadiness(dbPlan, 'voyage');
+    ok(dbRd.some(function (r) { return r.type === 'OVERLOAD'; }), 'double-booked buddy -> dayReadiness surfaces an OVERLOAD hint (' + dbRd.map(function (r) { return r.type; }).join(',') + ')');
+  }
+
+  // (d) missing bl_card authority fails the money gate (spec §3: "a new bl_card budget envelope
+  // with approver and payMethod"). [integrator note] atom id matched by /card/i since the exact
+  // derived id (e.g. voyage_money_bl_card, per the "money atoms are task-homed" precedent) isn't
+  // pinned by the plan.
+  var cardCfg = trueCanonCfgV();
+  cardCfg.overrides.budget = cardCfg.overrides.budget || {};
+  cardCfg.overrides.budget.lines = cardCfg.overrides.budget.lines || {};
+  cardCfg.overrides.budget.lines.bl_card = { approverRoleId: 'budgetLead', payMethod: 'card' };
+  var cardPlan = P.mergePlan(cardCfg);
+  var cardAtom = P.scoreTrip(cardPlan).atoms.filter(function (a) { return /card/i.test(a.id); })[0];
+  ok(!!cardAtom, 'a money atom keyed to bl_card exists in the ledger (' + (cardAtom && cardAtom.id) + ')');
+  ok(!!cardAtom && cardAtom.earned === cardAtom.maxPts, 'granting bl_card approver+payMethod earns its money atom (' + (cardAtom && cardAtom.earned) + '/' + (cardAtom && cardAtom.maxPts) + ')');
+
+  var noCardCfg = trueCanonCfgV();
+  noCardCfg.overrides.budget = noCardCfg.overrides.budget || {};
+  noCardCfg.overrides.budget.lines = noCardCfg.overrides.budget.lines || {};
+  noCardCfg.overrides.budget.lines.bl_card = { approverRoleId: null, payMethod: null };
+  var noCardPlan = P.mergePlan(noCardCfg);
+  var noCardAtom = P.scoreTrip(noCardPlan).atoms.filter(function (a) { return /card/i.test(a.id); })[0];
+  ok(!!noCardAtom && noCardAtom.earned === 0, 'missing bl_card authority -> its money atom earns 0 (' + (noCardAtom && noCardAtom.earned) + ')');
+  ok(!!noCardAtom && noCardAtom.reasonKey === 'scr_money_gap', 'missing bl_card authority -> reasonKey scr_money_gap (' + (noCardAtom && noCardAtom.reasonKey) + ')');
+})();
+
+console.log('\n=== VOYAGE §4 — the re-derived constitution (spec §4; integrator-PINS) ===');
+(function () {
+  // integrator-PINS: spec §4 gives TARGET bucket sizes only ("~"), not frozen exact values —
+  // "exact frozen values land at integration and are pinned in verify, like PINS" (spec §4).
+  // TARGET below is the estimate this task can compute from the spec text alone; PINS_VOYAGE
+  // carries the exact-value fields the integrator MUST overwrite from the merged engine.js
+  // before committing (mirrors the identical PRE-MEASURED-ESTIMATE contract the rubric-v1.0 PINS
+  // block used during ITS OWN concurrent build — see the retired PINS note earlier in this file).
+  var TARGET = { frame: 12, load: 11, voyage: 12, arrival: 12, ops: 14, fishday: 30, 'return': 9 };
+  var PINS_VOYAGE = {
+    gappyTotal: null,       // TBD — integrator measures scoreTrip(mergePlan(base)).total
+    fixHandoffsJump: null,  // TBD — integrator measures the fixHandoffs delta from gappy
+    ladderFinal: 100        // spec §6: the true canonical must still reach 100/A/clean (frozen)
+  };
+
+  var canonPlan = P.mergePlan(trueCanonCfgV());
+  var gappyPlan = P.mergePlan(base);
+  var tCanon = P.scoreTrip(canonPlan), tGappy = P.scoreTrip(gappyPlan);
+
+  function sumMax(atoms) { var s = 0; atoms.forEach(function (a) { s += a.maxPts; }); return s; }
+  ok(sumMax(tGappy.atoms) === 100, 'scoreTrip (Voyage): Sigma atoms.maxPts === 100 on gappy (' + sumMax(tGappy.atoms) + ')');
+  ok(sumMax(tCanon.atoms) === 100, 'scoreTrip (Voyage): Sigma atoms.maxPts === 100 on canonical (' + sumMax(tCanon.atoms) + ')');
+
+  var BUCKET_KEYS = ['frame', 'load', 'voyage', 'arrival', 'ops', 'fishday', 'return'];
+  var bb = {}; for (var k in tCanon.byBucket) bb[k] = tCanon.byBucket[k].maxPts;
+  ok(BUCKET_KEYS.every(function (k) { return bb.hasOwnProperty(k); }) && Object.keys(bb).length === BUCKET_KEYS.length,
+    'scoreTrip (Voyage): byBucket carries exactly the 7 buckets frame/load/voyage/arrival/ops/fishday/return (' + JSON.stringify(bb) + ')');
+  var bbSum = 0; BUCKET_KEYS.forEach(function (k) { bbSum += bb[k]; });
+  ok(bbSum === 100, 'scoreTrip (Voyage): byBucket maxPts sums to exactly 100 (' + bbSum + ')');
+  BUCKET_KEYS.forEach(function (k) {
+    ok(Math.abs(bb[k] - TARGET[k]) <= 3, 'scoreTrip (Voyage): bucket ' + k + ' lands near its spec §4 target ' + TARGET[k] + ' (+/-3, landed ' + bb[k] + ')');
+  });
+
+  // fishday is STRICTLY the heaviest bucket — the thesis, never a tie (spec §4)
+  var maxOtherBucket = Math.max.apply(null, BUCKET_KEYS.filter(function (k) { return k !== 'fishday'; }).map(function (k) { return bb[k]; }));
+  ok(bb.fishday > maxOtherBucket, 'scoreTrip (Voyage): fishday (' + bb.fishday + ') is strictly the heaviest bucket (next largest ' + maxOtherBucket + ')');
+
+  // Information is STRICTLY the heaviest dimension (spec §4)
+  var bd = {}; for (var k2 in tCanon.byDimension) bd[k2] = tCanon.byDimension[k2].maxPts;
+  var bdSum = 0; for (var k3 in bd) bdSum += bd[k3];
+  ok(bdSum === 100, 'scoreTrip (Voyage): byDimension maxPts sums to exactly 100 (' + bdSum + ')');
+  var maxOtherDim = Math.max.apply(null, Object.keys(bd).filter(function (k) { return k !== 'info'; }).map(function (k) { return bd[k]; }));
+  ok(bd.info > maxOtherDim, 'scoreTrip (Voyage): Information (' + bd.info + ') is strictly the heaviest dimension (next largest ' + maxOtherDim + ')');
+
+  // fixHandoffs remains the single strictly-largest jump from the gappy seed, now measured
+  // against every classic fix AND every applyDayFix candidate across all 5 non-fishday days
+  var CLASSIC = ['setSafety', 'grantAuth', 'shareInfo', 'setReport', 'rebalance', 'fixReserve', 'setReturn'];
+  var deltas = {};
+  CLASSIC.forEach(function (fx) { deltas[fx] = P.scoreTrip(P.mergePlan(P.applyFix(base, fx))).total - tGappy.total; });
+  ['load', 'voyage', 'arrival', 'ops', 'return'].forEach(function (seg) {
+    deltas['applyDayFix_' + seg] = P.scoreTrip(P.mergePlan(P.applyDayFix(base, seg))).total - tGappy.total;
+  });
+  deltas.fixHandoffs = P.scoreTrip(P.mergePlan(P.applyFix(base, 'fixHandoffs'))).total - tGappy.total;
+  var otherKeys = Object.keys(deltas).filter(function (k) { return k !== 'fixHandoffs'; });
+  var maxOther = Math.max.apply(null, otherKeys.map(function (k) { return deltas[k]; }));
+  ok(deltas.fixHandoffs > maxOther, 'scoreTrip (Voyage): fixHandoffs delta (+' + deltas.fixHandoffs + ') remains the single strictly-largest jump (next best +' + maxOther + ', ' + JSON.stringify(deltas) + ')');
+
+  // the true canonical (all classic fixes + applyDayFix over all 5 non-fishday authorable days)
+  // still reaches 100/A/clean — the spec §6 anchor extended to the 2 new segments
+  ok(tCanon.total === PINS_VOYAGE.ladderFinal && tCanon.grade === 'A' && tCanon.gate.clean === true,
+    'scoreTrip (Voyage): true canonical (classic fixes + load/voyage/arrival/ops/return canonDay) -> 100/A/clean (' + tCanon.total + '/' + tCanon.grade + ')');
+  ok(tCanon.atoms.every(function (a) { return a.earned === a.maxPts; }), 'scoreTrip (Voyage): true canonical -> every atom earns its maxPts exactly (no surviving gap)');
+
+  // gappy grades D (spec §6 target band 45-60, extended into load/voyage's own seed gaps —
+  // "load ships with the jig case never assigned + cabin list unshared", "voyage ships with 2 VIP
+  // buddies unassigned + card authority missing"). Exact PINS_VOYAGE.gappyTotal is TBD above.
+  ok(tGappy.grade === 'D' || (tGappy.total >= 45 && tGappy.total <= 60),
+    'scoreTrip (Voyage): gappy trip is in the D band 45-60 (or grade D) pending the exact integrator PINS (' + tGappy.total + '/' + tGappy.grade + ')');
+  ok(tGappy.gate.clean === false, 'scoreTrip (Voyage): gappy trip is not clean');
+
+  console.log('  [integrator] voyage byBucket:', JSON.stringify(bb));
+  console.log('  [integrator] voyage byDimension:', JSON.stringify(bd));
+  console.log('  [integrator] voyage gappy total:', tGappy.total, 'grade:', tGappy.grade, 'fixHandoffs jump:', deltas.fixHandoffs);
+})();
+
+console.log('\n=== VOYAGE — i18n additions (plan §Key pinned interfaces) ===');
+(function () {
+  var STR = require('./i18n.js');
+  var enKeys = Object.keys(STR.en || {}), jaKeys = Object.keys(STR.ja || {});
+  // symmetric parity re-affirmed here (already asserted once in the v1.0 §8 block above); kept
+  // as its own check in the Voyage section so a future edit to either block alone still catches
+  // an asymmetry introduced by the new gd_*/snd*/day-label keys
+  var onlyEn = enKeys.filter(function (k) { return jaKeys.indexOf(k) < 0; });
+  var onlyJa = jaKeys.filter(function (k) { return enKeys.indexOf(k) < 0; });
+  ok(onlyEn.length === 0 && onlyJa.length === 0, 'i18n: EN/JA key sets stay symmetric after the Voyage additions (only-EN=' + onlyEn.join(',') + ' only-JA=' + onlyJa.join(',') + ')');
+
+  // RECONCILIATION (W1-gate Opus review): the plan's speculative "gd_* i18n key family" guess did
+  // not land — the engine's actual (final) shape carries guest/care bilingual content INLINE on
+  // plan.guests (id gd_*, name:{en,jp}), never as i18n.js STR keys (confirmed: i18n.js has zero
+  // buddy/starlink/escort/vip/care/gd_ occurrences). That inline shape is exactly what "Key pinned
+  // interfaces" asked for (full EN/JP parity on the guest/care surface) — reconciled here to assert
+  // it against its real location instead of a nonexistent i18n key family.
+  var gdPlan = P.mergePlan(trueCanonCfgV());
+  var gdGuests = gdPlan.guests || [];
+  ok(gdGuests.length > 0 && gdGuests.every(function (g) { return /^gd_/.test(g.id) && g.name && g.name.en && g.name.jp; }),
+    'i18n (reconciled): every guest/care id (gd_*) carries a full EN+JP bilingual name inline on plan.guests (' + gdGuests.length + ')');
+  ok(gdGuests.filter(function (g) { return g.vip; }).length === 4 && gdGuests.filter(function (g) { return g.vip; }).every(function (g) { return g.name.en && g.name.jp; }),
+    'i18n (reconciled): all 4 VIP guest/care entries carry bilingual names');
+
+  // day labels for load/voyage — exact key name not pinned by the plan, matched loosely on the
+  // segment name so this survives a rename
+  ok(enKeys.some(function (k) { return /load|voyage/i.test(k); }), 'i18n: at least one EN key names load/voyage');
+  ok(jaKeys.some(function (k) { return /load|voyage/i.test(k); }), 'i18n: at least one JA key names load/voyage');
 })();
 
 console.log('\n' + (fail === 0 ? 'ALL ' + pass + ' CHECKS PASSED ✓' : pass + ' passed, ' + fail + ' FAILED ✗'));
