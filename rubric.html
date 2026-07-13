@@ -53,7 +53,7 @@
   var P = window.PRS, S = window.STR, L = 'en';
   var plan = P.mergePlan({ seed: 1, overrides: {} });
   var trip = P.scoreTrip(plan);   // maxPts is plan-invariant (§5 template denominators) — the framework itself
-  var BUCKETS = ['frame', 'arrival', 'ops', 'fishday', 'return'];
+  var BUCKETS = ['frame', 'load', 'voyage', 'arrival', 'ops', 'fishday', 'return'];
   var DIMS = ['info', 'exec', 'safety', 'quality', 'money', 'people'];
 
   // page copy (kept local so the game's i18n parity surface stays game-only)
@@ -61,7 +61,8 @@
     en: {
       title: 'The 100-Point Framework', back: '← back to the game',
       sub: 'Every point is one named, checkable decision. This page is rendered live from the same engine that scores your plan — it cannot drift.',
-      mxh: 'The frozen matrix — 5 phases × 6 dimensions', mxnote: 'Fishing Day and Information carry the most points because they contain the most clocked decisions — the heart of the game is that information has a deadline.',
+      mxh: 'The frozen matrix — 7 phases × 6 dimensions', mxnote: 'Fishing Day and Information carry the most points because they contain the most clocked decisions — the heart of the game is that information has a deadline.',
+      vipCare: 'VIP care aboard (Starlink + meal escorts)',
       gateh: 'How the grade works',
       gate: '<p><b>A</b> requires <b>90+ points AND zero known gaps</b> — a plan can score 97 and still read “97 · B — an A requires zero known gaps.”</p><p><b>B</b> ≥ 75 · <b>C</b> ≥ 60 · otherwise <b>D</b>.</p><p>The Score answers “is the plan sound?” (causes). A separate <b>Efficiency %</b> answers “does it waste anyone’s time?” (effects). One late hand-off honestly bills both.</p><p>Riskable information (3 pts) splits: 1 for <i>specifying</i> the hand-off at all, 2 for it <i>arriving on time</i> — never drawn loses all 3, drawn-but-late keeps 1.</p>',
       invh: 'The full inventory — every point, named',
@@ -81,7 +82,8 @@
     ja: {
       title: '100点の設計図', back: '← ゲームへ戻る',
       sub: 'すべての得点は、名前のある検証可能な意思決定です。このページは採点エンジンそのものから描画されるため、実際の採点と食い違うことはありません。',
-      mxh: '固定マトリクス——5つの局面 × 6つの側面', mxnote: '釣行日と「情報」が最も重いのは、時刻を持つ意思決定が最も多く含まれるからです——情報には締切がある、がこのゲームの核心です。',
+      mxh: '固定マトリクス——7つの局面 × 6つの側面', mxnote: '釣行日と「情報」が最も重いのは、時刻を持つ意思決定が最も多く含まれるからです——情報には締切がある、がこのゲームの核心です。',
+      vipCare: '船上VIPケア（Starlink登録＋食事エスコート）',
       gateh: '評価の仕組み',
       gate: '<p><b>A評価</b>には<b>90点以上かつ既知のギャップゼロ</b>が必要です——97点でも「97点・B——A評価には既知のギャップゼロが条件」と表示されます。</p><p><b>B</b> ≥ 75点 ・ <b>C</b> ≥ 60点 ・ それ未満は<b>D</b>。</p><p>スコアは「計画は健全か」(原因)に、別枠の<b>稼働効率%</b>は「誰かの時間を無駄にしていないか」(結果)に答えます。遅れた受け渡しは正直に両方へ計上されます。</p><p>誤釣リスクのある情報(3点)は分割されます：受け渡しを<i>設計した</i>ことに1点、<i>時間内に届いた</i>ことに2点——未設計は3点全損、設計済みでも遅延なら1点のみ。</p>',
       invh: '全項目一覧——すべての得点に名前',
@@ -107,13 +109,21 @@
   function t(k) { return (S[L] && S[L][k]) || (S.en && S.en[k]) || k; }
   function byId(arr, id) { for (var i = 0; i < (arr || []).length; i++) if (arr[i].id === id) return arr[i]; return null; }
   function taskAcrossSegs(id) {
-    var segs = ['arrival', 'ops', 'fishday', 'return'];
+    var segs = ['load', 'voyage', 'arrival', 'ops', 'fishday', 'return'];
     for (var i = 0; i < segs.length; i++) { var tk = byId(P.tasksForSeg(plan, segs[i]), id); if (tk) return tk; }
     return null;
   }
   function atomName(a) {
     var ref = a.itemRef;
     if (NM_FIX[a.id]) return nm(NM_FIX[a.id]);
+    if (ref && ref.guestId) {
+      var g = byId(plan.guests, ref.guestId);
+      return R[L].vipCare + ' — ' + (g ? nm(g.name) : ref.guestId);
+    }
+    if (ref && ref.lineId) {
+      var bl = byId(plan.budget.lines, ref.lineId);
+      return bl ? nm(bl.name) : ref.lineId;
+    }
     if (ref && ref.cardId) {
       var card = byId(plan.infoCards, ref.cardId);
       var rn = ref.roleId ? nm(P.role(ref.roleId).name) : '';
