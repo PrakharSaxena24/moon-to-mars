@@ -131,6 +131,19 @@
       rhUnplaced: function (task) { return '○ “' + task + '” still needs a slot on the board'; },
       rhDecoy: function (task) { return '✗ “' + task + '” is a decoy — pull it back off the board'; },
       rhMisassigned: function (task) { return '⚠ “' + task + '” is staffed by the wrong role'; },
+      // Voyage §2: the load-day custody-chain hint (an item never reaches a truck run)
+      rhCarryGap: function (item) { return '📦 “' + item + '” never made the truck — it will miss the ship'; },
+
+      // --- Voyage §3: the care shelf (VIP buddies on the ship day) ---
+      gdShelfTitle: '🛎 VIP care shelf',
+      gdCount: function (n) { return n + ' VIP' + (n === 1 ? '' : 's') + ' still need' + (n === 1 ? 's' : '') + ' a buddy'; },
+      gdCardAria: function (guest, buddy) { return 'VIP care card — ' + guest + '. Buddy: ' + buddy + '.'; },
+      gdRejNotOrganizer: function (name) { return name + ' isn’t an AIBOS organizer — a VIP needs an organizer buddy.'; },
+      gdRejCap: function (name) { return name + ' already has 2 VIPs — pick someone else.'; },
+      gdUnassign: 'Remove buddy',
+      gdBuddyLbl: 'VIP buddy assignment',
+      gdBuddyOf: function (guest) { return 'Buddy for ' + guest; },
+      gdNone: '— none —',
       arFrom: 'From', arTo: 'To', arTrigger: 'Send when', arChannel: 'Channel (adds minutes)',
       arTrigDone: 'when the producing task finishes', arTrigAt: 'at a set time',
       arriveOk: function (tm) { return '✓ arrives ' + tm + ' — in time'; },
@@ -269,7 +282,7 @@
       sec_transport_t: '🚤 Transport', sec_transport_b: 'Loading & haul-out — everything is loaded onto the small trucks and carried down to the port, where the boats wait (Nobu-san → the iso rock; Kimura-san → the jigging grounds).',
 
       // --- §13.3 scoring ledger: bucket / dimension names, reason templates, status chips ---
-      sb_frame: 'Trip Frame', sb_arrival: 'Arrival', sb_ops: 'Ops', sb_fishday: 'Fishing Day', sb_return: 'Return',
+      sb_frame: 'Trip Frame', sb_load: 'Load & Board', sb_voyage: 'Ship Day', sb_arrival: 'Arrival', sb_ops: 'Ops', sb_fishday: 'Fishing Day', sb_return: 'Return',
       sd_info: 'Info', sd_exec: 'Execution', sd_safety: 'Safety', sd_quality: 'Quality', sd_money: 'Money', sd_people: 'People',
       scr_info_ok: 'Delivered on time', scr_info_late: 'Arrived late — waited on it (手待ち)',
       scr_info_missing: 'No handoff drawn — nobody knew (迷い)', scr_info_drawn_late: 'Drawn, but arrived late (partial credit)',
@@ -500,6 +513,19 @@
       rhUnplaced: function (task) { return '○「' + task + '」がまだ配置されていません'; },
       rhDecoy: function (task) { return '✗「' + task + '」はダミー——デッキに戻す'; },
       rhMisassigned: function (task) { return '⚠「' + task + '」の担当役割が違います'; },
+      // Voyage §2：積込日の輸送チェーンの穴（品目がトラック輸送に積まれていない）
+      rhCarryGap: function (item) { return '📦「' + item + '」がトラックに積まれておらず——船に載りません'; },
+
+      // --- Voyage §3：VIP対応棚（船上でのVIPバディ割り当て） ---
+      gdShelfTitle: '🛎 VIP対応棚',
+      gdCount: function (n) { return 'VIP ' + n + '名が担当未定'; },
+      gdCardAria: function (guest, buddy) { return 'VIP対応カード——' + guest + '様。担当：' + buddy + '。'; },
+      gdRejNotOrganizer: function (name) { return name + 'はAIBOS運営メンバーではありません——VIPには運営担当者が必要です。'; },
+      gdRejCap: function (name) { return name + 'はすでにVIPを2名担当しています——別の人を選んでください。'; },
+      gdUnassign: '担当を外す',
+      gdBuddyLbl: 'VIP担当の割り当て',
+      gdBuddyOf: function (guest) { return guest + '様の担当'; },
+      gdNone: '— なし —',
       arFrom: '送り手', arTo: '受け手', arTrigger: '送るタイミング', arChannel: '伝達手段（遅延）',
       arTrigDone: '生産タスクの完了時', arTrigAt: '時刻指定',
       arriveOk: function (tm) { return '✓ ' + tm + ' 着——間に合う'; },
@@ -638,7 +664,7 @@
       sec_transport_t: '🚤 移動', sec_transport_b: '積み込み・搬送——すべてを小型トラックに積み込み、船が待つ港まで運ぶ（のぶさん→磯、きむらさん→沖のジギング）。',
 
       // --- §13.3 採点台帳：バケット／ディメンション名、減点理由テンプレート、状態チップ ---
-      sb_frame: '全体基盤', sb_arrival: '到着', sb_ops: '運営', sb_fishday: '釣行日', sb_return: '帰着',
+      sb_frame: '全体基盤', sb_load: '積込・乗船', sb_voyage: '船上', sb_arrival: '到着', sb_ops: '運営', sb_fishday: '釣行日', sb_return: '帰着',
       sd_info: '情報', sd_exec: '実行', sd_safety: '安全', sd_quality: '品質', sd_money: '予算', sd_people: '人員',
       scr_info_ok: '情報は定刻に届いた', scr_info_late: '到着が遅れ、手待ちが発生',
       scr_info_missing: '受け渡しが未設定——迷いが発生', scr_info_drawn_late: '矢印はあるが到着が遅れた（一部減点）',

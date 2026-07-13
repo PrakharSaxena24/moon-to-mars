@@ -24,6 +24,11 @@
   function detsForDay(d) { return (d === 'all') ? DETS.slice() : DETS.filter(function (id) { return DET_SEG[id].indexOf(d) >= 0; }); }
   function dayLabel(seg) { if (seg === 'all') return T().wholeTrip; var s = null; P.SEGMENTS.forEach(function (x) { if (x.id === seg) s = x; }); return s ? nm(s.name) : seg; }
   function dayGapCount(seg) { return P.gapsForSegment(currentPlan(), seg).length; }
+  // Rail/ledger bucket label. sb_load/sb_voyage are not in i18n yet (W2a's pinned key list predates
+  // the Voyage program's two new scored buckets), so fall back to a clean bilingual label — and prefer
+  // the i18n key the moment W2a adds it. Never renders "undefined"/"sb_load".
+  var SB_FALLBACK = { load: { en: 'Load & Board', jp: '積込・乗船' }, voyage: { en: 'Ship Day', jp: '船上' } };
+  function sbLabel(bk) { var v = T()['sb_' + bk]; if (typeof v === 'string') return v; return SB_FALLBACK[bk] ? nm(SB_FALLBACK[bk]) : ('sb_' + bk); }
 
   // which design decisions the player has closed (true = fixed)
   var fixed = { setSafety: false, grantAuth: false, shareInfo: false, setReport: false, rebalance: false, fixReserve: false, setReturn: false, fixHandoffs: false };
@@ -44,16 +49,29 @@
     return true;
   }
   function orgSeatReset() { orgOv = { owner: 'p01', pm: 'p02', siteLead: 'p03', budgetLead: 'p04', safetyLead: 'p05', logi: 'p06', comms: 'p07', specialist: 'p08' }; }
+  // Voyage §3 VIP buddies: overrides.buddies {guestId: pid|null}. Empty = template default
+  // (byte-identical-default invariant, mirrors orgOv/mcOv — an untouched care shelf adds NOTHING
+  // to cfg.overrides). Person-based (pid), so a buddy composes with a seat swap: the SAME person
+  // still escorts the VIP after the seats move. mergePlan re-homes the auto-instantiated care
+  // tasks onto the buddy and enforces the 2-VIP-per-organizer cap; the UI rejects before writing.
+  var buddyOv = {};
+  function buddyReset() { buddyOv = {}; }
+  // VIP care count on a merged plan: how many other VIPs (≠ exceptGid) a person already buddies.
+  function buddyLoadOf(plan, pid, exceptGid) {
+    var n = 0, gs = plan.guests || [];
+    for (var i = 0; i < gs.length; i++) if (gs[i].vip && gs[i].id !== exceptGid && plan.buddies[gs[i].id] === pid) n++;
+    return n;
+  }
   // §20 authorable-days editor state — ONE deck→arrange→connect override store for all four
   // day tabs. Fishday's sub-object keeps the LEGACY timing/staffing/handoffs channels (so its
   // verify/E2E anchors stay byte-identical); arrival/ops/return use the unified placement/handoffs
   // schema that buildCfg folds into overrides.days[seg] (§20.3).
   function freshDayOv(seg) { return seg === 'fishday' ? { timing: {}, staffing: {}, handoffs: {} } : { placement: {}, handoffs: {} }; }
-  var dayOv = { arrival: freshDayOv('arrival'), ops: freshDayOv('ops'), 'return': freshDayOv('return'), fishday: freshDayOv('fishday') };
+  var dayOv = { load: freshDayOv('load'), voyage: freshDayOv('voyage'), arrival: freshDayOv('arrival'), ops: freshDayOv('ops'), 'return': freshDayOv('return'), fishday: freshDayOv('fishday') };
   // Reset ALL four days (not just fishday) — "Reset to gappy" / "Auto-fix all" must clear coarse-day
   // deck authoring too, or a hand-authored arrival/ops/return arrangement would survive underneath a
   // reset button that visibly claims to start over.
-  function fdReset() { dayOv = { arrival: freshDayOv('arrival'), ops: freshDayOv('ops'), 'return': freshDayOv('return'), fishday: freshDayOv('fishday') }; }
+  function fdReset() { dayOv = { load: freshDayOv('load'), voyage: freshDayOv('voyage'), arrival: freshDayOv('arrival'), ops: freshDayOv('ops'), 'return': freshDayOv('return'), fishday: freshDayOv('fishday') }; }
   // fixHandoffs must win over stale hand-edits/erasures of the canonical arrows,
   // or the fix-pack button would appear to do nothing (the hand-edit re-breaks it).
   // ANY block re-timing can re-break the zero-idle anchor through the dep chain
@@ -78,7 +96,7 @@
     for (k in dayOv.fishday.timing) { (o.timing = o.timing || {})[k] = dayOv.fishday.timing[k]; }
     for (k in dayOv.fishday.staffing) { (o.staffing = o.staffing || {})[k] = dayOv.fishday.staffing[k]; }
     for (k in dayOv.fishday.handoffs) { (o.handoffs = o.handoffs || {})[k] = dayOv.fishday.handoffs[k]; }
-    ['arrival', 'ops', 'return'].forEach(function (seg) {
+    ['load', 'voyage', 'arrival', 'ops', 'return'].forEach(function (seg) {
       var ov = dayOv[seg], hasP = Object.keys(ov.placement).length, hasH = Object.keys(ov.handoffs).length;
       if (!hasP && !hasH) return;
       o.days = o.days || {}; var od = o.days[seg] = o.days[seg] || {};
@@ -86,6 +104,7 @@
       if (hasH) { od.handoffs = od.handoffs || {}; for (k in ov.handoffs) od.handoffs[k] = ov.handoffs[k]; }
     });
     if (!isDefaultSeats()) { o.seats = {}; for (k in orgOv) o.seats[k] = orgOv[k]; }
+    if (Object.keys(buddyOv).length) { o.buddies = {}; for (k in buddyOv) o.buddies[k] = buddyOv[k]; }   // Voyage §3
     return cfg;
   }
   function currentPlan() { return P.mergePlan(buildCfg()); }
@@ -163,11 +182,11 @@
   // =========================================================================
   // SETUP
   // =========================================================================
-  function paintSetup() { buildDaySelect(); buildCanvas(); buildOrg(); buildTimeline(); buildMissionControl(); buildEditors(); buildDayGrid(); updatePlanUI(); }
+  function paintSetup() { buildDaySelect(); buildCanvas(); buildOrg(); buildBuddyCard(); buildTimeline(); buildMissionControl(); buildEditors(); buildDayGrid(); updatePlanUI(); }
 
   function buildDaySelect() {
     var box = $('day-select'); if (!box) return;
-    var opts = ['arrival', 'ops', 'fishday', 'return', 'all'];   // chronological display order
+    var opts = ['load', 'voyage', 'arrival', 'ops', 'fishday', 'return', 'all'];   // chronological display order
     box.innerHTML = opts.map(function (seg) {
       var n = dayGapCount(seg), clean = n === 0;
       return '<button class="day-btn' + (seg === daySel ? ' on' : '') + '" data-day="' + seg + '">' +
@@ -214,6 +233,25 @@
       chip.innerHTML = '<span class="rc-ic" style="background:' + rr.color + '">' + rr.icon + '</span><span class="rc-body">' + body + '</span>';
       box.appendChild(chip);
     });
+  }
+
+  // Voyage §3 — the All-settings fallback for the care shelf: one <select> per VIP over the 8
+  // organizers (+ "none"), writing the SAME overrides.buddies as the tray. The cap is enforced in
+  // the change handler (a 3rd VIP on one organizer is rejected + reverted), mirroring the tray.
+  function buildBuddyCard() {
+    var box = $('buddy-card'); if (!box) return;
+    var t = T(), plan = currentPlan();
+    var ttl = $('buddy-title'); if (ttl) ttl.textContent = t.gdBuddyLbl;
+    var vips = (plan.guests || []).filter(function (g) { return g.vip; });
+    var orgs = plan.participants.filter(function (p) { return SEAT_ROLES.indexOf(p.roleId) >= 0; });
+    box.innerHTML = vips.map(function (g) {
+      var bpid = plan.buddies[g.id] || '';
+      var opts = '<option value="">' + t.gdNone + '</option>' + orgs.map(function (p) {
+        return '<option value="' + p.id + '"' + (p.id === bpid ? ' selected' : '') + '>' + nm(p.name) + '</option>';
+      }).join('');
+      return '<label class="buddy-row"><span class="buddy-nm">' + t.gdBuddyOf(nm(g.name)) + '</span>' +
+        '<select class="buddy-sel mc-sel" data-guest="' + g.id + '" aria-label="' + t.gdBuddyOf(nm(g.name)) + '">' + opts + '</select></label>';
+    }).join('');
   }
 
   function buildTimeline() {
@@ -377,7 +415,7 @@
     return LEDGER_BUCKETS.map(function (bk) {
       var b = trip.byBucket[bk] || { earned: 0, maxPts: 0 };
       var short = b.earned < b.maxPts;
-      var inner = '<span class="rail-nm">' + t['sb_' + bk] + '</span><span class="rail-pts">' + b.earned + ' / ' + b.maxPts + '</span>';
+      var inner = '<span class="rail-nm">' + sbLabel(bk) + '</span><span class="rail-pts">' + b.earned + ' / ' + b.maxPts + '</span>';
       return clickable
         ? '<button type="button" class="rail-row' + (short ? ' short' : '') + '" data-bucket="' + bk + '">' + inner + '</button>'
         : '<div class="rail-row' + (short ? ' short' : '') + '">' + inner + '</div>';
@@ -426,6 +464,7 @@
     var trip = P.scoreTrip(currentPlan());
     paintReceiptRows(open, trip.total);
     buildOrg();
+    buildBuddyCard();
     $('plan-hint').textContent = gaps ? t.hintGaps(gaps) : t.hintReadyDay(dayLabel(daySel));
     $('plan-hint').className = 'planhint' + (gaps ? '' : ' good');
     buildDaySelect();
@@ -631,6 +670,7 @@
     var t = T(), hints = P.dayReadiness(plan, seg), chips = [], segT = P.tasksForSeg(plan, seg);
     function tn(id) { var x = byId(segT, id); return x ? nm(x.name) : id; }
     function cn(id) { var x = byId(plan.infoCards, id); return x ? nm(x.name).split('：')[0].split(':')[0] : id; }
+    function mn(id) { var x = byId(plan.manifest || [], id); return x ? nm(x.name) : id; }   // Voyage §2 manifest item name
     function chip(type, txt) { return '<span class="pr-item bad" data-type="' + type + '">' + txt + '</span>'; }
     hints.forEach(function (h) {
       if (h.type === 'MISSING_ARROW') chips.push(chip(h.type, t.rhMissing(cn(h.cardId), tn(h.taskId))));
@@ -643,6 +683,7 @@
       else if (h.type === 'UNPLACED_REQUIRED') chips.push(chip(h.type, t.rhUnplaced(tn(h.taskId))));
       else if (h.type === 'DECOY_PLACED') chips.push(chip(h.type, t.rhDecoy(tn(h.taskId))));
       else if (h.type === 'MISASSIGNED') chips.push(chip(h.type, t.rhMisassigned(tn(h.taskId))));
+      else if (h.type === 'CARRY_GAP') chips.push(chip(h.type, t.rhCarryGap(mn(h.itemId))));
     });
     $('fd-ready').innerHTML = '<span class="pr-lbl">' + t.fdReadyLbl + '</span>' +
       (chips.length ? chips.slice(0, 8).join('') + (chips.length > 8 ? '<span class="pr-item bad">+' + (chips.length - 8) + '</span>' : '')
@@ -2028,9 +2069,9 @@
   // list where every point is a named, reasoned row, grouped bucket -> dimension
   // -> atom. Reads only trip.atoms/byBucket (engine.js §13.2/§13.3); never writes.
   // =========================================================================
-  var LEDGER_BUCKETS = ['frame', 'arrival', 'ops', 'fishday', 'return'];
+  var LEDGER_BUCKETS = ['frame', 'load', 'voyage', 'arrival', 'ops', 'fishday', 'return'];
   var LEDGER_DIMS = ['info', 'exec', 'safety', 'quality', 'money', 'people'];
-  var LEDGER_SEGS = ['arrival', 'ops', 'fishday', 'return'];
+  var LEDGER_SEGS = ['load', 'voyage', 'arrival', 'ops', 'fishday', 'return'];
   // a coarse/fishday single-day report shows that bucket + the trip-wide 'frame' bucket
   // (frame atoms are standing authorities, not tied to one day); 'all' shows all five.
   function ledgerBucketsFor(segment) {
@@ -2126,7 +2167,7 @@
         return '<div class="lg-dim"><div class="lg-dhead"><span>' + T()['sd_' + d] + '</span><b>' + dEarned + ' / ' + dMax + '</b></div>' +
           '<div class="lg-rows">' + rows + '</div></div>';
       }).join('');
-      return '<div class="lg-bucket"><div class="lg-bhead"><span>' + T()['sb_' + bk] + '</span><b>' + bStat.earned + ' / ' + bStat.maxPts + '</b></div>' + dimHtml + '</div>';
+      return '<div class="lg-bucket"><div class="lg-bhead"><span>' + sbLabel(bk) + '</span><b>' + bStat.earned + ' / ' + bStat.maxPts + '</b></div>' + dimHtml + '</div>';
     }).join('');
   }
 
@@ -2699,7 +2740,7 @@
     // by an open drawer, so the drawer header carries its own compact day tabs + whole-trip)
     var tabs = $('dd-tabs');
     if (tabs) {
-      var segs = ['arrival', 'ops', 'fishday', 'return'];
+      var segs = ['load', 'voyage', 'arrival', 'ops', 'fishday', 'return'];
       var html = '';
       for (var ti = 0; ti < segs.length; ti++) {
         html += '<button type="button" class="btn sm dd-tab' + (segs[ti] === seg ? ' on' : '') + '" data-dseg="' + segs[ti] + '" data-day="' + segs[ti] + '">' +
@@ -2840,14 +2881,34 @@
       orgOv[rid] = newPid;
       updatePlanUI();
     });
+    // Voyage §3: the All-settings buddy fallback — write overrides.buddies, cap-guarded like the tray.
+    $('buddy-card').addEventListener('change', function (e) {
+      var s = e.target.closest('.buddy-sel'); if (!s) return;
+      var gid = s.dataset.guest, pid = s.value;
+      if (!pid) { buddyOv[gid] = null; updatePlanUI(); return; }
+      var plan = currentPlan();
+      if (plan.buddies[gid] !== pid && buddyLoadOf(plan, pid, gid) >= 2) {
+        var p = byId(plan.participants, pid); showTrayToast(T().gdRejCap(p ? nm(p.name) : pid));
+        buildBuddyCard(); return;                       // revert the <select> to the real state
+      }
+      buddyOv[gid] = pid; updatePlanUI();
+    });
     $('btn-auto').addEventListener('click', function () { for (var k in fixed) fixed[k] = true; fdReset(); mcReset(); paintSetup(); });
-    $('btn-clear').addEventListener('click', function () { for (var k in fixed) fixed[k] = false; fdReset(); mcReset(); orgSeatReset(); paintSetup(); });
+    $('btn-clear').addEventListener('click', function () { for (var k in fixed) fixed[k] = false; fdReset(); mcReset(); orgSeatReset(); buddyReset(); paintSetup(); });
     $('launch').addEventListener('click', launch);
 
     // §2 COMMAND TRAY — three input modes share the select/resolve/reject grammar.
     // click: keyboard activation (detail 0) opens the target picker; a pointer tap is
     // handled by pointerup (tap-tap select); dock objects (strongbox/satchel) act on any click.
     $('cmd-tray').addEventListener('click', function (e) {
+      var care = e.target.closest('.tray-care-card');
+      if (care) {
+        if (traySuppressClick) return;               // a drag already resolved on the stage
+        var gid = care.getAttribute('data-guest');
+        if (care.classList.contains('assigned')) { unassignBuddy(gid); return; }   // click assigned card -> unassign
+        if (e.detail === 0) openPicker({ kind: 'care', guestId: gid });            // keyboard -> modal picker
+        return;
+      }
       var b = e.target.closest('.tray-obj, .tray-duty'); if (!b) return;
       if (b.classList.contains('dock')) { trayObjAction(b.getAttribute('data-det')); return; }
       if (traySuppressClick) return;                 // a drag already resolved on the stage
@@ -3817,7 +3878,36 @@
     box.innerHTML =
       '<div class="tray-count">' + t.trayCount(unresolvedCount()) + '</div>' +
       '<div class="tray-row tray-decisions">' + objs + '</div>' +
-      '<div class="tray-row tray-dutychips">' + duties + '</div>';
+      '<div class="tray-row tray-dutychips">' + duties + '</div>' +
+      careShelfHtml(plan, t);
+  }
+  // Voyage §3 — the VIP CARE SHELF: the 4 VIP guest cards in the same grammar as duty chips.
+  // An UNASSIGNED card is drag/tap-tap/keyboard-picker onto ORGANIZER pawns only; an ASSIGNED
+  // card shows its buddy and is click-to-unassign. Cards never become tokens (they stay in the
+  // shelf as the VIP roster) — the shelf header counts the still-unbuddied VIPs (gdCount).
+  var CARE_IC = '🎩';
+  function unbuddiedVips(plan) {
+    var n = 0, gs = plan.guests || [];
+    for (var i = 0; i < gs.length; i++) if (gs[i].vip && !plan.buddies[gs[i].id]) n++;
+    return n;
+  }
+  function careShelfHtml(plan, t) {
+    var vips = (plan.guests || []).filter(function (g) { return g.vip; });
+    if (!vips.length) return '';
+    var cards = vips.map(function (g) {
+      var bpid = plan.buddies[g.id], buddy = bpid ? byId(plan.participants, bpid) : null, assigned = !!buddy;
+      var seld = traySel && traySel.kind === 'care' && traySel.guestId === g.id;
+      var cls = 'tray-care-card' + (assigned ? ' assigned' : '') + (seld ? ' sel' : '');
+      var buddyTxt = assigned ? ('⇄ ' + nm(buddy.name)) : t.gdBuddyLbl;
+      var aria = t.gdCardAria(nm(g.name), assigned ? nm(buddy.name) : t.gdNone) + (assigned ? ' · ' + t.gdUnassign : '');
+      return '<button type="button" class="' + cls + '" data-guest="' + g.id + '"' + (assigned ? ' title="' + t.gdUnassign + '"' : '') + ' aria-label="' + aria + '">' +
+        '<span class="tc-ic">' + CARE_IC + '</span>' +
+        '<span class="tc-body"><span class="tc-nm">' + nm(g.name) + '</span><span class="tc-buddy">' + buddyTxt + '</span></span>' +
+        (assigned ? '<span class="tc-x" aria-hidden="true">×</span>' : '') + '</button>';
+    }).join('');
+    return '<div class="tray-care">' +
+      '<div class="tray-care-h">' + t.gdShelfTitle + ' <span class="tray-care-count">' + t.gdCount(unbuddiedVips(plan)) + '</span></div>' +
+      '<div class="tray-row tray-carecards">' + cards + '</div></div>';
   }
   // position halos (valid targets while an object is lifted) + tokens (placed objects) from the fig cache
   function psPositionOverlays() {
@@ -3825,7 +3915,7 @@
     if (!halos || !tokens || !PSTG.sim) return;
     // halos
     var want = {};
-    if (traySel) (traySel.kind === 'duty' ? PSTG.sim.participants.filter(function (p) { return SEAT_ROLES.indexOf(p.roleId) >= 0; }).map(function (p) { return p.id; }) : targetPidsFor(traySel.det)).forEach(function (pid) { want[pid] = 1; });
+    if (traySel) ((traySel.kind === 'duty' || traySel.kind === 'care') ? PSTG.sim.participants.filter(function (p) { return SEAT_ROLES.indexOf(p.roleId) >= 0; }).map(function (p) { return p.id; }) : targetPidsFor(traySel.det)).forEach(function (pid) { want[pid] = 1; });
     for (var pid in want) {
       var h = halos.querySelector('.pawn-halo[data-pid="' + pid + '"]');
       if (!h) { h = document.createElement('div'); h.className = 'pawn-halo'; h.setAttribute('data-pid', pid); halos.appendChild(h); }
@@ -3868,29 +3958,48 @@
     renderTray(); psPositionOverlays();
   }
   function traySelect(sel) {
-    if (traySel && traySel.kind === sel.kind && traySel.det === sel.det && traySel.role === sel.role) { trayDeselect(); return; }
+    if (traySel && traySel.kind === sel.kind && traySel.det === sel.det && traySel.role === sel.role && traySel.guestId === sel.guestId) { trayDeselect(); return; }
     traySel = sel;
     var w = $('plan-stage-wrap'); if (w) w.classList.add('placing');
     renderTray(); psPositionOverlays();
   }
-  function selObjName(sel) { return sel.kind === 'duty' ? (nm(P.role(sel.role).name) + (L === 'ja' ? 'の担当' : ' duty')) : T()[TRAY_OBJ_BY_DET[sel.det].key]; }
+  function selObjName(sel) {
+    if (sel.kind === 'duty') return nm(P.role(sel.role).name) + (L === 'ja' ? 'の担当' : ' duty');
+    if (sel.kind === 'care') { var g = byId(currentPlan().guests || [], sel.guestId); return g ? nm(g.name) : sel.guestId; }
+    return T()[TRAY_OBJ_BY_DET[sel.det].key];
+  }
   function selNeeded(sel) {
-    if (sel.kind === 'duty') return T().trayOrganizer;
+    if (sel.kind === 'duty' || sel.kind === 'care') return T().trayOrganizer;
     if (sel.det === 'info') return T().trayFerryNeeded;
     return nm(P.role(targetRolesFor(sel.det)[0]).name);
   }
-  function trayReject(p, sel) {
-    var t = T(), toast = $('tray-toast'); if (!toast) return;
-    toast.textContent = t.rejLine(nm(p.name), nm(P.role(p.roleId).name), selObjName(sel), selNeeded(sel));
+  var trayToastT = null;
+  function showTrayToast(msg) {
+    var toast = $('tray-toast'); if (!toast) return;
+    toast.textContent = msg;
     toast.classList.remove('hidden'); toast.classList.remove('show'); void toast.offsetWidth; toast.classList.add('show');
     if (trayToastT) clearTimeout(trayToastT);
     trayToastT = setTimeout(function () { toast.classList.remove('show'); toast.classList.add('hidden'); }, 3600);
   }
-  var trayToastT = null;
+  function trayReject(p, sel) { showTrayToast(T().rejLine(nm(p.name), nm(P.role(p.roleId).name), selObjName(sel), selNeeded(sel))); }
+  // Voyage §3 rejection copy: not-an-organizer vs. already-has-2-VIPs (the bijection-ish cap).
+  function careReject(p, capped) { showTrayToast(capped ? T().gdRejCap(nm(p.name)) : T().gdRejNotOrganizer(nm(p.name))); }
   // resolve a selection against a pawn. keepOnReject=true (tap-tap) leaves the selection armed.
   function trayResolve(sel, pid, keepOnReject) {
     if (!pid || !PSTG.sim) { trayDeselect(); return; }
     var p = byId(PSTG.sim.participants, pid); if (!p) { trayDeselect(); return; }
+    if (sel.kind === 'care') {
+      if (SEAT_ROLES.indexOf(p.roleId) < 0) { careReject(p, false); if (!keepOnReject) trayDeselect(); return; }
+      var cpl = currentPlan();
+      if (cpl.buddies[sel.guestId] === p.id) { trayDeselect(); return; }             // already this buddy — no-op
+      if (buddyLoadOf(cpl, p.id, sel.guestId) >= 2) { careReject(p, true); if (!keepOnReject) trayDeselect(); return; }
+      buddyOv[sel.guestId] = p.id;
+      trayDeselect();   // W2 gate nit: full deselect (clears .placing cursor state), then repaint
+      updatePlanUI();
+      var cc = $('tray-objs').querySelector('.tray-care-card[data-guest="' + sel.guestId + '"]');
+      if (cc) { try { cc.focus(); } catch (e) { } }
+      return;
+    }
     if (sel.kind === 'duty') {
       if (SEAT_ROLES.indexOf(p.roleId) < 0) { trayReject(p, sel); if (!keepOnReject) trayDeselect(); return; }
       swapSeats(sel.role, p.roleId); trayDeselect(); updatePlanUI(); return;
@@ -3911,6 +4020,14 @@
     applyReceiptFix(det, false);
     var b = $('tray-objs').querySelector('.tray-obj[data-det="' + det + '"]');
     if (b) { try { b.focus(); } catch (e) { } }
+  }
+  // Voyage §3: click-to-unassign an assigned VIP care card (buddyOv[gid]=null → mergePlan drops it,
+  // even a template-seeded one). Keeps keyboard flow on the now-empty card.
+  function unassignBuddy(gid) {
+    buddyOv[gid] = null; traySel = null;
+    updatePlanUI();
+    var cc = $('tray-objs').querySelector('.tray-care-card[data-guest="' + gid + '"]');
+    if (cc) { try { cc.focus(); } catch (e) { } }
   }
   function openFishdayEditor() {
     daySel = 'fishday'; placingChip = null; removeGhost(); removeDropSlot(); paintSetup();
@@ -3938,15 +4055,20 @@
     var t = T(), body = $('pick-body');
     $('pick-title').textContent = t.pickTitle(selObjName(sel));
     $('pick-sub').textContent = t.pickValidNote;
-    var isDuty = sel.kind === 'duty';
-    var validRoles = isDuty ? SEAT_ROLES : targetRolesFor(sel.det);
+    var isCare = sel.kind === 'care';
+    var validRoles = (sel.kind === 'duty' || isCare) ? SEAT_ROLES : targetRolesFor(sel.det);
+    var carePlan = isCare ? currentPlan() : null;
     var people = PSTG.sim ? PSTG.sim.participants.slice() : currentPlan().participants.filter(function (p) { return p.company !== 'guest'; });
     var rows = people.filter(function (p) { return p.roleId !== 'crew'; }).map(function (p) {
-      var ok = validRoles.indexOf(p.roleId) >= 0, rr = P.role(p.roleId);
+      var ok = validRoles.indexOf(p.roleId) >= 0, rr = P.role(p.roleId), why = '';
+      if (isCare) {
+        if (!ok) why = t.gdRejNotOrganizer(nm(p.name));                                                    // not an organizer
+        else if (carePlan.buddies[sel.guestId] !== p.id && buddyLoadOf(carePlan, p.id, sel.guestId) >= 2) { ok = false; why = t.gdRejCap(nm(p.name)); }   // already 2 VIPs
+      } else if (!ok) why = t.rejLine(nm(p.name), nm(rr.name), selObjName(sel), selNeeded(sel));
       return { ok: ok, html: '<button type="button" class="pick-row' + (ok ? '' : ' bad') + '" data-pid="' + p.id + '"' + (ok ? '' : ' disabled aria-disabled="true"') + '>' +
         '<span class="td-ic" style="background:' + rr.color + '">' + rr.icon + '</span>' +
         '<span class="pick-nm">' + nm(p.name) + '</span><span class="pick-role">' + nm(rr.name) + '</span>' +
-        (ok ? '' : '<span class="pick-why">' + t.rejLine(nm(p.name), nm(rr.name), selObjName(sel), selNeeded(sel)) + '</span>') + '</button>' };
+        (ok ? '' : '<span class="pick-why">' + why + '</span>') + '</button>' };
     });
     rows.sort(function (a, b) { return (a.ok === b.ok) ? 0 : (a.ok ? -1 : 1); });
     body.innerHTML = rows.map(function (r) { return r.html; }).join('');
@@ -3957,6 +4079,12 @@
 
   // ---- pointer drag (also handles tap-tap-select when the pointer doesn't move) ----
   function trayPointerDown(e) {
+    var care = e.target.closest && e.target.closest('.tray-care-card');
+    if (care) {
+      if (care.classList.contains('assigned')) return;   // assigned = click-to-unassign, not draggable
+      trayDrag = { sel: { kind: 'care', guestId: care.getAttribute('data-guest') }, x0: e.clientX, y0: e.clientY, moved: false };
+      return;
+    }
     var b = e.target.closest && e.target.closest('.tray-obj, .tray-duty'); if (!b) return;
     if (b.classList.contains('dock')) return;   // strongbox/satchel: not draggable (click handles them)
     var sel = b.classList.contains('tray-duty')
@@ -3975,7 +4103,7 @@
       renderTray(); psPositionOverlays();
       if (!RM.matches) {
         var g = document.createElement('div'); g.className = 'tray-ghost'; g.id = 'tray-ghost';
-        g.textContent = trayDrag.sel.kind === 'duty' ? P.role(trayDrag.sel.role).icon : TRAY_OBJ_BY_DET[trayDrag.sel.det].ic;
+        g.textContent = trayDrag.sel.kind === 'duty' ? P.role(trayDrag.sel.role).icon : trayDrag.sel.kind === 'care' ? CARE_IC : TRAY_OBJ_BY_DET[trayDrag.sel.det].ic;
         document.body.appendChild(g); trayDrag.ghost = g;
       }
     }
@@ -4020,7 +4148,7 @@
 
   function startLive() {
     for (var k in fixed) fixed[k] = true; fixed.fixHandoffs = false;   // classic decisions sound; the arrows are the puzzle
-    fdReset(); mcReset(); daySel = 'fishday'; placingChip = null;
+    fdReset(); mcReset(); buddyReset(); daySel = 'fishday'; placingChip = null;
     liveState = { fixes: 0, addressed: {}, phase: 'brief', currentGap: null, currentCluster: null, clusterIdx: 0, result: null };
     launchLive();
   }

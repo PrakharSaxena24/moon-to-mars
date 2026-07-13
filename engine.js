@@ -366,7 +366,10 @@
     ];
     var loadDecoys = [
       HD('hd_l_dec_souvenir', 'Last-minute Tokyo souvenir run', '出発前の東京土産購入',   'command', 'logi',     [], 480, 60, { required: false }),
-      HD('hd_l_dec_pierfish', 'A few casts off the pier',       '埠頭でちょい投げ',       'port',    'specialist', [], 540, 60, { required: false, safetyFlag: true })
+      HD('hd_l_dec_pierfish', 'A few casts off the pier',       '埠頭でちょい投げ',       'port',    'specialist', [], 540, 60, { required: false, safetyFlag: true }),
+      // W2a content: a plausible-but-inert admin distraction — feels like "work" but moves
+      // nothing on the manifest chain, so placing it only ever costs the exec-lane decoy debit.
+      HD('hd_l_dec_socialpost', 'Post departure photos to the office chat', '出発の様子を社内チャットに投稿', 'command', 'comms', [], 390, 30, { required: false })
     ];
     var loadCanonPlacement = {};
     loadReqTasks.forEach(function (t) {
@@ -397,7 +400,10 @@
     ];
     var voyageDecoys = [
       HD('hd_v_dec_sternfish', 'Fishing off the stern underway', '航行中の船尾釣り',   'deck',   'specialist', [], 900, 60, { required: false, safetyFlag: true }),
-      HD('hd_v_dec_karaoke',   'Saloon karaoke hour',            '船内カラオケ大会',   'dining', 'comms',      [], 960, 60, { required: false })
+      HD('hd_v_dec_karaoke',   'Saloon karaoke hour',            '船内カラオケ大会',   'dining', 'comms',      [], 960, 60, { required: false }),
+      // W2a content: a third plausible-but-inert distraction, on the cabins station so the
+      // deck has one of each flavor (no VIP care task loses its lane, decoy debit only).
+      HD('hd_v_dec_nap',       'Afternoon nap in the cabin',      '船室で昼寝',         'cabins', 'logi',       [], 780, 60, { required: false })
     ];
     guests.forEach(function (g) {
       if (!g.vip) return;
@@ -663,14 +669,14 @@
           canonPlacement: loadCanonPlacement,
           canonHandoffs: loadCanonArrows,   // full canonical arrow set (canonDay draws withheld ones)
           handoffs: loadHandoffs,           // seed ships h_l_manifest only (h_l_cabins withheld — GAP L2)
-          decoys: ['hd_l_dec_souvenir', 'hd_l_dec_pierfish']   // W2a (content wave) may extend to 3
+          decoys: ['hd_l_dec_souvenir', 'hd_l_dec_pierfish', 'hd_l_dec_socialpost']   // W2a: extended to 3
         },
         voyage: {
           tasks: voyageTasks.concat(voyageDecoys),
           canonPlacement: voyageCanonPlacement,
           canonHandoffs: voyageCanonArrows,
           handoffs: voyageHandoffs,
-          decoys: ['hd_v_dec_sternfish', 'hd_v_dec_karaoke']   // W2a may extend to 3
+          decoys: ['hd_v_dec_sternfish', 'hd_v_dec_karaoke', 'hd_v_dec_nap']   // W2a: extended to 3
         },
         arrival: {
           // required roster ships PRE-CLEARED (assignedIds:[] — see arrivalReqTasks above, §7/§13.4
