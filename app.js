@@ -1201,7 +1201,10 @@
   // keepActors=true (language switch / resize) reuses the ambient cast so nobody teleports
   function buildSitemap(keepActors) {
     var box = $('stations'); box.innerHTML = '';
-    P.STATIONS.forEach(function (s) {
+    // §voyage W4: a ship-day run draws the 5 ship stations, so its hotspots must sit on them,
+    // not on the land coordinates (sim.stations already carries the full {id,name,icon,x,y} set)
+    var atSea = !!(sim && sim.segment === 'voyage' && sim.stations);
+    (atSea ? sim.stations : P.STATIONS).forEach(function (s) {
       if (s.hidden) return;   // §map v2: hidden stations (command folded into Hinata, finance off) get no hotspot
       var d = document.createElement('div'); d.className = 'station'; d.id = 'st-' + s.id;
       d.setAttribute('data-st', s.id); d.setAttribute('tabindex', '0'); d.setAttribute('role', 'button');
@@ -1211,8 +1214,9 @@
       box.appendChild(d);
     });
     // §map: clickable hotspots over Hinata's Food / Fishing-rod / Transport sections (canvas only;
-    // positioned each frame in frame() from PRS_STAGE.hubSections so they track the drawn sub-zones)
-    if (USE_CANVAS && window.PRS_STAGE && PRS_STAGE.hubSections) {
+    // positioned each frame in frame() from PRS_STAGE.hubSections so they track the drawn sub-zones;
+    // no hub aboard ship, so a voyage run skips them)
+    if (!atSea && USE_CANVAS && window.PRS_STAGE && PRS_STAGE.hubSections) {
       ['food', 'rod', 'transport'].forEach(function (sid) {
         var b = document.createElement('div'); b.className = 'sec-hot'; b.id = 'sec-' + sid;
         b.setAttribute('data-sec', sid); b.setAttribute('tabindex', '0'); b.setAttribute('role', 'button');
@@ -3200,7 +3204,7 @@
   var LIVE_CH = ['board', 'chat', 'radio', 'faceToFace'];
   function ldPanel(id) { ['ld-brief', 'ld-prompt', 'ld-spot', 'ld-result'].forEach(function (p) { var e = $(p); if (e) e.classList.toggle('on', p === id); }); }
   function closeModals() { ['detail-modal', 'inspect-modal', 'arrow-modal', 'rules-modal', 'pick-modal'].forEach(function (m) { var e = $(m); if (e) e.classList.remove('show'); }); closePawnCard(); lastFocus = null; }
-  function clearStationTints() { P.STATIONS.forEach(function (s) { var n = $('st-' + s.id); if (n) n.classList.remove('terr-green', 'terr-amber', 'terr-red'); }); stageTint = null; }
+  function clearStationTints() { var ns = document.querySelectorAll('#stations .station'); for (var ci = 0; ci < ns.length; ci++) ns[ci].classList.remove('terr-green', 'terr-amber', 'terr-red'); stageTint = null; }
   function chIcon(ch) { return { board: '📋', chat: '💬', radio: '📻', phone: '📞', faceToFace: '🤝' }[ch] || '•'; }
   function personName(task) { var pid = task.assignedIds[0], p = pid && byId(currentPlan().participants, pid); return p ? nm(p.name) : nm(P.role(task.ownerRoleId).name); }
 
