@@ -24,6 +24,13 @@ var fixCat = { setSafety: 'safety', grantAuth: 'budget', shareInfo: 'info', setR
 var detForFix = { setSafety: 'safety', grantAuth: 'budgetAuth', shareInfo: 'info', setReport: 'report', rebalance: 'fatigue', fixReserve: 'reserve', setReturn: 'returnLogi', fixHandoffs: 'handoffTiming' };
 Object.keys(fixCat).forEach(function (fx) {
   var cfg = P.applyFix(base, fx);
+  // MIGRATION (Voyage carryover, 2026-07-13): handoffTiming's test reads fishdaySchedule(plan),
+  // which now ALSO stalls on the seed's missing jig case (load-day custody gap, spec §2) —
+  // fixHandoffs alone (drawing the fishday arrows) can no longer clear it in isolation; the
+  // day-0 carry gap must ALSO be authored (applyDayFix('load')) for this fix's OWN effect to
+  // be observable in isolation, per the carryover thesis ("what misses the ship cannot be
+  // fixed at sea" — not even by a downstream information fix).
+  if (fx === 'fixHandoffs') cfg = P.applyDayFix(cfg, 'load');
   var s1 = scoreOf(cfg);
   var cat = fixCat[fx];
   var detsAfter = P.detect(P.mergePlan(cfg)).map(function (d) { return d.id; });
@@ -35,7 +42,12 @@ Object.keys(fixCat).forEach(function (fx) {
 });
 
 console.log('\n=== ALL FIXES -> CLEAN A ===');
-var sAll = scoreOf(P.applyAllFixes(base));
+// MIGRATION (Voyage carryover, 2026-07-13): a clean fishday now ALSO needs the load day's
+// custody chain authored (applyDayFix('load')) alongside the 8 classic fixes — the jig case
+// missing from the truck run is a day-0 gap fixHandoffs cannot reach. `allFixesLoad` is the new
+// "everything fixed" reference cfg used throughout the rest of this file for that reason.
+var allFixesLoad = P.applyDayFix(P.applyAllFixes(base), 'load');
+var sAll = scoreOf(allFixesLoad);
 console.log('  grade', sAll.grade, 'score', sAll.score, 'goal%', sAll.goalPct, 'problems', sAll.problemCount, 'clean', sAll.clean, 'reason', sAll.reason);
 console.log('  categories', JSON.stringify(sAll.categories));
 ok(sAll.problemCount === 0, 'all fixes -> 0 active gaps');
@@ -84,7 +96,14 @@ function fishRun(cfg) {
   while (!sim.finished && g < 400) { P.tick(sim); if (sim.paused) { pauses.push(sim.checkpoint.id); P.resume(sim); } g++; }
   sim._pauses = pauses; return sim;
 }
-var gplan = P.mergePlan(base);
+// MIGRATION (Voyage carryover, 2026-07-13): `baseL` is the gappy trip with ONLY the load day
+// authored canonically (applyDayFix('load')) — everything else (fishday's own info arrows,
+// the classic 10-day gaps) stays exactly as gappy as `base`. This reproduces the pre-Voyage
+// fishday pins (1450 idle / 68% eff) verbatim; the raw, unauthored `base` now additionally
+// stalls on the seed's missing jig case (1590/66%), which is a NEW, deliberate day-0 gap
+// (spec §2/§4 "SEED GAP L1"), not the fishday teaching gradient this section pins.
+var baseL = P.applyDayFix(base, 'load');
+var gplan = P.mergePlan(baseL);
 ok(P.detect(gplan).map(function (d) { return d.id; }).indexOf('handoffTiming') >= 0, 'gappy plan raises handoffTiming');
 var gfd = P.fishdaySchedule(gplan);
 ok(gfd.idleTotal > 0, 'gappy fishday accrues idle minutes (' + gfd.idleTotal + ' — tackle list late on chat)');
@@ -94,12 +113,15 @@ ok(gfd.missing.length === 10 && gfd.late.length === 1, 'ships 9 withheld arrows 
 ok(gfd.wrongFish.length === 4, 'undrawn ic_menu/ic_ground -> wrong-fish rework at gear-load, route, rig & fish (' + gfd.wrongFish.join(',') + ')');
 ok(gfd.efficiency < 100, 'gappy efficiency < 100 (' + gfd.efficiency + '%)');
 ok(gfd.dinnerMin > 1080, 'wrong fish pushes dinner past 18:00 (min ' + gfd.dinnerMin + ')');
-var gsim = fishRun(base);
+var gsim = fishRun(baseL);
 ok(gsim._pauses.join(',') === 'cp_predep,cp_relay,cp_dinner', 'run pauses at the 3 checkpoints (' + gsim._pauses.join(',') + ')');
 var gsc = P.score(gsim);
 ok(gsim.finished === 'incomplete' && gsc.grade === 'D', 'gappy fishday finishes incomplete, grades D (' + gsc.score + ')');
 
-var fAll = P.applyAllFixes(base);
+// MIGRATION (Voyage carryover, 2026-07-13): the fully-fixed fishday reference is now
+// allFixesLoad (8 classic fixes + applyDayFix('load')) — applyAllFixes alone leaves the jig
+// case missing, so the fishday never reaches 0 idle / 100% without also authoring Load.
+var fAll = allFixesLoad;
 var ffd = P.fishdaySchedule(P.mergePlan(fAll));
 ok(ffd.idleTotal === 0, 'all fixes -> zero idle minutes');
 ok(ffd.efficiency === 100, 'all fixes -> 100% efficiency');
@@ -110,6 +132,9 @@ ok(fsim.finished === 'done' && fsc.grade === 'A' && fsc.score === 100 && fsc.cle
 
 var effSeq = [], accF = base;
 ['setSafety', 'grantAuth', 'shareInfo', 'setReport', 'rebalance', 'fixReserve', 'setReturn', 'fixHandoffs'].forEach(function (fx) { accF = P.applyFix(accF, fx); effSeq.push(P.score(runToEnd(accF)).efficiency); });
+// MIGRATION (Voyage carryover, 2026-07-13): the ladder's final rung now needs applyDayFix('load')
+// too — the 8 classic fixes alone still leave the jig case missing (84%, not 100%).
+accF = P.applyDayFix(accF, 'load'); effSeq.push(P.score(runToEnd(accF)).efficiency);
 var mono = true; for (var e = 1; e < effSeq.length; e++) if (effSeq[e] < effSeq[e - 1]) mono = false;
 ok(mono && effSeq[effSeq.length - 1] === 100, 'efficiency climbs monotonically to 100 (' + effSeq.join('→') + ')');
 
@@ -137,7 +162,10 @@ wsim.participants.forEach(function (p) { if (p.id === 'p08') wp8 = p; });
 ok(wgl.state === 'waitinfo' && wp8.state === 'waitInfo' && wp8.station === 'port', 'at 05:45 gappy, gear-load waits on info and the angler shows 手待ち at the port (' + wgl.state + '/' + wp8.state + '@' + wp8.station + ')');
 
 // checkpoint intervene: unblocks the LIVE run; the plan gap survives a clean re-run
-var isim = P.createSim(base, 'fishday');
+// MIGRATION (Voyage carryover, 2026-07-13): uses baseL (load authored) so the ONLY remaining
+// gap is the withheld ic_tackle arrow — on raw `base` the gear-load would also stall on the
+// missing jig case, and the hand-fed info alone could never reach start===330.
+var isim = P.createSim(baseL, 'fishday');
 P.intervene(isim, 'ic_tackle', 'specialist');
 ok(isim.sched.byTask.t_f_gearload.start === 330 && isim.handFed === 1, 'intervene(ic_tackle) unblocks the live gear-load (hand-fed 1x)');
 ok(P.score(isim).idleMin === gfd.idleTotal, 'plan gap survives the hand-feed: score still bills ' + gfd.idleTotal + ' idle min');
@@ -148,7 +176,9 @@ ok(P.CHANNELS.faceToFace === 0 && P.CHANNELS.radio === 1 && P.CHANNELS.phone ===
 ok(gfd.idleTotal === 1450 && gfd.reworkTotal === 90 && gfd.late[0].lateMin === 40, 'gappy ledger pinned exactly: 1450 idle + 90 rework person-min, tackle 40 min late');
 
 // drawing a FASTER duplicate arrow is a legitimate alternate fix (min-arrival per pair)
-var dupFd = P.fishdaySchedule(P.mergePlan({ seed: 1, overrides: { handoffs: { h_tackle2: { cardId: 'ic_tackle', fromRoleId: 'logi', fromTaskId: 't_f_tackleprep', toRoleId: 'specialist', toTaskId: 't_f_gearload', trigger: { type: 'onTaskDone', taskId: 't_f_tackleprep' }, channel: 'faceToFace', ifLate: 'idle', reworkKind: null, content: { en: 'x', jp: 'x' } } } } }));
+// MIGRATION (Voyage carryover, 2026-07-13): also needs applyDayFix('load') — otherwise the
+// gear-load still idles 60 min on the missing jig case even once the info arrow is fixed.
+var dupFd = P.fishdaySchedule(P.mergePlan(P.applyDayFix({ seed: 1, overrides: { handoffs: { h_tackle2: { cardId: 'ic_tackle', fromRoleId: 'logi', fromTaskId: 't_f_tackleprep', toRoleId: 'specialist', toTaskId: 't_f_gearload', trigger: { type: 'onTaskDone', taskId: 't_f_tackleprep' }, channel: 'faceToFace', ifLate: 'idle', reworkKind: null, content: { en: 'x', jp: 'x' } } } } }, 'load')));
 ok(dupFd.late.length === 0 && dupFd.byTask.t_f_gearload.idleMin === 0, 'a faster duplicate arrow clears the late pair without touching the slow one');
 
 // IDLE_CAP: erasing a needed wait-arrow charges 60 capped minutes and flags the pair missing
@@ -167,11 +197,15 @@ var vandal = { seed: 1, overrides: { handoffs: {
   h_catch_chef: { channel: 'board' },
   h_junk: { cardId: 'ic_tackle', fromRoleId: 'logi', fromTaskId: 't_f_tackleprep', toRoleId: 'specialist', toTaskId: 't_f_gearload', trigger: { type: 'atMinute', value: 700 }, channel: 'board', ifLate: 'idle', reworkKind: null, content: { en: 'x', jp: 'x' } }
 } } };
-var healed = P.applyAllFixes(vandal), healedPlan = P.mergePlan(healed), healedFd = P.fishdaySchedule(healedPlan);
+// MIGRATION (Voyage carryover, 2026-07-13): + applyDayFix('load') — without it the jig case
+// stays missing and the healed plan can never reach 0 idle / 100%.
+var healed = P.applyDayFix(P.applyAllFixes(vandal), 'load'), healedPlan = P.mergePlan(healed), healedFd = P.fishdaySchedule(healedPlan);
 ok(P.detect(healedPlan).length === 0 && healedFd.idleTotal === 0 && healedFd.efficiency === 100, 'fixHandoffs heals an erased/slowed/junk-arrowed plan back to clean 100%');
 
 // guests judge lateness against the PROMISED time: dragging dinner later cannot hide the wait
-var lateDinner = P.applyAllFixes(base);
+// MIGRATION (Voyage carryover, 2026-07-13): + applyDayFix('load') so the ONLY surviving gap is
+// the dragged dinner block itself (otherwise the missing jig case would also bill guestWaitMin).
+var lateDinner = P.applyDayFix(P.applyAllFixes(base), 'load');
 lateDinner.overrides.timing = { t_f_serve: { startMin: 1110 } };
 var ldFd = P.fishdaySchedule(P.mergePlan(lateDinner));
 ok(ldFd.guestWaitMin === 30 && ldFd.dinnerMin === 1110, 'dinner dragged to 18:30 still bills 30 min guest wait (' + ldFd.guestWaitMin + '/' + ldFd.dinnerMin + ')');
@@ -193,7 +227,9 @@ var nanMiss = nanFd.missing.filter(function (m) { return m.taskId === 't_f_gearl
 ok(P.resolveSendMin(nanPlan, nanH) === null && nanMiss === 1 && nanFd.byTask.t_f_gearload.idleMin === 60, 'NaN send-time (day-clock trigger task) counts as missing + IDLE_CAP, not on-time (' + nanFd.byTask.t_f_gearload.idleMin + ')');
 
 // a redundant unresolvable arrow cannot deadlock a pair another arrow already feeds on time
-var dead = P.applyAllFixes(base);
+// MIGRATION (Voyage carryover, 2026-07-13): + applyDayFix('load') so the plan is otherwise
+// clean before the self-referencing junk arrow is added.
+var dead = P.applyDayFix(P.applyAllFixes(base), 'load');
 dead.overrides.handoffs.h_dead = { cardId: 'ic_tackle', fromRoleId: 'specialist', fromTaskId: 't_f_gearload', toRoleId: 'specialist', toTaskId: 't_f_gearload', trigger: { type: 'onTaskDone', taskId: 't_f_gearload' }, channel: 'radio', ifLate: 'idle', reworkKind: null, content: { en: 'x', jp: 'x' } };
 var deadFd = P.fishdaySchedule(P.mergePlan(dead));
 ok(deadFd.unresolved === 0 && deadFd.idleTotal === 0 && deadFd.efficiency === 100, 'self-referencing junk arrow beside an on-time arrow: no deadlock, still clean');
@@ -251,7 +287,9 @@ ok(Object.keys(srG).some(function (k) { return srG[k] === 'red' || srG[k] === 'a
 ok(!Object.keys(srC).some(function (k) { return srC[k] === 'red'; }), 'clean fishday paints no red territory');
 
 // cascadeTrace: gappy has a time-ordered fault; a clean plan has none
-var ctG = P.cascadeTrace(P.mergePlan(base)), ctC = P.cascadeTrace(P.mergePlan(P.applyAllFixes(base)));
+// MIGRATION (Voyage carryover, 2026-07-13): the clean-cascade side needs + applyDayFix('load')
+// too, or the missing jig case still ripples a fault through the cascade.
+var ctG = P.cascadeTrace(P.mergePlan(base)), ctC = P.cascadeTrace(P.mergePlan(allFixesLoad));
 ok(ctG.hasFault && ctG.hops.length >= 2, 'gappy cascade has a fault (' + ctG.hops.map(function (h) { return h.station; }).join('→') + ')');
 ok(!ctC.hasFault && ctC.hops.length === 0, 'clean cascade has no fault');
 ok((function () { for (var i = 1; i < ctG.hops.length; i++) if (ctG.hops[i].atMin < ctG.hops[i - 1].atMin) return false; return true; })(), 'cascade hops are time-ordered');
@@ -364,7 +402,9 @@ console.log('\n=== AUTHORABLE DAYS — daySchedule / scoreDay (§20 + §Voyage) 
   });
 
   // 8. façade equality (fishday): daySchedule('fishday') delegates to (and matches) fishdaySchedule()
-  var fdPlan = P.mergePlan(base);
+  // MIGRATION (Voyage carryover, 2026-07-13): uses baseL (load authored) to reproduce the
+  // pre-Voyage 1450/68% pins verbatim (raw `base` also stalls on the missing jig case: 1590/66%).
+  var fdPlan = P.mergePlan(baseL);
   var dsFacade = P.daySchedule(fdPlan, 'fishday'), fdFacade = P.fishdaySchedule(fdPlan);
   ok(dsFacade.idleTotal === fdFacade.idleTotal && fdFacade.idleTotal === 1450,
     'daySchedule(fishday).idleTotal === fishdaySchedule().idleTotal === 1450 (' + dsFacade.idleTotal + '/' + fdFacade.idleTotal + ')');
@@ -455,13 +495,15 @@ console.log('\n=== SEAT ASSIGNMENT — overrides.seats bijection (default = no-o
     ok(ds.misassigned.length === 0, 'derangement: daySchedule(' + seg + ').misassigned is empty (' + ds.misassigned.length + ')');
   });
   // (d) the win is person-agnostic: all-fixes fishday + full classic run score identically under a derangement
-  var fdDef = P.fishdaySchedule(P.mergePlan(P.applyAllFixes(base)));
-  var derCfg = P.applyAllFixes(base); derCfg.overrides.seats = der;
+  // MIGRATION (Voyage carryover, 2026-07-13): "all-fixes" now means allFixesLoad (8 classic
+  // fixes + applyDayFix('load')) — applyAllFixes alone leaves the jig case missing (idle>0).
+  var fdDef = P.fishdaySchedule(P.mergePlan(allFixesLoad));
+  var derCfg = P.applyDayFix(P.applyAllFixes(base), 'load'); derCfg.overrides.seats = der;
   var fdDer = P.fishdaySchedule(P.mergePlan(derCfg));
   ok(fdDef.idleTotal === 0 && fdDef.efficiency === 100, 'all-fixes fishday is a clean win by default (idle 0, eff 100)');
   ok(fdDer.idleTotal === fdDef.idleTotal && fdDer.efficiency === fdDef.efficiency && fdDer.dinnerMin === fdDef.dinnerMin,
     'derangement: fishday idle/eff/dinner identical to default (person-agnostic)');
-  var dS = scoreOf(derCfg), aS = scoreOf(P.applyAllFixes(base));
+  var dS = scoreOf(derCfg), aS = scoreOf(allFixesLoad);
   ok(dS.grade === aS.grade && dS.score === aS.score && JSON.stringify(dS.categories) === JSON.stringify(aS.categories),
     'derangement: classic-run grade/score/categories identical to all-fixes default (aggregate person-agnostic; per-person individuals[] legitimately differ)');
   // (e) a player's explicit coarse-day deck placement (authored in current-holder pids) is EXEMPT from the seat
@@ -1039,10 +1081,14 @@ console.log('\n=== VOYAGE §2 — carryover purity: all-aboard is carry-inert; a
   // aboard, the fishday arrow-based teaching gradient (idle/efficiency — unrelated to carry) must
   // be byte-identical to the numbers pinned before the Voyage program existed. daySchedule/
   // fishdaySchedule are the SAME functions; only their internal carry-lookup is new plumbing.
-  var gfdCarry = P.fishdaySchedule(loadFixedPlan);
+  // MIGRATION (Voyage carryover, 2026-07-13): this needs the GAPPY fishday (baseL: Load authored
+  // canonically, fishday arrows left exactly as gappy as the seed) — loadFixedPlan above ALSO
+  // applies applyAllFixes, which draws the fishday arrows too and would score 0/100, not the
+  // pre-Voyage 1450/68 pin this check names.
+  var gfdCarry = P.fishdaySchedule(P.mergePlan(baseL));
   ok(gfdCarry.idleTotal === 1450 && gfdCarry.efficiency === 68,
     'carry-inert: fishday idle/efficiency unchanged at the pre-Voyage pins 1450/68% when Load ships everything aboard (' + gfdCarry.idleTotal + '/' + gfdCarry.efficiency + '%)');
-  ok(P.daySchedule(loadFixedPlan, 'fishday').idleTotal === 1450, 'carry-inert: daySchedule(fishday) facade agrees (1450)');
+  ok(P.daySchedule(P.mergePlan(baseL), 'fishday').idleTotal === 1450, 'carry-inert: daySchedule(fishday) facade agrees (1450)');
 
   // arrival/ops keep reaching their own canonical 100/A/clean/100%-eff anchor even with Load ALSO
   // authored canonically in the same cfg (proves carry doesn't cross-contaminate other days)
@@ -1167,13 +1213,14 @@ console.log('\n=== VOYAGE §3 — named guests & VIP buddies ===');
 
 console.log('\n=== VOYAGE §4 — the re-derived constitution (spec §4; integrator-PINS) ===');
 (function () {
-  // integrator-PINS: spec §4 gives TARGET bucket sizes only ("~"), not frozen exact values —
-  // "exact frozen values land at integration and are pinned in verify, like PINS" (spec §4).
-  // TARGET below is the estimate this task can compute from the spec text alone; PINS_VOYAGE
-  // carries the exact-value fields the integrator MUST overwrite from the merged engine.js
-  // before committing (mirrors the identical PRE-MEASURED-ESTIMATE contract the rubric-v1.0 PINS
-  // block used during ITS OWN concurrent build — see the retired PINS note earlier in this file).
-  var TARGET = { frame: 12, load: 11, voyage: 12, arrival: 12, ops: 14, fishday: 30, 'return': 9 };
+  // integrator-PINS: spec §4's TARGET bucket sizes were pre-integration estimates only ("~").
+  // MIGRATION (Voyage §4.1 senior-dev gate ruling, 2026-07-13): the riskable-socket revert
+  // (+4 to Fishing Day, funded by four 1-pt shaves elsewhere) landed the FROZEN matrix — "The
+  // frozen matrix (pinned at integration): frame 11 · load 10 · voyage 11 · arrival 12 · ops 13
+  // · fishday 34 (heaviest) · return 9 = 100" (spec §4.1) — which supersedes §4's pre-amendment
+  // ~30 fishday estimate (34−30 = 4, outside this check's own +/-3 tolerance). TARGET now carries
+  // the ratified §4.1 exact values verbatim.
+  var TARGET = { frame: 11, load: 10, voyage: 11, arrival: 12, ops: 13, fishday: 34, 'return': 9 };
   var PINS_VOYAGE = {
     gappyTotal: null,       // TBD — integrator measures scoreTrip(mergePlan(base)).total
     fixHandoffsJump: null,  // TBD — integrator measures the fixHandoffs delta from gappy
