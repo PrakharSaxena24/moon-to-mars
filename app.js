@@ -175,6 +175,7 @@
     if (typeof closeDayDrawer === 'function') closeDayDrawer();      // the drawer worker asked for a clean reset when leaving setup
     for (i = 0; i < screens.length; i++) $(screens[i]).classList.toggle('hidden', screens[i] !== name);
     if (name !== 'run') $('live-dock').classList.add('hidden');      // the live dock only ever shows INSIDE run (callers show it)
+    if (name !== 'run' && window.PRS_SOUND) window.PRS_SOUND.ambient(null);   // ambient bed stop, run-exit (sound.js §W3)
     document.body.classList.toggle('running', name === 'run');
     if (name === 'setup') bootPlanStage();                           // (re)mount the pre-dawn plan stage + its local rAF
   }
@@ -436,6 +437,7 @@
       if (railLastSetup != null && trip.total > railLastSetup && !$('setup').classList.contains('hidden')) {
         var te = $('rail-tense');
         floatDelta(te, '+' + (trip.total - railLastSetup));
+        if (window.PRS_SOUND) window.PRS_SOUND.cue('gain');   // the rail +N float (sound.js §W3)
         if (!RM.matches) { te.classList.add('bump'); setTimeout(function () { te.classList.remove('bump'); }, 620); }
       }
       railLastSetup = trip.total;
@@ -1391,6 +1393,7 @@
     // The run ends in the whole-trip ledger report (finish()→renderDayReport); the plan gaps that caused
     // the pauses are exactly what mark the day slice down. Whole-trip ('all') is not authorable → classic clock.
     sim = P.createSim({ seed: (Math.floor(Math.random() * 1e9) >>> 0) || 1, overrides: buildCfg().overrides }, daySel, { animate: true });
+    if (window.PRS_SOUND) window.PRS_SOUND.ambient(daySel, sim.clockMin);   // ambient bed start, run-enter (sound.js §W3)
     paused = false; livePausedForFix = false; document.body.classList.add('running');
     closeModals();
     $('live-dock').classList.add('hidden');               // a morning run never shows the live dock
@@ -1414,6 +1417,7 @@
     if (sim.paused) return;                       // checkpoint: wait for Resume
     P.tick(sim); renderSim(sim);
     if (sim.paused && sim.checkpoint) {
+      if (window.PRS_SOUND) window.PRS_SOUND.cue('freeze');   // coarse/fishday-morning freeze point (sound.js §W3)
       if (sim.checkpoint.id === 'cp_stall') camPunchStall(sim);   // §3: punch in on the coarse-day stall
       openInspector();
     }
@@ -1747,6 +1751,7 @@
   }
   function fireFanfare() {
     var ff = $('fanfare'); if (!ff) return;
+    if (window.PRS_SOUND) window.PRS_SOUND.cue('fanfare');   // on-time dinner fanfare (sound.js §W3)
     ff.textContent = T().fanfareText; ff.classList.remove('show'); void ff.offsetWidth; ff.classList.add('show');
     setTimeout(function () { ff.classList.remove('show'); }, 2600);
     // §3 auto-cinematic: a slow breathe-out (1.0 → 0.94) as the dinner fanfare fires, then settle back
@@ -1831,6 +1836,16 @@
     if (gb) { gb.textContent = guestsVisible ? T().guestsHide : T().guestsShow; gb.setAttribute('aria-label', T().guestsToggleAria); }
     var db = $('btn-drawer');
     if (db) { db.textContent = dashboardOpen ? T().drawerHide : T().drawerShow; db.setAttribute('aria-label', T().drawerAria); }
+    updateSoundButton();
+  }
+  // header 🔊 toggle label — lives outside #run (works on every screen), so it gets its own
+  // small updater; called from updateRunButtons() (itself called by applyLang() at every
+  // language switch + init) and directly after the click that flips window.PRS_SOUND.
+  function updateSoundButton() {
+    var sb = $('snd-toggle'); if (!sb) return;
+    var on = !!(window.PRS_SOUND && window.PRS_SOUND.enabled);
+    sb.textContent = on ? T().sndOff : T().sndOn;
+    sb.setAttribute('aria-label', T().sndAria);
   }
 
   // ---- modal focus management: remember the invoker, restore focus on close ----
@@ -2497,6 +2512,7 @@
       stampEl.classList.remove('thock');
       if (fresh && !RM.matches) { void stampEl.offsetWidth; stampEl.classList.add('thock'); }
     }
+    if (fresh && window.PRS_SOUND) window.PRS_SOUND.cue('thock');   // the hanko stamp (sound.js §W3)
     RSTG.stamp = { grade: trip.grade, at: fresh ? (window.performance ? performance.now() : 0) / 1000 : 0 };
     if (RM.matches) { PRS_STAGE.scene(RSTG.ctx, RSTG.sim, 1, rsView(true)); rsPositionOverlays(); return; }
     RSTG.last = 0; RSTG.raf = requestAnimationFrame(rsFrame);
@@ -2754,13 +2770,16 @@
     d.setAttribute('aria-hidden', 'false');
     void d.offsetHeight;
     d.classList.add('open');
+    if (window.PRS_SOUND) window.PRS_SOUND.cue('drawer');   // day-drawer open (sound.js §W3)
     buildDayGrid();                                     // re-fit now it's visible so fd-scroll sizes correctly
     if (cl) { try { cl.focus(); } catch (e) { } }
   }
 
   function closeDayDrawer() {
     var d = $('day-drawer');
+    var wasOpen = drawerIsOpen();
     if (d) { d.classList.remove('open'); d.setAttribute('aria-hidden', 'true'); }
+    if (wasOpen && window.PRS_SOUND) window.PRS_SOUND.cue('drawer');   // day-drawer close (sound.js §W3)
     if (!drawerIsOpen()) { drawerSeg = null; return; }
     drawerSeg = null;
     var inv = drawerInvoker; drawerInvoker = null;
@@ -2775,6 +2794,9 @@
   function bind() {
     ensureDrawerShell();
     document.querySelectorAll('.lang button').forEach(function (b) { b.addEventListener('click', function () { L = b.getAttribute('data-lang'); applyLang(); }); });
+    // header 🔊 toggle: the ONE real user-gesture handler allowed to resume the AudioContext (sound.js §W3)
+    var sndBtn = $('snd-toggle');
+    if (sndBtn) sndBtn.addEventListener('click', function () { if (window.PRS_SOUND) window.PRS_SOUND.toggle(); updateSoundButton(); });
     $('modesw').addEventListener('click', function (e) {
       var b = e.target.closest('button[data-mode]'); if (!b) return;
       var m = b.dataset.mode;
@@ -3994,6 +4016,7 @@
       if (cpl.buddies[sel.guestId] === p.id) { trayDeselect(); return; }             // already this buddy — no-op
       if (buddyLoadOf(cpl, p.id, sel.guestId) >= 2) { careReject(p, true); if (!keepOnReject) trayDeselect(); return; }
       buddyOv[sel.guestId] = p.id;
+      if (window.PRS_SOUND) window.PRS_SOUND.cue('place');   // care-shelf placement commit (sound.js §W3)
       trayDeselect();   // W2 gate nit: full deselect (clears .placing cursor state), then repaint
       updatePlanUI();
       var cc = $('tray-objs').querySelector('.tray-care-card[data-guest="' + sel.guestId + '"]');
@@ -4002,11 +4025,13 @@
     }
     if (sel.kind === 'duty') {
       if (SEAT_ROLES.indexOf(p.roleId) < 0) { trayReject(p, sel); if (!keepOnReject) trayDeselect(); return; }
+      if (window.PRS_SOUND) window.PRS_SOUND.cue('place');   // duty-seat placement commit (sound.js §W3)
       swapSeats(sel.role, p.roleId); trayDeselect(); updatePlanUI(); return;
     }
     if (targetRolesFor(sel.det).indexOf(p.roleId) < 0) { trayReject(p, sel); if (!keepOnReject) trayDeselect(); return; }
     tokenAnchor[sel.det] = pid;
     traySel = null;
+    if (window.PRS_SOUND) window.PRS_SOUND.cue('place');   // resource-token placement commit (sound.js §W3)
     applyReceiptFix(sel.det, true);   // -> updatePlanUI -> renderTray + tokens (three-way sync)
     var tk = $('plan-tokens').querySelector('.plan-token[data-det="' + sel.det + '"]');
     if (tk) { try { tk.focus(); } catch (e) { } }
@@ -4156,6 +4181,7 @@
   function launchLive() {
     stopAnim(); clearFinishTimer();                       // never stack a second rAF loop across re-runs
     sim = P.createSim({ seed: (Math.floor(Math.random() * 1e9) >>> 0) || 1, overrides: buildCfg().overrides }, 'fishday');
+    if (window.PRS_SOUND) window.PRS_SOUND.ambient('fishday', sim.clockMin);   // ambient bed start, run-enter (sound.js §W3)
     paused = false; livePausedForFix = false; document.body.classList.add('running');
     closeModals(); speedMult = 2; document.querySelectorAll('.spd').forEach(function (x) { x.classList.toggle('on', x.getAttribute('data-spd') === '2'); });
     enterScreen('run');
@@ -4215,6 +4241,7 @@
   }
   function paintGapFocus(gap) {
     var plan = currentPlan(), to = byId(plan.tasks, gap.taskId); if (!to) return;
+    if (window.PRS_SOUND) window.PRS_SOUND.cue('freeze');   // Live freeze point (sound.js §W3)
     clearStationTints(); var stn = $('st-' + to.station); if (stn) stn.classList.add('terr-red');
     stageTint = {}; stageTint[to.station] = 'red';                // canvas: the gap-focus station goes red
     clearGapFocus();

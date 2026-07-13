@@ -647,6 +647,7 @@
     drawSky(ctx, sim, t, view);          // 5  day-phase light grade UNDER actors
     drawGuests(ctx, sim, t, view);       // 6  13 yukata pawns (gated by view.guestsVisible)
     drawBoat(ctx, sim, t, view);         // 7  skiff on the bay arc + pooled wakes
+    drawDeck(ctx, sim, t, view);         // 7b voyage-only: one ship-deck plane under the station cluster (§3 ship-map)
     drawStations(ctx, sim, t, view);     // 8  landmarks: halo tint, bevel disc, name, rings, lanterns
     drawStallMarkers(ctx, sim, t, view); // 8b report-on-stage: glow pulses where idle/rework accrued
     drawParticles(ctx, sim, t, view);    // 8c seasoning: chimney smoke, cook-steam, dusk fireflies
@@ -2483,6 +2484,72 @@ function drawStations_hub(ctx, cx, cy, r, rimRgb, na, ic, t, rm) {
   ctx.restore();
 }
 
+// ---- drawDeck ----
+// §voyage ship-deck backdrop (spec §3 ship-map note; §21.12 deferred deck polish, now built).
+// On the voyage day the 5 stations sit over the water; rather than let the cast read as five
+// separate dinghies (the per-station group-hulls are suppressed in drawFigures for this segment),
+// paint ONE large hull/deck plane spanning the whole station cluster so the day reads as ABOARD
+// a single vessel. Reuses the group-hull visual language (lacquer-wood plane, gold-leaf gunwale
+// rail, planking strokes, mast + hanko-red pennant) at ship scale. No-op off the voyage segment,
+// so land/fishday frames are byte-identical. Deterministic; RM holds the bob still (light stays).
+function drawDeck(ctx, sim, t, view) {
+  if (!sim || sim.segment !== 'voyage' || !sim.stations || !sim.stations.length) return;
+  if (!view || !(view.w > 0) || !(view.h > 0)) return;
+  var rm = !!view.rm, i;
+  // bounding box of the station cluster (px), padded so crews fanned around each station stay on deck
+  var minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9;
+  for (i = 0; i < sim.stations.length; i++) {
+    var s = sim.stations[i], sx = s.x * view.w, sy = s.y * view.h;
+    if (sx < minX) minX = sx; if (sx > maxX) maxX = sx;
+    if (sy < minY) minY = sy; if (sy > maxY) maxY = sy;
+  }
+  var padX = 74 * scale, padTop = 50 * scale, padBot = 66 * scale;
+  var x0 = minX - padX, x1 = maxX + padX, y0 = minY - padTop, y1 = maxY + padBot;
+  var w = x1 - x0, h = y1 - y0, cx = (x0 + x1) / 2;
+  if (!(w > 0) || !(h > 0)) return;
+  var bob = rm ? 0 : Math.sin(t * 0.5) * 3 * scale;      // slow, deterministic ship bob
+  var r = 34 * scale, rBow = r * 1.7;                    // rounded stern, longer sweep at the bow (bottom)
+  ctx.save();
+  ctx.translate(0, bob);
+  // (1) hull shadow spread on the water beneath the deck
+  contactShadow(ctx, cx, y1 - 4 * scale, w * 0.98, 22 * scale, 0.3);
+  // (2) deck plane / hull body — lacquer-wood gradient, matching the group-hull palette
+  drawBoat_hullPath(ctx, x0, y0, w, h, r, r, rBow, rBow);
+  var g = ctx.createLinearGradient(0, y0, 0, y1);
+  g.addColorStop(0, '#4a382a'); g.addColorStop(1, '#2e2118');
+  ctx.fillStyle = g; ctx.fill();
+  // (3) planking + a soft top sheen, clipped to the hull
+  ctx.save();
+  drawBoat_hullPath(ctx, x0, y0, w, h, r, r, rBow, rBow);
+  ctx.clip();
+  ctx.strokeStyle = rgba(PAL.ink, 0.16); ctx.lineWidth = 1 * scale;
+  ctx.beginPath();
+  var plank = 27 * scale, py;
+  for (py = y0 + plank; py < y1; py += plank) { ctx.moveTo(x0, py); ctx.lineTo(x1, py); }
+  ctx.stroke();
+  // upper-left key-light sheen along the deck top (rim light on the wood)
+  var sh = ctx.createLinearGradient(0, y0, 0, y0 + 26 * scale);
+  sh.addColorStop(0, rgba(PAL.rimWhite, 0.10)); sh.addColorStop(1, rgba(PAL.rimWhite, 0));
+  ctx.fillStyle = sh; ctx.fillRect(x0, y0, w, 26 * scale);
+  ctx.restore();
+  // (4) gold-leaf gunwale rail around the deck edge
+  drawBoat_hullPath(ctx, x0, y0, w, h, r, r, rBow, rBow);
+  ctx.strokeStyle = rgba(PAL.goldLeaf, 0.6); ctx.lineWidth = Math.max(1.4, 1.8 * scale); ctx.stroke();
+  // (5) mast + hanko-red pennant rising from the deck (a NAMED ship, not a dinghy)
+  var mastX = cx, mastBaseY = y0 + 14 * scale, mastTopY = y0 - 42 * scale;
+  ctx.strokeStyle = 'rgba(43,36,28,0.9)'; ctx.lineWidth = Math.max(1.4, 2 * scale);
+  ctx.beginPath(); ctx.moveTo(mastX, mastBaseY); ctx.lineTo(mastX, mastTopY); ctx.stroke();
+  var pw = 22 * scale, ph = 12 * scale;
+  var pWave = rm ? 0 : Math.sin(t * 1.6) * 2 * scale;    // gentle luff, RM holds it flat
+  ctx.fillStyle = rgba(PAL.hanko, 0.92);
+  ctx.beginPath();
+  ctx.moveTo(mastX, mastTopY);
+  ctx.lineTo(mastX + pw, mastTopY + ph * 0.45 + pWave);
+  ctx.lineTo(mastX, mastTopY + ph);
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+
 function drawStations(ctx, sim, t, view) {
   if (!view || !P || !P.STATIONS) return;
   var terr = view.tintMap || P.stationReadiness(sim);
@@ -2490,10 +2557,17 @@ function drawStations(ctx, sim, t, view) {
   var na = LIGHT.night;
   var discR = 21 * scale;
   var simStations = (sim && sim.stations) ? sim.stations : null;
+  // §voyage (spec §3 ship-map): a voyage sim carries its OWN station set (Hold/Cabins/Dining
+  // saloon/Deck/Purser, positioned over the water) on sim.stations — render THOSE as ship
+  // fixtures, not the static land landmarks. Every other segment (including the land-legit
+  // Load day, whose sim.stations IS the land set) keeps P.STATIONS, so the DOM hotspot contract
+  // (app.js buildSitemap iterates P.STATIONS for #st-<id>) and land-day rendering stay byte-identical.
+  var isVoyage = !!(sim && sim.segment === 'voyage' && simStations && simStations.length);
+  var stList = isVoyage ? simStations : P.STATIONS;
   var i, j;
-  for (i = 0; i < P.STATIONS.length; i++) {
-    var st = P.STATIONS[i];
-    if (st.hidden) continue;   // §map v2: command folded into Hinata, finance hidden
+  for (i = 0; i < stList.length; i++) {
+    var st = stList[i];
+    if (st.hidden) continue;   // §map v2: command folded into Hinata, finance hidden (voyage stations carry no such flag)
     var p = stationPx(st, view);
     var cx = p.x, cy = p.y;
     var simSt = null;
@@ -3018,7 +3092,13 @@ function drawFigures(ctx, sim, t, view) {
   // under everyone); crew WALKING to a sea station board at the dock — they fade out at the
   // shoreline (aboard, below deck) and fade back in on the deck (the per-figure loop below).
   function isAfloat(x, y) { return view.w > 0 && (x / view.w) > shoreNX(y / view.h) + 0.004; }
+  // §voyage (spec §3): on the ship day the WHOLE cast is aboard ONE vessel — drawDeck() paints
+  // that single hull under the station cluster, so suppress the per-station group-hulls here
+  // (five over-water stations would otherwise read as five separate dinghies). Every crew still
+  // renders `aboard` (legs cropped, no personal shadow) via the per-figure logic below.
+  var voyage = !!(sim && sim.segment === 'voyage');
   var boatGroups = {};
+  if (!voyage) {
   for (var bg = 0; bg < sim.participants.length; bg++) {
     var bpp = sim.participants[bg], bff = view.fig[bpp.id];
     if (!bff) continue;
@@ -3054,6 +3134,7 @@ function drawFigures(ctx, sim, t, view) {
     ctx.closePath(); ctx.fill();
     ctx.restore();
   }
+  }   // end if(!voyage) group-hull pre-pass
 
   for (var i = 0; i < sim.participants.length; i++) {
     var p = sim.participants[i];
