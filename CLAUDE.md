@@ -461,6 +461,8 @@ OgasawaraSim/                   (at /Users/tanakai/aibos/OgasawaraSim — moved 
 ├─ app.js       wires PRS + i18n to the DOM (plan / run / report / Live / fix-and-rerun)
 ├─ stage.js     window.PRS_STAGE — the Canvas 2D harbor renderer (world, lighting, camera, §21/§27)
 ├─ sprites.js   window.PRS_SPRITES — the SVG sprite cast (§27; strict procedural-fallback contract)
+├─ sound.js     window.PRS_SOUND — procedural WebAudio ambience + cues (§28; deletable, muted-start)
+├─ rubric.html  the public 100-point framework page (renders live from engine.js, per-cell breakdowns)
 ├─ verify.js    Node-only headless test suite (node verify.js — the committed guardrail)
 ├─ _config.yml  GitHub Pages: publish only the game (docs/WORLD/CLAUDE/archive excluded)
 ├─ README.md
@@ -1288,3 +1290,75 @@ bigger. Spec `docs/superpowers/specs/2026-07-11-harbor-complete-design.md` · pl
   `6dc17e8`-era completion · QA `6c9e148`.
 - **Deferred:** guest sprite individuality (procedural yukata crowd kept deliberately); user pan/zoom;
   real-hardware perf measurement; Phase-2 content branches (§13).
+
+---
+
+## 28. The Voyage — the full-trip campaign (SHIPPED 2026-07-13)
+Owner direction: add the **before/after voyage days** — the trip should start in Tokyo, not at the island —
+with a **Load & Board day** (pack → truck → hold → boarding vs the fixed 11:00 sailing), a **Ship Day**
+where the **4 main VIP guests** each need an assigned member to **register Starlink on their phone via the
+company credit card** and **escort them to ship meals**, real cross-day carryover, and **sound** (the only
+"completeness" item wanted — no PWA/backend/libraries, per §11). Spec
+`docs/superpowers/specs/2026-07-13-voyage-design.md` (incl. the §4.1 senior-dev gate ruling) · plan
+`docs/superpowers/plans/2026-07-13-voyage.md`. Process per the standing rule: **Sonnet executes · Opus is
+the senior dev (every wave's final code gate-approved before commit) · Fable only for the engine core and
+the program-end everything-check.**
+
+- **The campaign (W1, `e02b3d3`).** `AUTHORABLE` grows to `['load','voyage','arrival','ops','fishday',
+  'return']` (+ the frame): `load` Day 0 · 06:00–11:00 Tokyo, `voyage` Day 0 · 11:00–21:00 aboard, both
+  hour-level; `return` reshaped to **Pack & Sail** (settle → pack → hold → sail home → Tokyo 点呼). Five
+  **ship stations** over the water (`VOYAGE_STATIONS`: Hold 船倉 · Cabins 船室 · Dining saloon 船内食堂 ·
+  Deck デッキ · Purser's desk 事務長窓口) — a voyage sim's `sim.stations` is this set.
+- **Manifest & real carryover.** `plan.manifest` (11 physical items incl. `mi_jigcase`, coolers, ice, the
+  cash box, per-VIP luggage) + **`carryState(plan)`** — a pure exported function folding the ordered
+  segments' `daySchedule` outcomes into per-item availability; binding uses the EXISTING `neededResources`
+  field, so *what missed the ship stalls its downstream consumer* in the same visible language as
+  information gaps (unplace the truck run → the jig case reads `missing` from voyage onward → the fishday
+  gear pre-check idles 60 min/reworks). **Carry-inert pins:** with a canonical Load day everything reads
+  `aboard` and the fishday numbers sit at the pre-Voyage pins **1450 idle / 68% eff** byte-identically;
+  arrival/ops still reach their own 100/A/clean. A downstream stall bills **Efficiency and the visible run
+  only** — never double-billed in the Score (causes, not consequences).
+- **Named guests & the care roster.** `plan.guests` (13, WORLD.md-consistent; **VIPs Nagatani · Kadou ·
+  Watanabe · Yamate** carry `starlink` + `escort` needs) + **`overrides.buddies` {guestId: pid}** — assigning
+  a buddy auto-instantiates that VIP's voyage tasks (Starlink registration in the purser-desk window, paid
+  via the new **`bl_card`** company-card envelope; lunch/dinner escorts); no buddy → unstaffed (priced by
+  existing machinery); cap **2 VIPs per organizer**. V2 surface: a **care shelf** on the command tray — the
+  4 VIP cards hand to organizer pawns in the same "you hand things to people" grammar (All-settings fallback
+  keeps selects).
+- **The constitution re-derived (§4.1 ruling).** The W1 engine landed Σ=100 but changed two frozen tiers
+  without a spec edit — the **Opus gate BLOCKED it** (the process working as designed). Ruling, spec-first:
+  the **riskable socket tier stays 3** (1 迷い + 2 手待ち is the thesis's own pricing), funded by four 1-pt
+  shaves (boarding gate 3→2 · frame `abort_night` 2→1 · voyage `bl_card` 2→1 · return `settle` money check
+  retired); ratified retirements: owner/pm fishday flex lanes + the defensive `portions` atom. **Frozen
+  matrix (pinned):** frame 11 · load 10 · voyage 11 · arrival 12 · ops 13 · **fishday 34 (heaviest)** ·
+  return 9 = 100; dimensions **Info 37 (heaviest)** · Exec 29 · Safety 21 · Quality 7 · Money 5 · People 1;
+  **99 atoms**. Seed gaps extended (load: jig case never assigned to the truck run + cabin list unshared;
+  voyage: 2 VIP buddies unassigned + card authority missing) → **gappy 53/D · trip efficiency 83%**
+  (supersedes §23's narrated 54/D — the seed re-tune under the re-packed matrix); true canonical (all
+  classic fixes + every arrow + applyDayFix on all 5 coarse days) → **100/A/clean · 100%**;
+  **`fixHandoffs` +16 stays the strictly largest single jump** (authoring Arrival +6, classics ≤ +5).
+- **Voyage UI (W2, `5839aaa`).** Rail/ledger/day-drawers speak all **7 buckets**; the care shelf; a
+  carry-gap readiness hint (`rhCarryGap`: "Jig case never made the truck — it will miss the ship"); decoys
+  `hd_l_dec_socialpost`/`hd_v_dec_nap`; `sb_load`/`sb_voyage` labels EN+JP.
+- **Sound (W3, `c331b69` — `sound.js`, NEW file).** `window.PRS_SOUND = {enabled, toggle(), cue(name),
+  ambient(seg, dayK)}` — **pure procedural WebAudio, zero audio files**: per-segment ambient beds (surf +
+  wind; engine hum aboard; gulls by day, crickets at dusk) + six cues (freeze bell · placement tick · +N
+  blip · hanko thock · fanfare triad · drawer swish). Starts **muted** behind the header `#snd-toggle`
+  (autoplay policy), preference in `localStorage['prs_sound']`, silent under reduced-motion, and held to the
+  sprites-style fallback contract — **the game runs identically with sound.js deleted** (gate-proven by
+  physically removing the file). ~15 null-safe one-line hooks in app.js; ambient starts on run-enter, stops
+  at the single `enterScreen` chokepoint.
+- **Ship stage (W3 + W4 `b0b4a4c`).** A voyage run draws the 5 ship stations on **one deck hull**
+  (`drawDeck`; per-group dinghies suppressed at sea), all gated on `segment==='voyage'` so land/fishday
+  rendering is code-path unchanged (ctx save/restore balanced across 177 instrumented frames). W4 closed the
+  gate's follow-up: `buildSitemap` now sources the **clickable hotspots from the live sim's station set** on
+  a voyage run — the drawn ship fixtures are inspectable (the inspect panel resolves e.g. the Dining saloon), the land
+  hub sec-hots skip at sea, land days restore byte-identically (headless 9/9, EN+JP, 0 JS errors).
+- **Verified:** `node verify.js` **323/323** (new-seg schedule anchors · carryover purity block · buddy
+  atoms · the re-pinned matrix + extended cumulative ladder · i18n parity incl. the gd_*/care keys) · smoke
+  22/22 · plan-harbor E2E 52/52 · harbor-complete E2E 37/37 · hotspot 9/9 — **zero JS errors** throughout.
+  One session-limit park (`03bd674`) resumed clean; the W3 stage worker died on report format only (its
+  edits landed; the gate verified them live and approved).
+- **Deferred:** a per-tick day→dusk ambient transition (sound follows run-enter only); a real-speaker mix
+  pass (wiring is machine-verified; the *sound design* needs one human listen); Live mode stays fishday-only;
+  guest sprites, pan/zoom, §13 weather/scenario branches (next program).

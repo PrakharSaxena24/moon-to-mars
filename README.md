@@ -20,6 +20,16 @@ member — what they hold, what they wait on — and optionally hand a card over
 (which rescues *this* run but leaves the plan gap in place). Beside the grade sits
 **Efficiency %** — a plan can be "sound" yet still waste everyone's time.
 
+**New — the whole voyage is the game.** The campaign now starts in Tokyo on **Day 0**: a
+**Load & Board** morning (pack the manifest → truck to the pier → hold loading → boarding
+点呼, all against the fixed 11:00 sailing — *what misses the ship cannot be fixed at sea*)
+and a **Ship Day** aboard, where the 4 main guests each need a dedicated buddy who registers
+Starlink on their phone via the company credit card and escorts them to ship meals. Loading
+mistakes **carry over**: a jig case that never made the truck stalls the fishing day's gear
+check three days later. The return is a mirrored **Pack & Sail** day home. There's also an
+ambient **sound layer** (surf, wind, an engine hum aboard, a freeze bell, the hanko *thock*)
+behind a 🔊 header toggle — muted by default, and the game never depends on it.
+
 > 止まったキャラクターは、失敗した社員ではない。止まった場所こそが、計画を直すべき場所である。
 > The stalled character isn't a failed employee — the place they stalled is the place to fix the plan.
 
@@ -121,6 +131,8 @@ OgasawaraSim/
 ├─ engine.js    window.PRS — deterministic sim: data model, detectors, scoreTrip ledger (no DOM)
 ├─ stage.js     window.PRS_STAGE — the Canvas 2D harbor renderer (reads sim state, writes nothing back)
 ├─ sprites.js   window.PRS_SPRITES — the SVG sprite cast (optional enhancement; game runs without it)
+├─ sound.js     window.PRS_SOUND — procedural WebAudio ambience + cues (optional; muted by default)
+├─ rubric.html  the public 100-point scoring framework page (renders live from engine.js)
 ├─ i18n.js      all EN/JP strings (full parity)
 ├─ app.js       wires PRS + PRS_STAGE + i18n to the DOM (setup / run / report / fix-and-rerun)
 ├─ verify.js    Node-only headless test of the teaching curve (not loaded by the page)
@@ -132,26 +144,28 @@ OgasawaraSim/
 ```
 
 `engine.js` is deterministic (seeded RNG) and runs in the browser **and** Node, so the
-teaching curve is **headless-verified**: `node verify.js` (258 checks) pins the atom count (89),
-both matrix axes (bucket totals 14/15/18/41/12, dimension totals 34/25/20/10/10/1), that earned
-atoms always sum to the shown total, the exact seed scores below, a monotone fix ladder, a
-battery of constructed edge cases (withheld-A, skip-a-fix, drawn-but-late, redundant-arrow,
-collapsed-socket, decoy/overlap/dep-broken/compressed), and full EN/JA i18n parity (419/419).
-Verified seed curve:
+teaching curve is **headless-verified**: `node verify.js` (323 checks) pins the atom count (99),
+both matrix axes (bucket totals 11/10/11/12/13/**34**/9 across frame · load · voyage · arrival ·
+ops · **fishing day** · return, dimension totals **37**/29/21/7/5/1 for info/exec/safety/quality/
+money/people), that earned atoms always sum to the shown total, the exact seed scores below, a
+monotone fix ladder, carryover purity (everything aboard = byte-identical days; a missing jig
+case stalls the fishday gear check), a battery of constructed edge cases (withheld-A, skip-a-fix,
+drawn-but-late, redundant-arrow, collapsed-socket, decoy/overlap/dep-broken/compressed), and
+full EN/JA i18n parity. Verified seed curve:
 
 ```
-gappy plan                          D    54 /100   trip efficiency  81%
-  bucket earned → frame 0 · arrival 7 · ops 16 · fishday 20 · return 11
-  … classic fixes + authoring the 3 coarse days raise it step by step, monotonically …
-+fixHandoffs (draw every fishing-  +18 — the single largest jump of any individual fix
+gappy plan                          D    53 /100   trip efficiency  83%
+  bucket earned → frame 0 · load 5 · voyage 8 · arrival 6 · ops 11 · fishday 15 · return 8
+  … classic fixes + authoring the coarse days raise it step by step, monotonically …
++fixHandoffs (draw every fishing-  +16 — the single largest jump of any individual fix
  day information arrow)
 canonical (every classic fix +      A   100 /100   clean · trip efficiency 100%
- every arrow + all 3 authored days)
+ every arrow + every authored day)
 ```
 
 `engine.js` は決定的（シード乱数）でブラウザでも Node でも動き、学びの曲線を `node verify.js`
-（258チェック）で検証済み：ギャップだらけの計画は54点・D（旅程効率81%）、情報の矢印を描く修正
-（+fixHandoffs）が単独最大の+18点、全修正で100点・A・clean（旅程効率100%）。同一シードで
+（323チェック）で検証済み：ギャップだらけの計画は53点・D（旅程効率83%）、情報の矢印を描く修正
+（+fixHandoffs）が単独最大の+16点、全修正で100点・A・clean（旅程効率100%）。同一シードで
 同一結果を再現。
 
 ---
