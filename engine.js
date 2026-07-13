@@ -957,8 +957,14 @@
       id: 'handoffTiming', category: 'info', state: 'waiting', station: 'port', roleId: 'specialist',
       fixId: 'fixHandoffs', severity: 'high', taskIds: ['t_f_gearload', 't_f_route', 't_f_cook', 't_f_plate', 't_f_serve'],
       test: function (plan) {
+        // static arrow-DESIGN faults only (missing / late-by-design / un-runnable). Raw idle and
+        // wrongFish are execution OUTCOMES: a carry stall (the jig case that missed the ship) also
+        // idles people and makes an 'assume' task guess wrong with every arrow soundly drawn — that
+        // is a Load-day custody gap billed to its own bucket + Efficiency, and "draw the arrows"
+        // must never be a dead-end prescription for it. A design-caused wrong-fish always appears
+        // in missing/late too (its assumed card is the one missing or late), so nothing is lost.
         var fd = fishdaySchedule(plan);
-        return fd.idleTotal > IDLE_TOL || fd.wrongFish.length > 0 || fd.missing.length > 0 || fd.late.length > 0 || fd.unresolved > 0;
+        return fd.missing.length > 0 || fd.late.length > 0 || fd.unresolved > 0;
       }
     }
   ];

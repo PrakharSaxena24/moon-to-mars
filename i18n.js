@@ -56,8 +56,8 @@
       dayTasksLine: function (done, total) { return done + ' / ' + total + ' of the day’s tasks ran clean'; },
       fixpackCleanDay: function (d) { return '✅ ' + d + ' has no gaps — ready to run for real.'; },
       // --- §20 Phase 5: coarse-day (arrival/ops/return) Run report — scored by P.scoreDay, no animation ---
-      rDayScoreOk: function (d, score) { return d + ': ' + score + ' / 100 — Day ready ✓'; },
-      rDayScoreGaps: function (d, score, n) { return d + ': ' + score + ' / 100 — ' + n + ' gap' + (n === 1 ? '' : 's'); },
+      rDayScoreOk: function (d, score) { return d + ': trip score ' + score + ' / 100 — Day ready ✓'; },
+      rDayScoreGaps: function (d, score, n) { return d + ': trip score ' + score + ' / 100 — ' + n + ' gap' + (n === 1 ? '' : 's'); },
       autoArrangeBtn: 'Auto-arrange the arrows ▶',
 
       // --- run ---
@@ -206,6 +206,7 @@
       inspTitle: 'Checkpoint',
       inspSub: 'Inspect each member: what they hold, what they wait on, what comes next. “Send now” hands a card over to unblock THIS run — the plan gap stays until you fix the plan.',
       inspNowDoing: 'now', inspNext: 'next', inspIdleFree: 'not waiting on anything', inspMissing: 'no arrow drawn',
+      inspNotAboard: 'never made the ship (fix the Load day)',
       sendNow: 'Send now', inspResume: 'Resume ▶',
       handFedNote: function (n) { return 'hand-fed ' + n + '× this run (plan unchanged)'; },
 
@@ -437,8 +438,8 @@
       dayTasksLine: function (done, total) { return 'この日のタスク ' + done + ' / ' + total + ' が順調'; },
       fixpackCleanDay: function (d) { return '✅ ' + d + ' はギャップなし——本番で実行できます。'; },
       // --- §20 Phase 5：粗粒度日（到着/運航/帰路）の実行レポート——P.scoreDayで採点、アニメーションなし ---
-      rDayScoreOk: function (d, score) { return d + '：' + score + ' / 100 ——準備OK ✓'; },
-      rDayScoreGaps: function (d, score, n) { return d + '：' + score + ' / 100 ——ギャップ' + n + '件'; },
+      rDayScoreOk: function (d, score) { return d + '：旅程全体 ' + score + ' / 100 ——準備OK ✓'; },
+      rDayScoreGaps: function (d, score, n) { return d + '：旅程全体 ' + score + ' / 100 ——ギャップ' + n + '件'; },
       autoArrangeBtn: '矢印を自動配置 ▶',
 
       // --- run ---
@@ -589,6 +590,7 @@
       inspTitle: 'チェックポイント',
       inspSub: '各メンバーの保有情報・待ち情報・次のタスクを確認。「今すぐ渡す」はこの実行だけを解除——計画のギャップは残ります。',
       inspNowDoing: '現在', inspNext: '次', inspIdleFree: '待ち情報なし', inspMissing: '矢印未設定',
+      inspNotAboard: '船に積まれていない（積込日を修正）',
       sendNow: '今すぐ渡す', inspResume: '再開 ▶',
       handFedNote: function (n) { return 'この実行で手渡し' + n + '回（計画は未修正）'; },
 

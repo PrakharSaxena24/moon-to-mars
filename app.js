@@ -24,11 +24,8 @@
   function detsForDay(d) { return (d === 'all') ? DETS.slice() : DETS.filter(function (id) { return DET_SEG[id].indexOf(d) >= 0; }); }
   function dayLabel(seg) { if (seg === 'all') return T().wholeTrip; var s = null; P.SEGMENTS.forEach(function (x) { if (x.id === seg) s = x; }); return s ? nm(s.name) : seg; }
   function dayGapCount(seg) { return P.gapsForSegment(currentPlan(), seg).length; }
-  // Rail/ledger bucket label. sb_load/sb_voyage are not in i18n yet (W2a's pinned key list predates
-  // the Voyage program's two new scored buckets), so fall back to a clean bilingual label — and prefer
-  // the i18n key the moment W2a adds it. Never renders "undefined"/"sb_load".
-  var SB_FALLBACK = { load: { en: 'Load & Board', jp: '積込・乗船' }, voyage: { en: 'Ship Day', jp: '船上' } };
-  function sbLabel(bk) { var v = T()['sb_' + bk]; if (typeof v === 'string') return v; return SB_FALLBACK[bk] ? nm(SB_FALLBACK[bk]) : ('sb_' + bk); }
+  // Rail/ledger bucket label (sb_* keys carry all 7 buckets incl. load/voyage since W2a)
+  function sbLabel(bk) { var v = T()['sb_' + bk]; return typeof v === 'string' ? v : ('sb_' + bk); }
 
   // which design decisions the player has closed (true = fixed)
   var fixed = { setSafety: false, grantAuth: false, shareInfo: false, setReport: false, rebalance: false, fixReserve: false, setReturn: false, fixHandoffs: false };
@@ -1891,6 +1888,12 @@
         return '<span class="ins-card wait">⏳ ' + nm(c ? c.name : w.cardId).split('：')[0].split(':')[0] + ' → ' + (w.missing ? t.inspMissing : hhmm(w.until)) +
           ' <button class="btn sm primary ins-send" data-card="' + w.cardId + '" data-role="' + p.roleId + '">' + t.sendNow + '</button></span>';
       }).join('');
+      // physical/carry waits ({itemId}: gear that missed the ship) — named, never hand-feedable
+      var seenIt = {};
+      waits += mi.waitsOn.filter(function (w) { return w.itemId && !seenIt[w.itemId] && (seenIt[w.itemId] = 1); }).map(function (w) {
+        var it = byId(sim.plan.manifest || [], w.itemId);
+        return '<span class="ins-card wait">📦 ' + nm(it ? it.name : { en: w.itemId, jp: w.itemId }) + ' → ' + (w.missing ? t.inspNotAboard : hhmm(w.until)) + '</span>';
+      }).join('');
       // look up in sim.tasks (the live segment's task list) — coarse-day ids (hd_*) live there, not in plan.tasks
       var ctk = mi.currentTaskId ? byId(sim.tasks, mi.currentTaskId) : null, ntk = mi.nextTaskId ? byId(sim.tasks, mi.nextTaskId) : null;
       var cur = ctk ? nm(ctk.name) : '—';
@@ -1962,6 +1965,11 @@
     }).join('');
     waits += mi.waitsOn.filter(function (w) { return w.cardId && !seen[w.cardId]; }).map(function (w) {
       return '<span class="ins-card wait">⏳ ' + shortCard(w.cardId) + ' <i>' + (w.missing ? t.inspMissing : t.pcEta(hhmm(w.until))) + '</i></span>';
+    }).join('');
+    var seenIt2 = {};
+    waits += mi.waitsOn.filter(function (w) { return w.itemId && !seenIt2[w.itemId] && (seenIt2[w.itemId] = 1); }).map(function (w) {
+      var it = byId(sim.plan.manifest || [], w.itemId);
+      return '<span class="ins-card wait">📦 ' + nm(it ? it.name : { en: w.itemId, jp: w.itemId }) + ' <i>' + (w.missing ? t.inspNotAboard : t.pcEta(hhmm(w.until))) + '</i></span>';
     }).join('');
     var ctk = mi.currentTaskId ? byId(sim.tasks, mi.currentTaskId) : null;
     var ntk = mi.nextTaskId ? byId(sim.tasks, mi.nextTaskId) : null;
@@ -4178,6 +4186,14 @@
   function startLive() {
     for (var k in fixed) fixed[k] = true; fixed.fixHandoffs = false;   // classic decisions sound; the arrows are the puzzle
     fdReset(); mcReset(); buddyReset(); daySel = 'fishday'; placingChip = null;
+    // Live is carry-canonical: the Load day ships everything aboard so the fishday puzzle is purely
+    // the information arrows — otherwise the seeded jig-case custody gap idles the gear check 60 min
+    // and the win gate (fishday bucket full + dinner 18:00) is unreachable no matter what the player
+    // fixes. ("What misses the ship cannot be fixed at sea" is the Morning campaign's lesson, not Live's.)
+    var lc = P.applyDayFix(buildCfg(), 'load');
+    var ld = (lc.overrides.days && lc.overrides.days.load) || {};
+    for (var hk in (ld.handoffs || {})) dayOv.load.handoffs[hk] = Object.assign({}, dayOv.load.handoffs[hk], ld.handoffs[hk]);
+    for (var pk in (ld.placement || {})) dayOv.load.placement[pk] = ld.placement[pk];
     liveState = { fixes: 0, addressed: {}, phase: 'brief', currentGap: null, currentCluster: null, clusterIdx: 0, result: null };
     launchLive();
   }

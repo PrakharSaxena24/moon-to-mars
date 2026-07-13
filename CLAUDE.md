@@ -1359,6 +1359,28 @@ the program-end everything-check.**
   22/22 · plan-harbor E2E 52/52 · harbor-complete E2E 37/37 · hotspot 9/9 — **zero JS errors** throughout.
   One session-limit park (`03bd674`) resumed clean; the W3 stage worker died on report format only (its
   edits landed; the gate verified them live and approved).
+- **Program-end everything-check (Fable) + fixes (W4).** The Fable check played the full campaign (intro →
+  all 7 day tabs → load-day stall → VIP buddy cap → ship-day run → fix ladder → Live → sound fallback →
+  JP/RM) and found 4 real defects — all fixed, gate-approved and re-verified:
+  1. **Live was unwinnable** — the plan's pinned "carry-canonical" half was never implemented, so the seeded
+     jig-case gap idled the gear check 60 min and dinner could never hit 18:00. `startLive` now folds the
+     canonical Load day into the Live cfg (every Live-path `buildCfg()` inherits it); the fishday puzzle is
+     purely the arrows again. Headless win path: 10 face-to-face commits → **"Fishing Day: 34 of its 34
+     trip points — dinner 18:00, nobody waited."**
+  2. **Carry idle was misattributed to the info detector** ("Draw the arrows" with every arrow drawn — a
+     dead end). `handoffTiming` now prices **static arrow-design faults only** (missing / late-by-design /
+     unresolved); a carry stall and its cascade — including the *dynamic* wrong-fish it causes — bill their
+     own bucket + Efficiency. A design-caused wrong-fish always co-occurs with a missing/late socket
+     (probe-proven), so nothing is lost.
+  3. **Inspector + pawn card silently dropped carry waits** — both now name them: 📦 "Jig case → never made
+     the ship (fix the Load day)" (`inspNotAboard`, EN/JP), never hand-feedable (you can't radio a crate aboard).
+  4. **README's scoring section contradicted its own verify section** (still 89 atoms / 5 buckets) — refreshed
+     to the voyage constitution.
+  Plus the check's warnings: coarse-day verdicts now read "trip score 53/100" EN/JP (was misreadable as the
+  day's own score); the stale `sb_load/sb_voyage` i18n fallback removed. Confirmed in the good direction:
+  the §23-era "coarse applyDayFix ~92 cap" no longer reproduces (`applyDayFixAndRerun` persists both patches —
+  a gappy Load day heals to 10/10 with zero pauses).
 - **Deferred:** a per-tick day→dusk ambient transition (sound follows run-enter only); a real-speaker mix
-  pass (wiring is machine-verified; the *sound design* needs one human listen); Live mode stays fishday-only;
-  guest sprites, pan/zoom, §13 weather/scenario branches (next program).
+  pass (wiring is machine-verified; the *sound design* needs one human listen); Live mode stays fishday-only
+  by design (and is carry-canonical as of the program-end fix); guest sprites, pan/zoom, §13 weather/scenario
+  branches (next program).
