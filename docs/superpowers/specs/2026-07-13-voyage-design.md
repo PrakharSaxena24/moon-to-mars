@@ -85,3 +85,19 @@ merged UI → **Fable runs the program-end everything-check** and reports anythi
 
 PWA/share-links/save-slots/daily-challenge (owner: sound only, for now); leaderboards/backends (permanently,
 per §11); multiplayer; per-guest sprites; the §13 weather/scenario branches (next program after this).
+
+## 4.1 Integration amendment — the landed constitution (2026-07-13, senior-dev gate ruling)
+
+The W1 engine landed a coherent Σ=100 re-pack but changed two frozen tiers without a spec edit; the Opus
+senior-dev gate blocked it (correctly). Ruling, spec-first:
+- **The riskable socket tier stays 3** (rubric-v1 §3.4 / this spec's §4 both froze it; the 1+2 迷い/手待ち
+  split is the thesis's own pricing). The engine's 3→2 change is REVERTED (+4 pts to Fishing Day).
+- Funded by four 1-pt shaves, chosen as least thesis-relevant: sailing-time boarding gate 3→2 (the hold
+  manifest gate remains the load day's teeth), frame `abort_night` 2→1 (sea abort stays 2), voyage `bl_card`
+  2→1, return `settle` money check retired (its lane + socket still price the work).
+- **Ratified retirements** from the W1 landing: the owner/pm fishday flex lanes (flex-standby exemption;
+  reverses rubric-v1 §10 delta 2) and the defensive `portions` quality atom; fishday gates land at
+  weather 2 / seawatch 1 / health 1 and cookblock 1.
+- **The frozen matrix (pinned at integration):** frame 11 · load 10 · voyage 11 · arrival 12 · ops 13 ·
+  **fishday 34 (heaviest)** · return 9 = 100; dimensions Info **37** (heaviest, strengthened) · Exec 29 ·
+  Safety 21 · Quality 7 · Money 5 · People 1.
