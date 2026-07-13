@@ -285,6 +285,7 @@
       gradeGateB: function (n) { return n + ' · B — an A requires zero known gaps'; },
       daySliceLine: function (earned, max, phase) { return phase + ': ' + earned + ' of its ' + max + ' trip points'; },
       ledgerTitle: 'Score Ledger — every point, named',
+      rubricLink: 'View the full 100-point framework →',
       sst_ok: 'OK', sst_missing: 'Missing', sst_late: 'Late', sst_partial: 'Partial', sst_broken: 'Broken', sst_overlap: 'Overlap', sst_compressed: 'Compressed', sst_decoy: 'Decoy',
 
       // --- §W1 ledger rail (setup/run/report) + receipt-as-control rows ---
@@ -653,6 +654,7 @@
       gradeGateB: function (n) { return n + '・B——Aにはギャップゼロが条件'; },
       daySliceLine: function (earned, max, phase) { return phase + '：トリップ100点のうち ' + earned + ' / ' + max + ' 点'; },
       ledgerTitle: '採点台帳 — すべての得点に理由',
+      rubricLink: '100点の設計図をすべて見る →',
       sst_ok: 'OK', sst_missing: '未設定', sst_late: '遅延', sst_partial: '部分点', sst_broken: '破綻', sst_overlap: '重複', sst_compressed: '圧縮', sst_decoy: 'ダミー',
 
       // --- §W1 得点レール（計画・実行・講評）＋レシート型の設計判断行 ---

@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The 100-Point Framework · Ogasawara Rehearsal</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  /* page-local layout on top of the game's washi theme */
+  .rubwrap{max-width:920px;margin:0 auto;padding:18px 16px 60px;}
+  .rub-hero{background:var(--indigo,#1c2733);color:#f2ead8;border-radius:14px;padding:26px 28px;margin:14px 0 18px;}
+  .rub-hero h1{margin:0 0 6px;font-family:Georgia,serif;font-size:30px;}
+  .rub-hero p{margin:4px 0;opacity:.92;}
+  .rub-hero a{color:#e3c46b;}
+  .rub-matrix{width:100%;border-collapse:collapse;font-size:14px;}
+  .rub-matrix th,.rub-matrix td{border:1px solid var(--line2,#d8cdb4);padding:7px 10px;text-align:center;}
+  .rub-matrix th{background:var(--bg2,#f1e9d4);}
+  .rub-matrix td.hd{text-align:left;font-weight:600;}
+  .rub-matrix .hot{background:rgba(227,196,107,.28);font-weight:700;}
+  .rub-note{font-size:13px;color:var(--ink2,#6b6353);margin-top:8px;}
+  .rub-legend{display:flex;gap:10px;flex-wrap:wrap;font-size:12.5px;margin:10px 0 2px;}
+  .rub-legend span{border:1px solid var(--line2,#d8cdb4);border-radius:20px;padding:3px 10px;background:var(--bg1,#faf5e8);}
+  .lang-row{display:flex;gap:8px;justify-content:flex-end;margin:10px 0 0;}
+  .lang-row button{border:1px solid var(--line2,#d8cdb4);background:var(--bg1,#faf5e8);border-radius:6px;padding:5px 12px;cursor:pointer;font-family:inherit;}
+  .lang-row button.on{background:var(--accent,#b23a30);color:#fff;border-color:var(--accent,#b23a30);}
+  .rub-atoms .lg-row{cursor:default;}
+</style>
+</head>
+<body>
+<div class="rubwrap">
+  <div class="lang-row"><button id="l-en" class="on">English</button><button id="l-ja">日本語</button></div>
+  <div class="rub-hero">
+    <h1 id="r-title"></h1>
+    <p id="r-sub"></p>
+    <p><a href="./index.html" id="r-back"></a></p>
+  </div>
+  <div class="card"><h2 id="r-mx-h"></h2><div style="overflow-x:auto"><table class="rub-matrix" id="r-matrix"></table></div><div class="rub-note" id="r-mx-note"></div></div>
+  <div class="card"><h2 id="r-gate-h"></h2><div id="r-gate"></div></div>
+  <div class="card"><h2 id="r-inv-h"></h2><div class="rub-legend" id="r-legend"></div><div class="ledger rub-atoms" id="r-atoms"></div></div>
+</div>
+<script src="engine.js"></script>
+<script src="i18n.js"></script>
+<script>
+(function () {
+  'use strict';
+  var P = window.PRS, S = window.STR, L = 'en';
+  var plan = P.mergePlan({ seed: 1, overrides: {} });
+  var trip = P.scoreTrip(plan);   // maxPts is plan-invariant (§5 template denominators) — the framework itself
+  var BUCKETS = ['frame', 'arrival', 'ops', 'fishday', 'return'];
+  var DIMS = ['info', 'exec', 'safety', 'quality', 'money', 'people'];
+
+  // page copy (kept local so the game's i18n parity surface stays game-only)
+  var R = {
+    en: {
+      title: 'The 100-Point Framework', back: '← back to the game',
+      sub: 'Every point is one named, checkable decision. This page is rendered live from the same engine that scores your plan — it cannot drift.',
+      mxh: 'The frozen matrix — 5 phases × 6 dimensions', mxnote: 'Fishing Day and Information carry the most points because they contain the most clocked decisions — the heart of the game is that information has a deadline.',
+      gateh: 'How the grade works',
+      gate: '<p><b>A</b> requires <b>90+ points AND zero known gaps</b> — a plan can score 97 and still read “97 · B — an A requires zero known gaps.”</p><p><b>B</b> ≥ 75 · <b>C</b> ≥ 60 · otherwise <b>D</b>.</p><p>The Score answers “is the plan sound?” (causes). A separate <b>Efficiency %</b> answers “does it waste anyone’s time?” (effects). One late hand-off honestly bills both.</p><p>Riskable information (3 pts) splits: 1 for <i>specifying</i> the hand-off at all, 2 for it <i>arriving on time</i> — never drawn loses all 3, drawn-but-late keeps 1.</p>',
+      invh: 'The full inventory — every point, named',
+      lgSocket: '● information hand-off', lgLane: '■ execution lane', lgGate: '◆ gate / authority', lgDecoy: '⊘ decoy (−2/−3 if placed)', lgRisk: '★ wrong-fish riskable (3 pts)',
+      total: 'Total', decoyPts: 'debit'
+    },
+    ja: {
+      title: '100点の設計図', back: '← ゲームへ戻る',
+      sub: 'すべての得点は、名前のある検証可能な意思決定です。このページは採点エンジンそのものから描画されるため、実際の採点と食い違うことはありません。',
+      mxh: '固定マトリクス——5つの局面 × 6つの側面', mxnote: '釣行日と「情報」が最も重いのは、時刻を持つ意思決定が最も多く含まれるからです——情報には締切がある、がこのゲームの核心です。',
+      gateh: '評価の仕組み',
+      gate: '<p><b>A評価</b>には<b>90点以上かつ既知のギャップゼロ</b>が必要です——97点でも「97点・B——A評価には既知のギャップゼロが条件」と表示されます。</p><p><b>B</b> ≥ 75点 ・ <b>C</b> ≥ 60点 ・ それ未満は<b>D</b>。</p><p>スコアは「計画は健全か」(原因)に、別枠の<b>稼働効率%</b>は「誰かの時間を無駄にしていないか」(結果)に答えます。遅れた受け渡しは正直に両方へ計上されます。</p><p>誤釣リスクのある情報(3点)は分割されます：受け渡しを<i>設計した</i>ことに1点、<i>時間内に届いた</i>ことに2点——未設計は3点全損、設計済みでも遅延なら1点のみ。</p>',
+      invh: '全項目一覧——すべての得点に名前',
+      lgSocket: '● 情報の受け渡し', lgLane: '■ 実行レーン', lgGate: '◆ ゲート・権限', lgDecoy: '⊘ ダミー（配置すると−2/−3）', lgRisk: '★ 誤釣リスク枠（3点）',
+      total: '合計', decoyPts: '減点'
+    }
+  };
+  var NM_FIX = {
+    frame_abort_sea: { en: 'Rough-sea abort authority', jp: '時化時の中止権限' },
+    frame_abort_night: { en: 'Night-sea abort authority', jp: '夜間の中止権限' }
+  };
+  function nm(o) { return o ? (L === 'ja' ? (o.jp || o.ja || o.en) : o.en) : ''; }
+  function t(k) { return (S[L] && S[L][k]) || (S.en && S.en[k]) || k; }
+  function byId(arr, id) { for (var i = 0; i < (arr || []).length; i++) if (arr[i].id === id) return arr[i]; return null; }
+  function taskAcrossSegs(id) {
+    var segs = ['arrival', 'ops', 'fishday', 'return'];
+    for (var i = 0; i < segs.length; i++) { var tk = byId(P.tasksForSeg(plan, segs[i]), id); if (tk) return tk; }
+    return null;
+  }
+  function atomName(a) {
+    var ref = a.itemRef;
+    if (NM_FIX[a.id]) return nm(NM_FIX[a.id]);
+    if (ref && ref.cardId) {
+      var card = byId(plan.infoCards, ref.cardId);
+      var rn = ref.roleId ? nm(P.role(ref.roleId).name) : '';
+      return (card ? nm(card.name) : ref.cardId) + (rn ? ' → ' + rn : '');
+    }
+    if (ref && ref.taskId) {
+      var tids = Object.prototype.toString.call(ref.taskId) === '[object Array]' ? ref.taskId : [ref.taskId];
+      if (ref.roleId && tids.length > 1) return nm(P.role(ref.roleId).name) + ' (' + tids.length + ')';
+      var names = [];
+      for (var i = 0; i < tids.length; i++) { var tk = taskAcrossSegs(tids[i]); if (tk) names.push(nm(tk.name)); }
+      var rn2 = ref.roleId ? nm(P.role(ref.roleId).name) + ': ' : '';
+      return rn2 + (names.length ? names.join(' · ') : a.id);
+    }
+    if (ref && ref.detectorId) return t('e_' + ref.detectorId + '_label');
+    return a.id.replace(/_/g, ' ');
+  }
+  function typeMark(a) {
+    var ty = a.itemRef && a.itemRef.type;
+    if (ty === 'socket') return a.maxPts === 3 ? '★' : '●';
+    if (ty === 'lane') return '■';
+    if (ty === 'decoy') return '⊘';
+    return '◆';
+  }
+  function render() {
+    var r = R[L];
+    document.documentElement.lang = L;
+    document.getElementById('l-en').className = L === 'en' ? 'on' : '';
+    document.getElementById('l-ja').className = L === 'ja' ? 'on' : '';
+    document.getElementById('r-title').textContent = r.title;
+    document.getElementById('r-sub').textContent = r.sub;
+    document.getElementById('r-back').textContent = r.back;
+    document.getElementById('r-mx-h').textContent = r.mxh;
+    document.getElementById('r-mx-note').textContent = r.mxnote;
+    document.getElementById('r-gate-h').textContent = r.gateh;
+    document.getElementById('r-gate').innerHTML = r.gate;
+    document.getElementById('r-inv-h').textContent = r.invh + ' (' + trip.atoms.length + ')';
+    document.getElementById('r-legend').innerHTML =
+      '<span>' + r.lgSocket + '</span><span>' + r.lgRisk + '</span><span>' + r.lgLane + '</span><span>' + r.lgGate + '</span><span>' + r.lgDecoy + '</span>';
+
+    // the matrix, computed from the live atoms
+    var cells = {}, bt = {}, dt = {}, total = 0, i, a;
+    for (i = 0; i < trip.atoms.length; i++) {
+      a = trip.atoms[i];
+      cells[a.bucket + '|' + a.dimension] = (cells[a.bucket + '|' + a.dimension] || 0) + a.maxPts;
+      bt[a.bucket] = (bt[a.bucket] || 0) + a.maxPts;
+      dt[a.dimension] = (dt[a.dimension] || 0) + a.maxPts;
+      total += a.maxPts;
+    }
+    var mh = '<tr><th></th>';
+    for (i = 0; i < DIMS.length; i++) mh += '<th>' + t('sd_' + DIMS[i]) + '</th>';
+    mh += '<th>' + r.total + '</th></tr>';
+    for (var b = 0; b < BUCKETS.length; b++) {
+      var bk = BUCKETS[b], hot = bk === 'fishday';
+      mh += '<tr><td class="hd' + (hot ? ' hot' : '') + '">' + t('sb_' + bk) + '</td>';
+      for (i = 0; i < DIMS.length; i++) {
+        var v = cells[bk + '|' + DIMS[i]] || 0;
+        mh += '<td' + (hot && DIMS[i] === 'info' ? ' class="hot"' : '') + '>' + (v || '·') + '</td>';
+      }
+      mh += '<td><b>' + (bt[bk] || 0) + '</b></td></tr>';
+    }
+    mh += '<tr><td class="hd">' + r.total + '</td>';
+    for (i = 0; i < DIMS.length; i++) mh += '<td><b>' + (dt[DIMS[i]] || 0) + '</b></td>';
+    mh += '<td><b>' + total + '</b></td></tr>';
+    document.getElementById('r-matrix').innerHTML = mh;
+
+    // the inventory: bucket -> dimension -> atom rows (maxPts view of the game's own ledger)
+    var html = '';
+    for (b = 0; b < BUCKETS.length; b++) {
+      bk = BUCKETS[b];
+      html += '<div class="lg-bucket"><div class="lg-bucket-h"><b>' + t('sb_' + bk) + '</b><span>' + (bt[bk] || 0) + ' / 100</span></div>';
+      for (i = 0; i < DIMS.length; i++) {
+        var dm = DIMS[i], rows = '';
+        for (var j = 0; j < trip.atoms.length; j++) {
+          a = trip.atoms[j];
+          if (a.bucket !== bk || a.dimension !== dm) continue;
+          var pts = a.maxPts > 0 ? String(a.maxPts) : (a.itemRef && a.itemRef.type === 'decoy' ? '−2/−3 ' + R[L].decoyPts : '0');
+          rows += '<div class="lg-row"><span class="lg-nm">' + typeMark(a) + ' ' + atomName(a) + '</span>' +
+                  '<span class="lg-pts">' + pts + '</span></div>';
+        }
+        if (rows) html += '<div class="lg-dim"><span>' + t('sd_' + dm) + '</span><span>' + (cells[bk + '|' + dm] || 0) + '</span></div>' + rows;
+      }
+      html += '</div>';
+    }
+    document.getElementById('r-atoms').innerHTML = html;
+  }
+  document.getElementById('l-en').addEventListener('click', function () { L = 'en'; render(); });
+  document.getElementById('l-ja').addEventListener('click', function () { L = 'ja'; render(); });
+  render();
+})();
+</script>
+</body>
+</html>
