@@ -1601,5 +1601,126 @@ console.log('\n=== SEGMENT-AWARE MAP PROFILES (presentation-only) ===');
     'map report: reapplying sim-local interventions reproduces the completed Return schedule');
 })();
 
+// ============================================================================
+// TEACHING MVP — operational assumptions, feasible channels, and a deterministic
+// communications-outage challenge. These contracts are additive: the canonical
+// rehearsal still earns 100/A even while real-world route facts remain unresolved.
+// ============================================================================
+console.log('\n=== TEACHING MVP — readiness, channel feasibility, and scenarios ===');
+(function () {
+  var canonCfg = trueCanonCfgV(), canonPlan = P.mergePlan(canonCfg);
+  var canonTrip = P.scoreTrip(canonPlan), canonFish = P.daySchedule(canonPlan, 'fishday');
+
+  ok(!!P.SCENARIOS.normal && !!P.SCENARIOS['comms-outage'] && typeof P.applyScenario === 'function',
+    'scenario API exports normal + comms-outage and a pure applicator');
+  var sourceJson = JSON.stringify(canonCfg);
+  var outageCfgA = P.applyScenario(canonCfg, 'comms-outage');
+  var outageCfgB = P.applyScenario(canonCfg, 'comms-outage');
+  ok(JSON.stringify(canonCfg) === sourceJson && outageCfgA !== canonCfg && outageCfgA.overrides !== canonCfg.overrides,
+    'applyScenario clones its config and does not mutate caller-owned overrides');
+  ok(JSON.stringify(outageCfgA) === JSON.stringify(outageCfgB) && outageCfgA.scenarioId === 'comms-outage',
+    'applyScenario is deterministic and records the selected scenario as config data');
+
+  var normalPlan = P.mergePlan(P.applyScenario(canonCfg, 'normal'));
+  ok(JSON.stringify(P.daySchedule(normalPlan, 'fishday')) === JSON.stringify(canonFish),
+    'normal scenario preserves every canonical fishday schedule anchor');
+  ok(P.scoreTrip(normalPlan).total === canonTrip.total && canonTrip.total === 100 && canonTrip.grade === 'A',
+    'normal scenario preserves the canonical 100/A scoreTrip result');
+
+  var planBeforeAssumptions = JSON.stringify(canonPlan);
+  var assumptionsA = P.criticalAssumptions(canonPlan), assumptionsB = P.criticalAssumptions(canonPlan);
+  var unresolvedIds = assumptionsA.filter(function (x) { return x.status === 'unresolved'; }).map(function (x) { return x.id; }).sort();
+  ok(JSON.stringify(assumptionsA) === JSON.stringify(assumptionsB) && JSON.stringify(canonPlan) === planBeforeAssumptions,
+    'criticalAssumptions is deterministic and does not mutate the plan');
+  ok(unresolvedIds.join(',') === 'chichijima-connection-time,hotel-breakfast-time,interisland-vessel-name,return-timetable',
+    'criticalAssumptions exposes breakfast, vessel-name, Chichijima-connection, and return-timetable facts');
+  var er = P.executionReadiness(canonPlan);
+  ok(er.rehearsalComplete === true && er.realExecutionReady === false && er.status === 'rehearsal-complete' && er.unresolvedCount === 4,
+    'canonical 100/A is rehearsal-complete but not real-execution-ready while 4 critical facts are unknown');
+  ok(P.scoreTrip(canonPlan).total === 100 && P.scoreTrip(canonPlan).grade === 'A' && P.scoreTrip(canonPlan).gate.clean === true,
+    'critical external assumptions do not deduct scoreTrip points or withhold the rehearsal A');
+
+  // Demonstrate the other side of the contract without adding invented facts to the
+  // template: a caller-supplied, confirmed plan can become real-execution-ready.
+  var confirmedPlan = P.mergePlan(canonCfg), ci;
+  function cleg(id) { return confirmedPlan.itinerary.filter(function (x) { return x.id === id; })[0]; }
+  cleg('out-breakfast').departMin = 450;
+  cleg('out-ogasawara-maru').arriveMin = 2100;
+  cleg('out-interisland').departMin = 2160;
+  confirmedPlan.vessels.filter(function (x) { return x.id === 'interisland-vessel'; })[0].knownName = true;
+  for (ci = 0; ci < confirmedPlan.itinerary.length; ci++) if (confirmedPlan.itinerary[ci].direction === 'return') {
+    confirmedPlan.itinerary[ci].confirmed = true;
+    confirmedPlan.itinerary[ci].departMin = 3000 + ci * 60;
+  }
+  confirmedPlan.project.route.returnConfirmed = true;
+  var confirmedEr = P.executionReadiness(confirmedPlan);
+  ok(confirmedEr.rehearsalComplete && confirmedEr.realExecutionReady && confirmedEr.status === 'real-execution-ready' && confirmedEr.unresolvedCount === 0,
+    'confirming every external fact advances a 100/A plan to real-execution-ready');
+
+  var catchRadio = canonPlan.handoffs.filter(function (h) { return h.id === 'h_catch_chef'; })[0];
+  function catchAs(channel) { var h = JSON.parse(JSON.stringify(catchRadio)); h.channel = channel; return h; }
+  var faceF = P.channelFeasibility(canonPlan, catchAs('faceToFace'), 'fishday');
+  var boardF = P.channelFeasibility(canonPlan, catchAs('board'), 'fishday');
+  var unknownF = P.channelFeasibility(canonPlan, catchAs('carrier-pigeon'), 'fishday');
+  ok(faceF.ok === false && faceF.reason === 'requires-colocation' && faceF.fromContext.atSea && !faceF.toContext.atSea,
+    'fishday sea→shore face-to-face handoff fails with physical-context evidence');
+  ok(boardF.ok === false && boardF.reason === 'requires-colocation',
+    'fishday sea→shore notice-board handoff fails because the endpoints are not co-located');
+  ok(unknownF.ok === false && unknownF.reason === 'unknown-channel',
+    'an unrecognized channel fails closed with the stable unknown-channel reason');
+
+  var impossibleCfg = JSON.parse(JSON.stringify(canonCfg));
+  impossibleCfg.overrides.handoffs = impossibleCfg.overrides.handoffs || {};
+  impossibleCfg.overrides.handoffs.h_catch_chef = { channel: 'faceToFace' };
+  var impossiblePlan = P.mergePlan(impossibleCfg), impossibleDs = P.daySchedule(impossiblePlan, 'fishday');
+  ok(impossibleDs.missing.some(function (x) { return x.taskId === 't_f_sideprep' && x.cardId === 'ic_catch'; }),
+    'an infeasible sea→shore channel enters the schedule as unresolved/missing information');
+  ok(P.dayReadiness(impossiblePlan, 'fishday').some(function (x) { return x.type === 'MISSING_ARROW' && x.taskId === 't_f_sideprep'; }),
+    'dayReadiness surfaces the infeasible sea→shore delivery as a missing-arrow repair');
+
+  var normalPhone = P.channelFeasibility(canonPlan, catchAs('phone'), 'fishday');
+  var outagePlan = P.mergePlan(outageCfgA);
+  var outagePhone = P.channelFeasibility(outagePlan, catchAs('phone'), 'fishday');
+  var outageChat = P.channelFeasibility(outagePlan, catchAs('chat'), 'fishday');
+  var outageRadio = P.channelFeasibility(outagePlan, catchAs('radio'), 'fishday');
+  ok(normalPhone.ok === true, 'sea→shore phone remains feasible in the normal rehearsal scenario');
+  ok(outagePhone.ok === false && outagePhone.reason === 'scenario-channel-unavailable',
+    'comms-outage makes an at-sea phone relay unavailable');
+  ok(outageChat.ok === false && outageChat.reason === 'scenario-channel-unavailable',
+    'comms-outage makes an at-sea chat relay unavailable');
+  ok(outageRadio.ok === true && outageRadio.reason === 'ok',
+    'marine radio remains a feasible sea→shore fallback during comms-outage');
+
+  var voyageCabins = outagePlan.days.voyage.handoffs.filter(function (h) { return h.id === 'h_v_cabins'; })[0];
+  var voyageChat = JSON.parse(JSON.stringify(voyageCabins)); voyageChat.channel = 'chat';
+  var voyageFace = P.channelFeasibility(outagePlan, voyageCabins, 'voyage');
+  var voyageChatF = P.channelFeasibility(outagePlan, voyageChat, 'voyage');
+  ok(voyageFace.ok === true && voyageFace.fromContext.atSea && voyageFace.toContext.atSea,
+    'the Voyage board is physically aboard Ogasawara-maru and still permits face-to-face handoff');
+  ok(voyageChatF.ok === false && voyageChatF.reason === 'scenario-channel-unavailable',
+    'communications-outage applies to at-sea Voyage handoffs, not only Fishing Day');
+
+  var outagePhoneCfg = P.applyScenario(canonCfg, 'comms-outage');
+  outagePhoneCfg.overrides.handoffs = outagePhoneCfg.overrides.handoffs || {};
+  outagePhoneCfg.overrides.handoffs.h_catch_chef = { channel: 'phone' };
+  var outagePhoneDs = P.daySchedule(P.mergePlan(outagePhoneCfg), 'fishday');
+  ok(outagePhoneDs.missing.some(function (x) { return x.taskId === 't_f_sideprep' && x.cardId === 'ic_catch'; }),
+    'outage phone failure is integrated into the deterministic schedule cascade');
+  var resilientPlan = P.mergePlan(P.applyScenario(canonCfg, 'comms-outage'));
+  var resilientDs = P.daySchedule(resilientPlan, 'fishday'), resilientTrip = P.scoreTrip(resilientPlan);
+  ok(resilientDs.missing.length === 0 && resilientDs.late.length === 0 && resilientDs.idleTotal === 0,
+    'canonical radio relays recover the outage challenge with a zero-idle fishday');
+  ok(resilientTrip.total === 100 && resilientTrip.grade === 'A' && resilientTrip.gate.clean,
+    'radio-resilient canonical plan remains reachable at clean 100/A under comms-outage');
+  var redundantOutagePlan = JSON.parse(JSON.stringify(resilientPlan));
+  var unavailableSibling = catchAs('phone'); unavailableSibling.id = 'h_catch_phone_redundant';
+  redundantOutagePlan.handoffs.push(unavailableSibling);
+  var redundantOutageDs = P.daySchedule(redundantOutagePlan, 'fishday');
+  var redundantOutageTrip = P.scoreTrip(redundantOutagePlan);
+  ok(redundantOutageDs.missing.length === 0 && redundantOutageDs.late.length === 0 && redundantOutageDs.idleTotal === 0 &&
+      redundantOutageTrip.total === 100 && redundantOutageTrip.gate.clean,
+    'an unavailable duplicate never voids the same socket\'s feasible radio path or inflates its score');
+})();
+
 console.log('\n' + (fail === 0 ? 'ALL ' + pass + ' CHECKS PASSED ✓' : pass + ' passed, ' + fail + ' FAILED ✗'));
 process.exit(fail === 0 ? 0 : 1);

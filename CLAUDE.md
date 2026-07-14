@@ -14,11 +14,12 @@
 ## 0. One paragraph
 An **offline, bilingual (EN/JP), no-build browser game** that **rehearses a project before you run it**.
 The player pre-plans a real **小笠原 (Ogasawara) 10-day / 24-person company fishing trip**, presses **Run**,
-and watches simple 2D characters walk a site map and execute the plan. A **known perfect plan scores 100**:
-if every duty is assigned, every task timed, and — the heart of the game — **every piece of information is
-handed to the right person at the right moment**, nobody wastes a minute. Where the plan has a gap, characters
-**idle, hesitate, or huddle**, and *the place they stall is the place to fix the plan.* Fix the gaps, re-run
-toward 100.
+and watches simple 2D characters walk a site map and execute the plan. The player is the **AIBOS rehearsal
+lead**, commissioned by AEGIS to protect safe return, guest care, the relationship, and team learning. A
+**known perfect modeled plan scores 100** when every duty, task, gate, resource, and timed information handoff
+is sound; the separate Efficiency headline records wasted time. Where the plan has a gap, characters **idle,
+hesitate, or huddle**, and *the place they stall is the place to fix the plan.* A 100-point rehearsal is not
+real-execution-ready while critical external facts are still unconfirmed.
 
 > 止まったキャラクターは、失敗した社員ではない。止まった場所こそが、計画を直すべき場所である。
 > The stalled character isn't a failed employee — the place they stalled is the place to fix the plan.
@@ -46,18 +47,19 @@ Every stall is **computed from plan data, never random** (an explainable rule en
 | D3 | **MVP depth** | Model **one representative fishing-day loop in full, minute-level detail** (cook→angler→boat→cook), inside the 10-day frame. |
 | D4 | **Authoring** | **Hybrid timeline + info-arrows**, author-heavy **from a skeleton**: trip facts given; player assigns duties, times task blocks, and **draws every information handoff**. |
 | D5 | **Run model** | Mostly **hands-off** (press Run, watch) **+ checkpoints** (pause → inspect each member → optionally intervene → resume). |
-| D6 | **Scoring** | Perfect = 100; explainable deductions for wasted time / late-or-missing info / wrong-fish rework / safety. A headline **Efficiency %** sits beside the grade. |
+| D6 | **Scoring** | Perfect modeled plan = 100; every plan-cause point is explainable. A separate headline **Efficiency %** records wasted time/rework effects beside the grade. |
 | D7 | **Foundation** | **Extend** the existing verified engine (`window.PRS`) — do **not** rebuild. Add a temporal layer behind a new `fishday` rehearsal target; the 10-day frame is byte-for-byte unchanged. |
 | D8 | **Rename/move** | Project folder → **`OgasawaraSim`** at `/Users/tanakai/aibos/OgasawaraSim` (**DONE 2026-07-02**; user renamed the target from the originally planned `ogasawara-rehearsal`). Product/display name stays **Ogasawara Rehearsal · 実行前シミュレーター**. |
 
 ---
 
 ## 3. The game loop
-1. **Read the skeleton** — the Ogasawara trip is pre-built: 24 people, 7 stations, 10-day frame, a **Duty Deck**, a resource list, and an **Info Catalog** (the message types an arrow can carry).
-2. **Author the plan** (setup) — assign each duty to a person; drop **task blocks** on per-character timeline lanes (start + duration); **draw an arrow** for every information handoff (choose message, sender, receiver, send-time/trigger, channel). Live readiness hints predict the score before Run.
-3. **Run** — press Run and watch. Characters walk the site map and execute. Idle minutes & stalls are **computed from the plan**. It pauses at **checkpoints** for inspect/intervene.
-4. **Score** — grade (D→A) + **Efficiency %** + the per-category breakdown + the fix-pack, every deduction named.
-5. **Fix & re-run** — apply a fix (draw a missing arrow, re-time a late one, assign a duty) and re-run; the score climbs toward **100 / A / 100% efficiency**.
+1. **Choose the learning level** — Learn is guided; Practice and Challenge start Plan First and require a prediction. Challenge applies the deterministic communications-outage constraint.
+2. **Read the skeleton** — the Ogasawara trip is pre-built: 24 people, 7 stations, 10-day frame, a **Duty Deck**, a resource list, and an **Info Catalog** (the message types an arrow can carry).
+3. **Author the plan** (setup) — assign each duty to a person; drop **task blocks** on per-character timeline lanes (start + duration); **draw an arrow** for every information handoff (choose message, sender, receiver, send-time/trigger, channel). Learn shows full guidance; Practice/Challenge delay answer-bearing feedback.
+4. **Predict and Run** — in Practice/Challenge, commit an expected root cause and cite the plan evidence first. Characters walk the site map and execute. Idle minutes & stalls are **computed from the plan**. It pauses at **checkpoints** for inspect/intervene.
+5. **Review** — compare prediction with modeled evidence; read the trip Score, separate Efficiency, execution-readiness facts, and fix-pack; explain why a repair works and where the pattern transfers.
+6. **Fix & re-run** — apply a repair (draw a missing arrow, re-time a late one, assign a duty) and test the causal chain again. A 100/A score completes the modeled plan; 100% Efficiency is a separate outcome.
 
 ---
 
@@ -92,9 +94,11 @@ guarded by ⛑️ Safety (go/no-go) and supplied by 📦 Logi (tackle + ice) and
 
 ---
 
-## 5. THE CANONICAL REFERENCE PLAN — one perfect fishing day (Day 3) · scores 100
-This is the **single source of truth** the whole game is scored against (満点 = 100). It is
-**consistency-verified**: every task's needed info is delivered by a *finished* producer at `atTime ≤ start`,
+## 5. THE CANONICAL REFERENCE PLAN — one perfect fishing day (Day 3) · 34/34 trip points
+This is the temporal reference for Fishing Day. The retired day-local scorer can express it as 100, but the
+current `scoreTrip` constitution prices Fishing Day at **34 of the trip-wide 100**; a canonical whole trip must
+also solve every other segment and the frame. This reference is **consistency-verified**: every task's needed
+info is delivered by a *finished* producer at `atTime ≤ start`,
 every dependency finishes before its dependent starts, and no solo duty-holder is double-booked (the 3 chefs
 correctly parallelize). Remove any one arrow and the consuming task idles (手待ち) or acts on a wrong assumption
 (手戻り) — that is exactly what the gappy template teaches.
@@ -480,18 +484,19 @@ Design source (kept out of git via `.gitignore`): `シミュレーション型�
 rebuild 2026-07-03 (§17). Polish pass 2026-07-05 (§18). All-day grid 2026-07-06 (§19, superseded). Authorable
 hour-level all-days rebuild SHIPPED 2026-07-06 (§20). Canvas 2D stage + coarse-day animation + graphic
 onboarding SHIPPED 2026-07-07/08 (§21.11/§21.12/§22). Whole-trip scoreTrip ledger SHIPPED 2026-07-09 (§23),
-re-derived as scoring rubric v1.0 SHIPPED 2026-07-10 (§24).**
+re-derived as scoring rubric v1.0 SHIPPED 2026-07-10 (§24). Teaching MVP SHIPPED 2026-07-14 (§31).**
 **LIVE on GitHub Pages: https://prakharsaxena24.github.io/moon-to-mars/** (`main` → Pages serves `main`/root,
-auto-deploys on push; `gh` authed as PrakharSaxena24 — everything through §27 is pushed and live;
+auto-deploys on push; `gh` authed as PrakharSaxena24 — everything through §30 is pushed and live;
 `_config.yml` excludes CLAUDE.md/WORLD.md/docs/archive/verify.js from the published site).
-Headless-verified `node verify.js` **343 checks** (classic D→A gradient; the fishday temporal block — gappy
+Headless-verified `node verify.js` **385 checks** (classic D→A gradient; the fishday temporal block — gappy
 plan idleTotal 1450 person-min, fishday-day efficiency 68%; the rubric v1.0 constitution — 99 atoms Σ=100,
-gappy trip 53/D, canonical 100/A/clean, arrow-draw the largest single fix jump; Layer 0 helpers; the §20
-authorable-day anchors: per-day 100 via canonDay, cleared→D, monotone gradient, channel-at-hour pricing,
-façade equality, purity). Prior DOM passes: **69-check Playwright E2E** (§20.8) + headless-Chrome screenshot
-passes for §21/§22 + a 19-check runtime smoke for §24. Next: §13 contingency branches, Layers 2–4 (§16), and
-the §23/§24 "Deferred / known" items (coarse `applyDayFix` cap; Live gap convergence-grouping SHIPPED in §27) remain the
-backlog.
+gappy trip 52/D at 86% trip Efficiency, canonical 100/A/clean at 100%, arrow-draw the largest single fix
+jump; Layer 0 helpers; the §20
+authorable-day internal anchors: retained `scoreDay` 100 via canonDay, cleared→D, monotone gradient, channel-at-hour pricing,
+façade equality, purity; plus Teaching-MVP readiness, channel-feasibility, and deterministic-scenario pins).
+Prior DOM passes: **69-check Playwright E2E** (§20.8) + headless-Chrome screenshot passes for §21/§22 + a
+19-check runtime smoke for §24. Next: the explicitly deferred §31 scenarios/transfer simulation, Layers 3–4
+(§16), and the remaining §23/§24 deferred items.
 
 ---
 
@@ -503,8 +508,8 @@ FEELING **without diluting the thesis** — governed by one law: **juice the dia
 three-proposal synthesis (Living Harbor / Chronicle / Sea-as-adversary) live in the session history.
 
 - **Layer 0 — "Living Harbor" (✅ SHIPPED 2026-07-03).** Pure-cosmetic, zero thesis risk. See §16.1.
-- **Layer 2 — "The sea fights back":** deterministic adversary via `applyScenario` through the one `mergePlan`
-  choke point (comms-outage → seasickness/deputy → storm-day boss). *Backlog.*
+- **Layer 2 — "The sea fights back":** the first deterministic adversary (`comms-outage`) ships in §31 via
+  `applyScenario`; seasickness/deputy and storm-day branches remain backlog.
 - **Layers 3–4 — characters + campaign:** named-people stat cards (traits + morale/loyalty as *read-offs*),
   optional debt-logged live command, 10-day carryover ledger, ambition tiers, expedition chronicle. *Backlog.*
 - **Cut for now:** fog-of-war (user declined 2026-07-03).
@@ -1194,7 +1199,8 @@ architecture verdict (one persistent harbor stage carrying plan/run/report — P
   stalled pawns and under reduced motion; ctx save/restore 70/70.
 - **The 15s cold-open vignette.** A scripted real `createSim` (Live config) on the stage inside `#intro`:
   walk-in → first-gap freeze (~5.7s, chef ❓) → "Hand him the card" → gold mote, mini rail chip 23/41→25/41
-  (+2) → "The place they stall is the place to fix the plan. 100 = nobody waits." Hard lifecycle
+  (+2) → "The place they stall is the place to fix the plan." The original ending equated 100 with zero
+  waiting; §31 retires that copy because Score and Efficiency answer different questions. Hard lifecycle
   (`killVignette` on Start/Skip/enterMode/applyLang; 5× open/close leak check = 0 stray rAF), RM = 3 stills,
   mobile 390px OK. Intro prose cut to one line; pull-quote absorbed; cast duties hover-reveal.
 - **Verified:** `node verify.js` **258/258** (engine untouched throughout) · smoke **22/22** + 9 dedicated
@@ -1333,8 +1339,9 @@ the program-end everything-check.**
   matrix (pinned):** frame 11 · load 10 · voyage 11 · arrival 12 · ops 13 · **fishday 34 (heaviest)** ·
   return 9 = 100; dimensions **Info 37 (heaviest)** · Exec 29 · Safety 21 · Quality 7 · Money 5 · People 1;
   **99 atoms**. Seed gaps extended (load: jig case never assigned to the truck run + cabin list unshared;
-  voyage: 2 VIP buddies unassigned + card authority missing) → **gappy 53/D · trip efficiency 83%**
-  (supersedes §23's narrated 54/D — the seed re-tune under the re-packed matrix); true canonical (all
+  voyage: 2 VIP buddies unassigned + card authority missing) → the **then-current** seed was **53/D · trip
+  efficiency 83%** (superseding §23's narrated 54/D under the re-packed matrix). The route-corrected current
+  pin is **52/D · 86%** (§15/§31); true canonical (all
   classic fixes + every arrow + applyDayFix on all 5 coarse days) → **100/A/clean · 100%**;
   **`fixHandoffs` +16 stays the strictly largest single jump** (authoring Arrival +6, classics ≤ +5).
 - **Voyage UI (W2, `5839aaa`).** Rail/ledger/day-drawers speak all **7 buckets**; the care shelf; a
@@ -1452,3 +1459,60 @@ claimed schedule.
 
 The older direct-island/five-hour-return descriptions in §§28–29 remain only as implementation history and
 must not be used as itinerary facts.
+
+---
+
+## 31. Teaching MVP — from plan checker to learning game (SHIPPED 2026-07-14)
+
+The simulator now measures whether the learner can diagnose the next plan with less help, while preserving
+the deterministic engine, Canvas stage, authoring editors, whole-trip ledger, and all normal-scenario anchors.
+The governing spec is `docs/superpowers/specs/2026-07-14-teaching-mvp-design.md`.
+
+- **Learner and mission.** The learner is the **AIBOS rehearsal lead**, commissioned by AEGIS before the
+  real trip. The four human outcomes are safe return for all 24 people, care for hosted guests, a stronger
+  relationship with invited counterparties, and a team that can execute/adapt/learn without blaming a person
+  for a system-design failure. Stalled members remain evidence about plan conditions, never employee grades.
+- **A curriculum above the existing modes.** `learningLevel` is persisted separately from `appMode`:
+  **Learn** keeps the guided Live experience, full hints/previews, and repair support; **Practice** opens
+  Plan First, requires a root-cause prediction plus rationale, and withholds answer-bearing pre-run verdicts;
+  **Challenge** opens Plan First, requires the same prediction, applies `comms-outage`, and conceals projected
+  answers and automatic repair until the run has been observed. It focuses Fishing Day and layers one unavailable
+  phone catch relay until the learner chooses a fallback; the layer is Challenge-only and never mutates the normal
+  authored plan. Live/Plan First remain the execution surfaces; Learn/Practice/Challenge define how much
+  instructional support the learner receives.
+- **Prediction → evidence → explanation → transfer.** Practice and Challenge predictions choose one of
+  missing information, late information, authority, capacity, or resource/custody and cite evidence in the
+  authored plan. The report compares that prediction with the strongest modeled cause/evidence, then asks why
+  the intended repair changes the causal chain and where the same pattern could occur in another project.
+  Learn reports the same evidence without requiring a pre-run prediction.
+- **Local-only learner state.** The learning level and at most five recent completed attempts live in
+  `localStorage` (`prs_learning_level_v1`, `prs_learning_attempts_v1`). Learner text is escaped before HTML
+  rendering, never enters simulation state, never changes Score/Efficiency, and is not sent to a backend.
+- **Three distinct verdicts.** `scoreTrip(plan)` remains the 99-atom, seven-bucket, six-dimension plan-artifact
+  receipt (Σ=100); `tripEfficiency(plan)` remains the separate effect/wasted-time measure. Neither is learner
+  mastery. `criticalAssumptions(plan)` and `executionReadiness(plan)` add the real-execution lens with statuses
+  `rehearsal-incomplete`, `rehearsal-complete`, and `real-execution-ready`. The current external fact set is
+  hotel breakfast time, inter-island vessel name, Chichijima connection time, and the complete return timetable.
+  These facts do not invent score deductions: a canonical 100/A/clean plan is rehearsal-complete but remains
+  pending confirmation until all four are resolved.
+- **Channel context is part of the lesson.** `channelFeasibility(plan, handoff, segment?)` returns stable
+  `ok`, `unknown-channel`, `requires-colocation`, or `scenario-channel-unavailable` reasons plus sender/receiver
+  contexts. Face-to-face and a notice board cannot satisfy a Fishing-Day sea-to-shore handoff; infeasible
+  delivery stays unresolved instead of silently receiving the channel's numeric latency. A separate feasible
+  redundant arrow may still satisfy that socket, so one broken route does not erase a valid route.
+- **One deterministic contingency.** `SCENARIOS` exposes `normal` and `comms-outage`;
+  `applyScenario(cfg, id)` returns a deep-cloned configuration and `mergePlan` carries its `scenarioId`.
+  Normal is inert. During the outage, phone/chat/notice-board delivery is unavailable whenever an endpoint is
+  at sea (including the voyage); marine radio remains feasible. There is no probability or resilience bonus:
+  a radio-resilient plan can still reach the canonical 100/A rehearsal result.
+- **Current rules, not the retired ledger.** Player-facing rules describe **99 atoms / seven buckets / six
+  dimensions**, keep Score and Efficiency separate, and distinguish rehearsal completion from real execution
+  readiness. Historical §§9, 20.4, 23, and 24 preserve earlier ledgers only as implementation history; they
+  must not be reused for current player copy.
+- **Verification.** `node verify.js` passes **385/385** checks, including every prior anchor plus readiness
+  determinism/purity, score independence of unknown external facts, normal-scenario invariance, physical channel
+  feasibility, Fishday and Voyage outage integration, radio recovery, and canonical 100/A reachability.
+
+**Explicitly deferred:** a multi-scenario resilience score; storm, low-catch, unavailable-principal, spoilage,
+and allergy scenarios; person-skill/stamina effects on assignment; a second non-Ogasawara transfer simulation;
+instructor dashboards, network storage, or a backend; and Word/PDF/Excel execution-pack export.

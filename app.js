@@ -13,6 +13,45 @@
   function T() { return STR[L]; }
   function nm(o) { if (!o) return ''; if (typeof o === 'string') return o; return (L === 'ja' ? o.jp : o.en) || o.en || ''; }
   function byId(arr, id) { for (var i = 0; i < arr.length; i++) if (arr[i].id === id) return arr[i]; return null; }
+  function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+
+  // Learning level is deliberately orthogonal to Live/Plan-first mode. Learn may use either
+  // existing surface; Practice and Challenge always enter Plan-first and require a committed
+  // prediction before launch. Only compact learner records are stored—never the full plan.
+  var LEARNING_LEVEL_KEY = 'prs_learning_level_v1', ATTEMPTS_KEY = 'prs_learning_attempts_v1';
+  function loadLearningLevel() {
+    try { var v = localStorage.getItem(LEARNING_LEVEL_KEY); return ['learn', 'practice', 'challenge'].indexOf(v) >= 0 ? v : 'learn'; }
+    catch (e) { return 'learn'; }
+  }
+  function loadAttempts() {
+    try {
+      var a = JSON.parse(localStorage.getItem(ATTEMPTS_KEY) || '[]'); if (!Array.isArray(a)) return [];
+      var levels = ['learn', 'practice', 'challenge'], segs = ['load', 'voyage', 'arrival', 'ops', 'fishday', 'return', 'all'];
+      var causes = ['missing-info', 'late-info', 'authority', 'capacity', 'resource', 'none'];
+      return a.slice(0, 5).map(function (x, i) {
+        x = x && typeof x === 'object' ? x : {};
+        var level = levels.indexOf(x.level) >= 0 ? x.level : 'learn', segment = segs.indexOf(x.segment) >= 0 ? x.segment : 'all';
+        var cause = causes.indexOf(x.actualCause) >= 0 ? x.actualCause : 'none';
+        var pc = x.prediction && causes.indexOf(x.prediction.cause) >= 0 ? x.prediction.cause : null;
+        return { id: typeof x.id === 'string' ? x.id.slice(0, 80) : ('stored-' + i), at: Number.isFinite(Number(x.at)) ? Number(x.at) : 0,
+          level: level, segment: segment, seed: Number.isFinite(Number(x.seed)) ? Number(x.seed) : 1,
+          scenario: x.scenario === 'comms-outage' ? 'comms-outage' : 'normal', score: clamp(Number(x.score) || 0, 0, 100),
+          grade: typeof x.grade === 'string' ? x.grade.slice(0, 2) : '', gapCount: Math.max(0, Math.min(999, Number(x.gapCount) || 0)), actualCause: cause,
+          prediction: pc ? { cause: pc, rationale: String(x.prediction.rationale || '').slice(0, 240), createdAt: Number(x.prediction.createdAt || x.prediction.at) || 0 } : null,
+          evidence: Array.isArray(x.evidence) ? x.evidence.slice(0, 3) : [], buckets: x.buckets && typeof x.buckets === 'object' ? x.buckets : {},
+          unresolvedAssumptions: Array.isArray(x.unresolvedAssumptions) ? x.unresolvedAssumptions.slice(0, 20).map(function (v) { return String(v).slice(0, 80); }) : [],
+          reflection: { why: String(x.reflection && x.reflection.why || '').slice(0, 400), transfer: String(x.reflection && x.reflection.transfer || '').slice(0, 400) } };
+      });
+    }
+    catch (e) { return []; }
+  }
+  var learningLevel = loadLearningLevel(), learningObserved = false;
+  var pendingPrediction = null, predictionBypass = false, activeLearningRun = null;
+  var learningAttempts = loadAttempts();
+  function persistAttempts() { try { localStorage.setItem(ATTEMPTS_KEY, JSON.stringify(learningAttempts.slice(0, 5))); } catch (e) { } }
+  function learningNeedsPrediction() { return learningLevel === 'practice' || learningLevel === 'challenge'; }
+  function learningHidesExact() { return learningNeedsPrediction() && !learningObserved; }
+  function challengeAutoFixLocked() { return learningLevel === 'challenge' && !learningObserved; }
 
   // detectors, in display order, mapped to their fix
   var DETS = ['safety', 'budgetAuth', 'info', 'report', 'fatigue', 'reserve', 'returnLogi', 'handoffTiming'];
@@ -20,7 +59,7 @@
   var DET_ROLE = { safety: 'safetyLead', budgetAuth: 'budgetLead', info: 'pm', report: 'safetyLead', fatigue: 'siteLead', reserve: 'budgetLead', returnLogi: 'logi', handoffTiming: 'specialist' };
   // which day(s) each design decision affects (a gap can bite on more than one day)
   var DET_SEG = { safety: ['ops', 'fishday'], budgetAuth: ['ops', 'return'], info: ['arrival', 'ops'], report: ['ops'], fatigue: ['ops', 'return'], reserve: ['ops', 'return'], returnLogi: ['return'], handoffTiming: ['fishday'] };
-  var daySel = 'arrival';   // which day is being planned / rehearsed
+  var daySel = learningLevel === 'challenge' ? 'fishday' : 'arrival';   // which day is being planned / rehearsed
   function detsForDay(d) { return (d === 'all') ? DETS.slice() : DETS.filter(function (id) { return DET_SEG[id].indexOf(d) >= 0; }); }
   function dayLabel(seg) { if (seg === 'all') return T().wholeTrip; var s = null; P.SEGMENTS.forEach(function (x) { if (x.id === seg) s = x; }); return s ? nm(s.name) : seg; }
   // Day tabs describe the authorable schedule, not the legacy detector slice.  In
@@ -115,8 +154,21 @@
     });
     if (!isDefaultSeats()) { o.seats = {}; for (k in orgOv) o.seats[k] = orgOv[k]; }
     if (Object.keys(buddyOv).length) { o.buddies = {}; for (k in buddyOv) o.buddies[k] = buddyOv[k]; }   // Voyage §3
+    // The outage challenge must contain a decision to diagnose. Its catch relay is layered as
+    // phone-only for this scenario, without writing dayOv; once the learner explicitly edits that
+    // handoff (radio is the resilient recovery), their authored choice wins.
+    if (learningLevel === 'challenge' && !fixed.fixHandoffs && !Object.prototype.hasOwnProperty.call(dayOv.fishday.handoffs, 'h_catch_chef')) {
+      var canonical = typeof P.canonHandoffs === 'function' ? byId(P.canonHandoffs(), 'h_catch_chef') : null;
+      if (canonical) { o.handoffs = o.handoffs || {}; o.handoffs.h_catch_chef = Object.assign({}, canonical, { channel: 'phone' }); }
+    }
+    // Challenge adds a deterministic communications outage. Keep this defensive so the UI still
+    // boots against an older engine during a staggered deployment.
+    if (learningLevel === 'challenge' && typeof P.applyScenario === 'function') {
+      try { cfg = P.applyScenario(cfg, 'comms-outage') || cfg; } catch (e) { }
+    }
     return cfg;
   }
+  function seededCfg(seed) { var cfg = buildCfg(); cfg.seed = seed || 1; return cfg; }
   function currentPlan() { return P.mergePlan(buildCfg()); }
   function activeProblemIds() { return P.detect(currentPlan()).map(function (p) { return p.id; }); }
   function hhmm(min) {
@@ -170,13 +222,67 @@
   var BUB = { confused: '❓', meeting: '💬', waiting: '⏳', tired: '😣', onFire: '🔥', resolved: '✅', working: '', idle: '', waitInfo: '⏳', rework: '🔁' };
   var STATE_KEY = { working: 'stWorking', confused: 'stConfused', meeting: 'stMeeting', waiting: 'stWaiting', tired: 'stTired', onFire: 'stOnFire', resolved: 'stResolved', idle: 'stIdle', waitInfo: 'stWaitInfo', rework: 'stRework' };
 
+  function learningLevelLabel(level) { return T()['level' + level.charAt(0).toUpperCase() + level.slice(1)] || level; }
+  function causeLabel(cause) {
+    var key = { 'missing-info': 'causeMissingInfo', 'late-info': 'causeLateInfo', information: 'causeInformation', authority: 'causeAuthority', dependency: 'causeDependency', capacity: 'causeCapacity', resource: 'causeResource', assumption: 'causeAssumption', none: 'causeNone' }[cause];
+    return key ? T()[key] : (cause || T().causeNone);
+  }
+  function renderAttemptHistory() {
+    var box = $('attempt-history'); if (!box) return;
+    if (learningHidesExact() && learningAttempts.length) {
+      box.innerHTML = '<div class="attempt-empty">' + T().attemptHistoryLocked + '</div>';
+      return;
+    }
+    if (!learningAttempts.length) { box.innerHTML = '<div class="attempt-empty">' + T().attemptHistoryEmpty + '</div>'; return; }
+    box.innerHTML = '<div class="attempt-list">' + learningAttempts.map(function (a) {
+      var pred = a.prediction && a.prediction.cause ? causeLabel(a.prediction.cause) : '—';
+      return '<div class="attempt-item"><b>' + esc(T().attemptHistoryItem(learningLevelLabel(a.level || 'learn'), dayLabel(a.segment || 'all'), a.score == null ? '—' : a.score)) + '</b>' +
+        '<span>' + esc(T().attemptHistoryCause(pred, causeLabel(a.actualCause || 'none'))) + '</span></div>';
+    }).join('') + '</div>';
+  }
+  function renderLearningChrome() {
+    document.body.classList.toggle('learning-learn', learningLevel === 'learn');
+    document.body.classList.toggle('learning-practice', learningLevel === 'practice');
+    document.body.classList.toggle('learning-challenge', learningLevel === 'challenge');
+    document.body.classList.toggle('learning-observed', learningObserved);
+    var levels = $('learning-levels');
+    if (levels) levels.querySelectorAll('button[data-level]').forEach(function (b) {
+      var on = b.dataset.level === learningLevel; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    var desc = $('learning-level-desc'); if (desc) desc.textContent = T()['level' + learningLevel.charAt(0).toUpperCase() + learningLevel.slice(1) + 'Desc'];
+    var chip = $('scenario-chip');
+    if (chip) {
+      chip.classList.toggle('hidden', learningLevel !== 'challenge');
+      chip.textContent = typeof P.applyScenario === 'function' ? T().scenarioChallengeActive : T().scenarioChallengeUnavailable;
+    }
+    var liveBtn = $('mode-live');
+    if (liveBtn) { liveBtn.disabled = learningLevel !== 'learn'; liveBtn.setAttribute('aria-disabled', liveBtn.disabled ? 'true' : 'false'); }
+    var outcomes = document.querySelector('.mission-outcomes'); if (outcomes) outcomes.setAttribute('aria-label', T().missionTitle);
+    renderAttemptHistory();
+  }
+  function setLearningLevel(level) {
+    if (['learn', 'practice', 'challenge'].indexOf(level) < 0 || level === learningLevel) return;
+    learningLevel = level; learningObserved = false; pendingPrediction = null; activeLearningRun = null;
+    if (level === 'challenge') daySel = 'fishday';
+    try { localStorage.setItem(LEARNING_LEVEL_KEY, level); } catch (e) { }
+    closePrediction(false);
+    renderLearningChrome();
+    if (!$('intro').classList.contains('hidden')) { renderIntro(); return; }
+    enterMode(level === 'learn' ? 'live' : 'morning');
+    // Leaving Learn/Live restores the saved Morning plan inside enterMode(); re-assert the
+    // Challenge landing segment afterward so that restoration cannot silently move it to Arrival.
+    if (level === 'challenge' && daySel !== 'fishday') { daySel = 'fishday'; paintSetup(); }
+  }
+
   // =========================================================================
   // i18n apply
   // =========================================================================
   function applyLang() {
     document.documentElement.lang = L;
     document.querySelectorAll('[data-i18n]').forEach(function (el) { var v = T()[el.getAttribute('data-i18n')]; if (typeof v === 'string') el.textContent = v; });
+    document.querySelectorAll('[data-i18n-placeholder]').forEach(function (el) { var v = T()[el.getAttribute('data-i18n-placeholder')]; if (typeof v === 'string') el.setAttribute('placeholder', v); });
     $('lang-en').classList.toggle('on', L === 'en'); $('lang-ja').classList.toggle('on', L === 'ja');
+    renderLearningChrome();
     updateRunButtons();   // keep the pause/guests/drawer imperative labels (and aria-labels) in sync with the language
     paintSetup(); buildRules(); buildLegend();
     if (!$('intro').classList.contains('hidden')) { renderIntro(); bootVignette(vigLastAuto); }   // cast grid re-render + vignette re-boot (§W4 lifecycle) in the new language
@@ -236,6 +342,8 @@
     var opts = ['load', 'voyage', 'arrival', 'ops', 'fishday', 'return', 'all'];   // chronological display order
     box.innerHTML = opts.map(function (seg) {
       var st = dayStatus(seg), n = st.gaps, clean = st.clean;
+      if (learningHidesExact()) return '<button class="day-btn' + (seg === daySel ? ' on' : '') + '" data-day="' + seg + '">' +
+        '<span class="db-name">' + dayLabel(seg) + '</span><span class="db-gaps pending">' + T().learningProjectionHidden + '</span></button>';
       var gapTxt = clean ? '✓' : n + ' ' + (n === 1 ? T().fixGapLbl : T().fixGapLblN);
       return '<button class="day-btn' + (seg === daySel ? ' on' : '') + '" data-day="' + seg + '">' +
         '<span class="db-name">' + dayLabel(seg) + '</span>' +
@@ -343,7 +451,7 @@
   }
   function buildMissionControl() {
     var box = $('mission-control'); if (!box) return;
-    var plan = currentPlan(), br = P.budgetReadiness(plan), t = T();
+    var plan = currentPlan(), br = P.budgetReadiness(plan), t = T(), conceal = learningHidesExact();
     var gapCount = br.gaps.length + br.events.filter(function (ev) { return !ev.ok; }).length + br.resources.filter(function (r) { return !r.ok; }).length;
     var roles = ['budgetLead', 'logi', 'siteLead', 'chef', 'safetyLead', 'comms'];
     var people = roles.map(function (rid) {
@@ -352,7 +460,7 @@
       return '<div class="mc-person"><span class="mc-role" style="background:' + rr.color + '">' + rr.icon + '</span><b>' + nm(rr.name) + '</b><small>' + (pp ? nm(pp.name) : '—') + ' · ' + auth + '</small></div>';
     }).join('');
     var envelopes = br.envelopes.map(function (ln) {
-      return '<div class="mc-env' + (ln.ok ? '' : ' bad') + '" data-line="' + ln.id + '">' +
+      return '<div class="mc-env' + (!conceal && !ln.ok ? ' bad' : '') + '" data-line="' + ln.id + '">' +
         '<div class="mc-env-top"><b>' + nm(ln.name) + '</b><span>¥' + nf(ln.cap) + '</span></div>' +
         '<label>' + t.mcApprover + '<select class="mc-sel" data-mc="line" data-line="' + ln.id + '" data-field="approverRoleId">' + roleOpts(ln.approverRoleId || '', true) + '</select></label>' +
         '<label>' + t.mcPayMethod + '<select class="mc-sel" data-mc="line" data-line="' + ln.id + '" data-field="payMethod">' + payOpts(ln.payMethod || 'cash') + '</select></label>' +
@@ -361,19 +469,19 @@
     var resources = br.resources.map(function (r) {
       var pct = Math.max(0, Math.min(100, Math.round(r.planned / Math.max(1, r.target) * 100)));
       // spec §2: the strongbox's one-tap "fill the reserve" lives on the cash row itself
-      var fill = (r.id === 'res_cash' && !fixed.fixReserve)
-        ? '<button type="button" class="btn sm primary mc-fill-reserve">' + t.rcClose(Math.max(0, receiptAltTotal('reserve') - P.scoreTrip(P.mergePlan(buildCfg())).total)) + '</button>' : '';
-      return '<div class="mc-res' + (r.ok ? '' : ' bad') + '"><div class="mc-res-top"><b>' + nm(r.name) + '</b><span>' + nf(r.planned) + ' / ' + nf(r.target) + ' ' + nm(r.unit) + '</span></div>' +
+      var fill = (r.id === 'res_cash' && !fixed.fixReserve && !challengeAutoFixLocked())
+        ? '<button type="button" class="btn sm primary mc-fill-reserve">' + (learningHidesExact() ? t.rcCloseBlind : t.rcClose(Math.max(0, receiptAltTotal('reserve') - P.scoreTrip(P.mergePlan(buildCfg())).total))) + '</button>' : '';
+      return '<div class="mc-res' + (!conceal && !r.ok ? ' bad' : '') + '"><div class="mc-res-top"><b>' + nm(r.name) + '</b><span>' + nf(r.planned) + ' / ' + nf(r.target) + ' ' + nm(r.unit) + '</span></div>' +
         '<input class="mc-range" type="range" min="0" max="' + Math.max(r.target * 2, r.planned, 1) + '" step="' + (r.unit.en === 'yen' ? 10000 : 1) + '" value="' + r.planned + '" data-mc="resource" data-resource="' + r.id + '">' +
-        '<div class="mc-res-bar"><i style="width:' + pct + '%"></i></div>' + fill + '</div>';
+        '<div class="mc-res-bar">' + (conceal ? '' : '<i style="width:' + pct + '%"></i>') + '</div>' + fill + '</div>';
     }).join('');
     var events = br.events.map(function (ev) {
       var line = br.envelopes.filter(function (ln) { return ln.id === ev.lineId; })[0];
-      return '<div class="mc-spend' + (ev.ok ? '' : ' bad') + '"><b>' + nm(ev.name) + '</b><span>¥' + nf(ev.amount) + ' · ' + (line ? nm(line.name) : ev.lineId) + ' · ' + T()['pay_' + ev.requiredMethod] + '</span>' +
-        '<small>' + (ev.ok ? t.mcSpendOk : t.mcSpendBlocked) + '</small></div>';
+      return '<div class="mc-spend' + (!conceal && !ev.ok ? ' bad' : '') + '"><b>' + nm(ev.name) + '</b><span>¥' + nf(ev.amount) + ' · ' + (line ? nm(line.name) : ev.lineId) + ' · ' + T()['pay_' + ev.requiredMethod] + '</span>' +
+        '<small>' + (conceal ? t.decisionStatePreRun : (ev.ok ? t.mcSpendOk : t.mcSpendBlocked)) + '</small></div>';
     }).join('');
     box.innerHTML =
-      '<div class="mc-status ' + (gapCount ? 'bad' : 'ok') + '"><b>' + (gapCount ? t.mcStatusBad(gapCount) : t.mcStatusOk) + '</b><span>' + t.mcStatusSub + '</span></div>' +
+      '<div class="mc-status ' + (conceal ? '' : (gapCount ? 'bad' : 'ok')) + '"><b>' + (conceal ? t.learningDiagnoseFirst : (gapCount ? t.mcStatusBad(gapCount) : t.mcStatusOk)) + '</b><span>' + t.mcStatusSub + '</span></div>' +
       '<div class="mc-grid"><section><h3>' + t.mcPeople + '</h3><div class="mc-people">' + people + '</div></section>' +
       '<section><h3>' + t.mcEnvelopes + '</h3><div class="mc-envs">' + envelopes + '</div></section>' +
       '<section><h3>' + t.mcResources + '</h3><div class="mc-resources">' + resources + '</div></section>' +
@@ -432,18 +540,24 @@
       var isOpen = !!open[d], hasFlag = fixed[DET_FIX[d]];
       var chip = $('chip-' + d), state = $('state-' + d), pts = $('pts-' + d), act = $('act-' + d), cause = $('cause-' + d);
       var delta = null;
-      if (isOpen) delta = Math.max(0, receiptAltTotal(d) - baseTotal);            // the prize for closing it
-      else if (hasFlag) delta = Math.max(0, baseTotal - receiptAltTotal(d));      // what this closed row earns
-      card.classList.toggle('closed', !isOpen);
-      if (chip) { chip.textContent = isOpen ? ('⛔ ' + t.sst_missing) : ('✓ ' + t.sst_ok); chip.className = 'lg-chip ' + (isOpen ? 'zero' : 'full'); }
-      if (state) state.textContent = t['e_' + d + (isOpen ? '_off' : '_on')];
+      if (!learningHidesExact() && isOpen) delta = Math.max(0, receiptAltTotal(d) - baseTotal);            // the prize for closing it
+      else if (!learningHidesExact() && hasFlag) delta = Math.max(0, baseTotal - receiptAltTotal(d));      // what this closed row earns
+      card.classList.toggle('closed', !learningHidesExact() && !isOpen);
+      card.classList.toggle('recorded', learningHidesExact() && hasFlag);
+      if (chip) {
+        chip.textContent = learningHidesExact() ? (hasFlag ? t.decisionRecorded : t.decisionUntested) : (isOpen ? ('⛔ ' + t.sst_missing) : ('✓ ' + t.sst_ok));
+        chip.className = 'lg-chip ' + (learningHidesExact() ? 'partial' : (isOpen ? 'zero' : 'full'));
+      }
+      if (state) state.textContent = learningHidesExact() ? t.decisionStatePreRun : t['e_' + d + (isOpen ? '_off' : '_on')];
       if (pts) { pts.textContent = delta == null ? '✓' : (isOpen ? '+' + delta : '✓ +' + delta); pts.className = 'rc-pts ' + (isOpen ? 'zero' : 'full'); }
-      if (cause) cause.style.display = isOpen ? 'block' : 'none';
+      if (cause) cause.style.display = learningHidesExact() ? 'none' : (isOpen ? 'block' : 'none');
       if (act) {
         // the fishday-arrows row NEVER fakes a one-click — it routes to the real editor (spec §2)
-        if (isOpen && d === 'handoffTiming') act.innerHTML = '<button type="button" class="btn sm rc-route" data-det="' + d + '">' + t.rcRouteFishday + '</button>';
-        else if (isOpen) act.innerHTML = '<button type="button" class="btn sm primary rc-close" data-det="' + d + '">' + t.rcClose(delta) + '</button>';
-        else act.innerHTML = '<span class="rc-earned">' + (delta != null && delta > 0 ? t.rcClosed(delta) : '✓') + '</span>' +
+        var showOpen = learningHidesExact() ? !hasFlag : isOpen;
+        if (showOpen && d === 'handoffTiming') act.innerHTML = '<button type="button" class="btn sm rc-route" data-det="' + d + '">' + t.rcRouteFishday + '</button>';
+        else if (showOpen && challengeAutoFixLocked()) act.innerHTML = '';
+        else if (showOpen) act.innerHTML = '<button type="button" class="btn sm primary rc-close" data-det="' + d + '">' + (learningHidesExact() ? t.rcCloseBlind : t.rcClose(delta)) + '</button>';
+        else act.innerHTML = '<span class="rc-earned">' + (learningHidesExact() ? t.rcClosedBlind : (delta != null && delta > 0 ? t.rcClosed(delta) : '✓')) + '</span>' +
           (hasFlag ? '<button type="button" class="btn sm ghost rc-undo" data-det="' + d + '">' + t.rcUndo + '</button>' : '');
       }
     });
@@ -489,6 +603,11 @@
     if (mode === 'setup') {
       box = $('rail-body'); if (!box) return;
       trip = tripIn || P.scoreTrip(currentPlan());
+      if (learningHidesExact()) {
+        box.innerHTML = '<div class="dash-lbl">' + t.railLbl + '</div><div class="rail-tense">' + t.learningProjectionHidden + '</div>';
+        railLastSetup = null;
+        return;
+      }
       box.innerHTML = '<div class="dash-lbl">' + t.railLbl + '</div>' +
         '<div class="rail-tense" id="rail-tense">' + t.railAim(trip.total) + '</div>' +
         '<div class="rail-rows">' + railRowsHtml(trip, t, true) + '</div>' + railGateHtml(trip, t);
@@ -520,12 +639,12 @@
   function updatePlanUI() {
     var open = {}; activeProblemIds().forEach(function (id) { open[id] = true; });
     var t = T(), gaps = dayStatus(daySel).gaps;
-    var trip = P.scoreTrip(currentPlan());
+    var planNow = currentPlan(), trip = P.scoreTrip(planNow);
     paintReceiptRows(open, trip.total);
     buildOrg();
     buildBuddyCard();
-    $('plan-hint').textContent = gaps ? t.hintGaps(gaps) : t.hintReadyDay(dayLabel(daySel));
-    $('plan-hint').className = 'planhint' + (gaps ? '' : ' good');
+    $('plan-hint').textContent = learningHidesExact() ? t.learningDiagnoseFirst : (gaps ? t.hintGaps(gaps) : t.hintReadyDay(dayLabel(daySel)));
+    $('plan-hint').className = 'planhint' + (!learningHidesExact() && !gaps ? ' good' : '');
     buildDaySelect();
     $('launch').textContent = t.runDayBtn(dayLabel(daySel));
     buildMissionControl();
@@ -580,9 +699,12 @@
   }
   function arrivalInSeg(segT, h) { var s = sendMinInSeg(segT, h); return s == null ? null : s + (P.CHANNELS[h.channel] || 0); }
   function arrowsToInSeg(segH, roleId, cid) { var out = []; segH.forEach(function (h) { if (h.cardId === cid && h.toRoleId === roleId) out.push(h); }); return out; }
-  function infoArrivalSeg(segT, segH, cid, roleId) {
+  function feasibleArrivalInSeg(plan, seg, segT, h) {
+    return handoffFeasibility(plan, h, seg).ok ? arrivalInSeg(segT, h) : null;
+  }
+  function infoArrivalSeg(plan, seg, segT, segH, cid, roleId) {
     var hs = arrowsToInSeg(segH, roleId, cid), best = null;
-    hs.forEach(function (h) { var a = arrivalInSeg(segT, h); if (a != null && (best == null || a < best)) best = a; });
+    hs.forEach(function (h) { var a = feasibleArrivalInSeg(plan, seg, segT, h); if (a != null && (best == null || a < best)) best = a; });
     return best;
   }
   function feedArrowInSeg(segH, segT, toTaskId, cardId) {
@@ -682,13 +804,13 @@
       var sock = '';
       (tk.neededInfo || []).forEach(function (cid, si) {
         if (cardOwnerOf(plan, cid) === tk.ownerRoleId) return;
-        var arr = infoArrivalSeg(segT, segH, cid, tk.ownerRoleId);
+        var arr = infoArrivalSeg(plan, seg, segT, segH, cid, tk.ownerRoleId);
         var cls = arr == null ? 'miss' : (arr <= tk.startMin ? 'ok' : 'late');
-        sock += '<span class="fd-socket ' + cls + '" tabindex="0" role="button" data-task="' + tk.id + '" data-card="' + cid + '" style="top:' + (si * 11 + 1) + 'px" title="● ' + nm(byId(plan.infoCards, cid).name) + '"></span>';
+        sock += '<span class="fd-socket ' + (learningHidesExact() ? 'neutral' : cls) + '" tabindex="0" role="button" data-state="' + cls + '" data-task="' + tk.id + '" data-card="' + cid + '" style="top:' + (si * 11 + 1) + 'px" title="● ' + nm(byId(plan.infoCards, cid).name) + '"></span>';
       });
       var port = (tk.produces || []).length ? '<span class="fd-port" data-task="' + tk.id + '" data-card="' + tk.produces[0] + '" title="○ ' + nm(byId(plan.infoCards, tk.produces[0]).name) + '"></span>' : '';
       var multi = tk.assignedIds.length > 1 ? '<i class="fd-x">×' + tk.assignedIds.length + '</i>' : '';
-      html += '<div class="fd-block' + (g.w < 60 ? ' sm' : '') + (e && e.wrongFish ? ' wf' : '') + (taskTimeUnconfirmed(tk) ? ' time-unknown' : '') + '" tabindex="0" data-task="' + tk.id + '" style="left:' + g.x + 'px;top:' + g.y + 'px;width:' + g.w + 'px" title="' + nm(tk.name) + ' · ' + taskTimeText(tk) + '">' +
+      html += '<div class="fd-block' + (g.w < 60 ? ' sm' : '') + (!learningHidesExact() && e && e.wrongFish ? ' wf' : '') + (taskTimeUnconfirmed(tk) ? ' time-unknown' : '') + '" tabindex="0" data-task="' + tk.id + '" style="left:' + g.x + 'px;top:' + g.y + 'px;width:' + g.w + 'px" title="' + nm(tk.name) + ' · ' + taskTimeText(tk) + '">' +
         sock + '<span class="fd-bname">' + P.station(tk.station).icon + (g.w >= 60 ? ' ' + nm(tk.name) : '') + '</span>' + multi + port + '<span class="fd-rsz"></span></div>';
     });
     var box = $('fd-canvas');
@@ -715,11 +837,12 @@
     var s = '', segT = P.tasksForSeg(plan, seg), segH = P.handoffsForSeg(plan, seg);
     segH.forEach(function (h) {
       var e = arrowEnds(plan, seg, h); if (!e) return;
-      var to = byId(segT, h.toTaskId), sa = arrivalInSeg(segT, h);
+      var to = byId(segT, h.toTaskId), sa = feasibleArrivalInSeg(plan, seg, segT, h);
       var late = sa == null || sa > to.startMin;
       var mx = (e.x1 + e.x2) / 2;
-      s += '<path class="' + (late ? 'late' : 'ok') + '" data-h="' + h.id + '" d="M' + e.x1 + ' ' + e.y1 + ' C ' + mx + ' ' + e.y1 + ', ' + mx + ' ' + e.y2 + ', ' + e.x2 + ' ' + e.y2 + '"></path>' +
-        '<circle cx="' + e.x2 + '" cy="' + e.y2 + '" r="2.6" fill="' + (late ? 'rgba(217,83,79,.9)' : 'rgba(47,158,111,.9)') + '"></circle>';
+      var neutral = learningHidesExact();
+      s += '<path class="' + (neutral ? 'neutral' : (late ? 'late' : 'ok')) + '" data-h="' + h.id + '" d="M' + e.x1 + ' ' + e.y1 + ' C ' + mx + ' ' + e.y1 + ', ' + mx + ' ' + e.y2 + ', ' + e.x2 + ' ' + e.y2 + '"></path>' +
+        '<circle cx="' + e.x2 + '" cy="' + e.y2 + '" r="2.6" fill="' + (neutral ? 'rgba(61,90,108,.72)' : (late ? 'rgba(217,83,79,.9)' : 'rgba(47,158,111,.9)')) + '"></circle>';
     });
     svg.innerHTML = s;
   }
@@ -728,20 +851,29 @@
     $('fd-arrowlist').innerHTML = segH.map(function (h) {
       var to = byId(segT, h.toTaskId); if (!to) return '';
       var from = byId(segT, h.fromTaskId);
-      var sa = arrivalInSeg(segT, h), late = sa == null || sa > to.startMin;
+      var sa = feasibleArrivalInSeg(plan, seg, segT, h), late = sa == null || sa > to.startMin;
       var card = byId(plan.infoCards, h.cardId);
       var clock = taskTimeUnconfirmed(to) || taskTimeUnconfirmed(from) ? t.routeTimeUnconfirmedShort : (sa == null ? '—' : hhmm(sa));
+      if (learningHidesExact()) return '<button class="fd-ar-chip" data-h="' + h.id + '">• ' + nm(card ? card.name : h.cardId).split('：')[0].split(':')[0] +
+        ' <span class="muted2">' + t['ch' + h.channel.charAt(0).toUpperCase() + h.channel.slice(1)].split(' ')[0] + '</span></button>';
       return '<button class="fd-ar-chip ' + (late ? 'late' : 'ok') + '" data-h="' + h.id + '">' + (late ? '⚑' : '✓') + ' ' + nm(card ? card.name : h.cardId).split('：')[0].split(':')[0] + ' <span class="muted2">' + clock + ' ' + t['ch' + h.channel.charAt(0).toUpperCase() + h.channel.slice(1)].split(' ')[0] + '</span></button>';
     }).join('');
   }
   function buildFdReady(plan, fd, seg) {
     var t = T(), hints = P.dayReadiness(plan, seg), chips = [], segT = P.tasksForSeg(plan, seg);
+    if (learningHidesExact()) {
+      $('fd-ready').innerHTML = '<span class="pr-lbl">' + t.fdReadyLbl + '</span><span class="pr-item">' + t.learningDiagnoseFirst + '</span>';
+      return;
+    }
     function tn(id) { var x = byId(segT, id); return x ? nm(x.name) : id; }
     function cn(id) { var x = byId(plan.infoCards, id); return x ? nm(x.name).split('：')[0].split(':')[0] : id; }
     function mn(id) { var x = byId(plan.manifest || [], id); return x ? nm(x.name) : id; }   // Voyage §2 manifest item name
     function chip(type, txt) { return '<span class="pr-item bad" data-type="' + type + '">' + txt + '</span>'; }
     hints.forEach(function (h) {
-      if (h.type === 'MISSING_ARROW') chips.push(chip(h.type, t.rhMissing(cn(h.cardId), tn(h.taskId))));
+      if (h.type === 'MISSING_ARROW') {
+        var blocked = unavailableHandoffFor(plan, seg, h);
+        chips.push(chip(h.type, blocked ? t.rhChannelUnavailable(cn(h.cardId), tn(h.taskId), channelText(blocked.channel)) : t.rhMissing(cn(h.cardId), tn(h.taskId))));
+      }
       else if (h.type === 'ARROW_LATE') chips.push(chip(h.type, t.rhLate(cn(h.cardId), tn(h.taskId), h.lateMin)));
       else if (h.type === 'WRONG_FISH_RISK') chips.push(chip(h.type, t.rhWrongFish(cn(h.cardId), tn(h.taskId))));
       else if (h.type === 'DEP_BROKEN') chips.push(chip(h.type, t.rhDep(tn(h.taskId), tn(h.depId))));
@@ -796,9 +928,9 @@
   // ---- block drag / resize / chip placement / arrow wire (Pointer Events) ----
   function fdSocketTap(sock) {
     var plan = currentPlan(), segT = P.tasksForSeg(plan, daySel), segH = P.handoffsForSeg(plan, daySel);
-    if (sock.classList.contains('miss')) { fdAutoDraw(sock.dataset.task, sock.dataset.card); return; }
-    var ex = feedArrowInSeg(segH, segT, sock.dataset.task, sock.dataset.card);   // late/ok: edit what feeds it
-    if (ex) openArrowPanel(ex.id);
+    var ex = feedArrowInSeg(segH, segT, sock.dataset.task, sock.dataset.card);
+    if (ex) openArrowPanel(ex.id);                          // an existing infeasible path must be repaired, not duplicated
+    else fdAutoDraw(sock.dataset.task, sock.dataset.card);
   }
   function makeGhost(chip, x, y) {
     removeGhost();
@@ -925,10 +1057,11 @@
       fdDrag = null; fdWireClear();
       if (sock) {
         var plan = currentPlan(), segT = P.tasksForSeg(plan, daySel), segH = P.handoffsForSeg(plan, daySel);
-        var ex = !sock.classList.contains('miss') && feedArrowInSeg(segH, segT, sock.dataset.task, sock.dataset.card);
+        var ex = feedArrowInSeg(segH, segT, sock.dataset.task, sock.dataset.card);
         var to2 = byId(segT, sock.dataset.task);
-        var onTime = ex && to2 && arrivalInSeg(segT, ex) <= to2.startMin;
-        if (onTime) openArrowPanel(ex.id);                          // already fed on time — edit, don't duplicate
+        var exFeas = ex && handoffFeasibility(plan, ex, daySel);
+        var onTime = ex && to2 && exFeas.ok && arrivalInSeg(segT, ex) <= to2.startMin;
+        if (onTime || (exFeas && !exFeas.ok)) openArrowPanel(ex.id); // edit an existing sound or infeasible path; don't duplicate it
         else fdAutoDraw(sock.dataset.task, sock.dataset.card);      // missing or late — draw (a faster duplicate is a legit fix)
       }
       buildDayGrid(); updatePlanUI(); return;
@@ -979,6 +1112,29 @@
 
   // ---- arrow edit panel (now seg-aware — the same modal edits fishday AND coarse-day arrows) ----
   var CH_LIST = ['faceToFace', 'radio', 'phone', 'chat', 'board'];
+  function handoffFeasibility(plan, handoff, seg) {
+    if (typeof P.channelFeasibility !== 'function') return { ok: true, reason: 'ok' };
+    try { return P.channelFeasibility(plan, handoff, seg) || { ok: true, reason: 'ok' }; }
+    catch (e) { return { ok: true, reason: 'ok' }; }
+  }
+  function feasibilityText(reason) {
+    return { ok: T().feasibilityOk, 'unknown-channel': T().feasibilityUnknown,
+      'requires-colocation': T().feasibilityColocation, 'scenario-channel-unavailable': T().feasibilityOutage }[reason] || T().feasibilityBlocked;
+  }
+  function channelText(channel) {
+    channel = String(channel || '');
+    var key = 'ch' + channel.charAt(0).toUpperCase() + channel.slice(1), value = T()[key];
+    return typeof value === 'string' ? value : channel;
+  }
+  function unavailableHandoffFor(plan, seg, hint) {
+    var target = byId(P.tasksForSeg(plan, seg), hint.taskId), hs = P.handoffsForSeg(plan, seg) || [];
+    for (var i = 0; i < hs.length; i++) {
+      var h = hs[i];
+      if (h.cardId !== hint.cardId || (h.toTaskId !== hint.taskId && (!target || h.toRoleId !== target.ownerRoleId))) continue;
+      if (!handoffFeasibility(plan, h, seg).ok) return h;
+    }
+    return null;
+  }
   // the earliest minute a card can physically leave: its producing task's finish (fishday-only —
   // shared with Live mode + reclampArrows, which always run against plan.tasks/plan.handoffs)
   function producedAt(plan, h) {
@@ -997,7 +1153,8 @@
     var chOpts = CH_LIST.map(function (c) {
       return '<option value="' + c + '"' + (h.channel === c ? ' selected' : '') + '>' + t['ch' + c.charAt(0).toUpperCase() + c.slice(1)] + ' (+' + P.CHANNELS[c] + t.chMin + ')</option>';
     }).join('');
-    var arr = arrivalInSeg(segT, h), needBy = to ? to.startMin : 0, late = arr == null || arr > needBy;
+    var feas = handoffFeasibility(plan, h, seg);
+    var arr = feas.ok ? arrivalInSeg(segT, h) : null, needBy = to ? to.startMin : 0, late = arr == null || arr > needBy;
     var unknownClock = taskTimeUnconfirmed(from) || taskTimeUnconfirmed(to);
     $('ar-body').innerHTML =
       (unknownClock ? '<div class="ar-note">' + t.routeTimeUnknown + '</div>' : '') +
@@ -1006,7 +1163,8 @@
         '<option value="atMinute"' + (!trigDone ? ' selected' : '') + '>' + t.arTrigAt + '</option></select>' +
         '<input class="ar-time" id="ar-time" type="time" step="300" min="' + hhmm(minSend) + '" value="' + hhmm(sendMin == null ? needBy : Math.max(sendMin, minSend)) + '"' + (trigDone ? ' disabled' : '') + '></div>' +
       '<div class="ar-row"><span class="dt-h">' + t.arChannel + '</span><select class="ar-sel" id="ar-ch">' + chOpts + '</select></div>' +
-      '<div class="ar-arrive ' + (late ? 'late' : 'ok') + '">' + (unknownClock ? t.routeTimeUnconfirmedShort : (arr == null ? '—' : (late ? t.arriveLate(hhmm(arr), arr - needBy) : t.arriveOk(hhmm(arr))))) + ' <span class="muted2">(' + (to ? nm(to.name) + ' ' + (unknownClock ? t.routeClockAssumption : hhmm(needBy)) : '') + ')</span></div>' +
+      (learningHidesExact() ? '<div class="ar-note">' + t.learningProjectionHidden + '</div>' : '<div class="ar-arrive ' + (late ? 'late' : 'ok') + '">' + (unknownClock ? t.routeTimeUnconfirmedShort : (arr == null ? '—' : (late ? t.arriveLate(hhmm(arr), arr - needBy) : t.arriveOk(hhmm(arr))))) + ' <span class="muted2">(' + (to ? nm(to.name) + ' ' + (unknownClock ? t.routeClockAssumption : hhmm(needBy)) : '') + ')</span></div>') +
+      '<div class="ar-feasibility' + (!learningHidesExact() && !feas.ok ? ' bad' : '') + '" id="ar-feasibility">' + (learningHidesExact() ? t.feasibilityUntested : feasibilityText(feas.reason)) + '</div>' +
       (h.ifLate === 'assume' ? '<div class="ar-note">' + t.arriveAssume + '</div>' : '');
     modalOpening('arrow-modal');
     $('arrow-modal').classList.add('show');
@@ -1024,9 +1182,13 @@
       mm = Math.max(mm, producedAtSeg(segT, h));           // a card can't be sent before it exists
       patch.trigger = { type: 'atMinute', value: mm };
     }
+    var candidate = Object.assign({}, h, patch), feas = handoffFeasibility(plan, candidate, seg);
+    if (!feas.ok && !learningHidesExact()) {
+      var note = $('ar-feasibility'); if (note) { note.className = 'ar-feasibility bad'; note.textContent = feasibilityText(feas.reason); }
+    }
     // always store the FULL merged arrow: fix-provided arrows have no template entry, and a
     // partial patch would reach mergePlan's push-as-new branch as a malformed handoff
-    dayOv[seg].handoffs[arrowEdit] = Object.assign({}, h, patch);
+    dayOv[seg].handoffs[arrowEdit] = candidate;
     paintSetup();
     openArrowPanel(arrowEdit);
   }
@@ -1057,6 +1219,33 @@
   // =========================================================================
   // RUN
   // =========================================================================
+  function closePrediction(restoreFocus) {
+    var m = $('prediction-modal'); if (!m || !m.classList.contains('show')) return;
+    m.classList.remove('show');
+    if (restoreFocus !== false) modalClosed(); else lastFocus = null;
+  }
+  function openPrediction() {
+    var m = $('prediction-modal'); if (!m) return;
+    m.querySelectorAll('input[name="prediction-root"]').forEach(function (r) { r.checked = false; });
+    $('prediction-rationale').value = '';
+    $('prediction-error').classList.add('hidden');
+    modalOpening('prediction-modal'); m.classList.add('show');
+    var first = m.querySelector('input[name="prediction-root"]'); if (first) first.focus();
+  }
+  function commitPredictionAndLaunch() {
+    var chosen = document.querySelector('input[name="prediction-root"]:checked');
+    var why = $('prediction-rationale').value.trim();
+    if (!chosen || why.length < 3) { $('prediction-error').classList.remove('hidden'); return; }
+    pendingPrediction = { cause: chosen.value, rationale: why.slice(0, 240), createdAt: Date.now() };
+    predictionBypass = true;
+    closePrediction(false);
+    launch();
+  }
+  function newLearningRun(seed, segment) {
+    return { id: 'a' + Date.now().toString(36) + '-' + String(seed || 1), at: Date.now(), level: learningLevel,
+      segment: segment, seed: seed || 1, scenario: learningLevel === 'challenge' ? 'comms-outage' : 'normal',
+      prediction: pendingPrediction ? { cause: pendingPrediction.cause, rationale: pendingPrediction.rationale, createdAt: pendingPrediction.createdAt } : null };
+  }
   var ADJ = [['mess', 'port'], ['mess', 'clinic'], ['mess', 'lodging'], ['port', 'vessel']];   // §map v2: Hinata(mess) is the hub; port->iso is the boat route
 
   // ---- ROAD-FOLLOW MOTION (§21.10): figures walk ALONG the dashed ADJ road graph, not beeline ----
@@ -1555,6 +1744,9 @@
       // coarse days only fly PLACED→PLACED (matches the animated cast); fishday keeps its original reach
       if (coarse && (!(from.assignedIds || []).length || !(to.assignedIds || []).length ||
                      typeof from.startMin !== 'number' || typeof to.startMin !== 'number')) return;
+      // A visual delivery is evidence. Never animate a channel the engine says cannot carry
+      // the message; a redundant feasible arrow for the same socket may still win below.
+      if (!handoffFeasibility(plan, h, seg).ok) return;
       var send = sendOf(h); if (send == null) return;
       var arr = send + (P.CHANNELS[h.channel] || 0);
       var key = h.toRoleId + '|' + h.cardId;
@@ -1634,8 +1826,17 @@
   }
 
   var WHOLE_SEGMENTS = ['load', 'voyage', 'arrival', 'ops', 'fishday', 'return'];
+  // Shared modal query: Whole Trip transitions, drawer keyboard handling, pawn
+  // popovers, and the global focus trap all need the same answer. Keep this at
+  // module scope; defining it inside bind() makes transition callbacks unable to
+  // see it after the first segment completes.
+  function topModal() {
+    var order = ['prediction-modal', 'rules-modal', 'pick-modal', 'inspect-modal', 'arrow-modal', 'detail-modal'];
+    for (var i = 0; i < order.length; i++) if ($(order[i]).classList.contains('show')) return order[i];
+    return null;
+  }
   function makeMinuteSim(seg, seed) {
-    return P.createSim({ seed: seed || 1, overrides: buildCfg().overrides }, seg, { animate: true });
+    return P.createSim(seededCfg(seed), seg, { animate: true });
   }
   function wholeSegmentResult(s) {
     var plan = s.plan, seg = s.segment, readiness = P.dayReadiness(plan, seg), sched = P.daySchedule(plan, seg);
@@ -1675,12 +1876,15 @@
   }
 
   function launch() {
+    if (learningNeedsPrediction() && !predictionBypass) { openPrediction(); return; }
+    predictionBypass = false;
     stopAnim(); clearFinishTimer();                       // never stack a second rAF loop or a stale report reveal
     // §21.8b: every authored day now ANIMATES on the minute clock — the coarse days (arrival/ops/return)
     // opt into the minute-sim via {animate:true} so people walk + comment + PAUSE-on-stall like the fishday.
     // The run ends in the whole-trip ledger report (finish()→renderDayReport); the plan gaps that caused
     // the pauses are exactly what mark the day slice down. Whole-trip ('all') is not authorable → classic clock.
     var seed = (Math.floor(Math.random() * 1e9) >>> 0) || 1;
+    activeLearningRun = newLearningRun(seed, daySel); pendingPrediction = null;
     wholeRun = daySel === 'all' ? { segments: WHOLE_SEGMENTS.slice(), index: 0, seed: seed, results: [], sims: {}, clean: true } : null;
     sim = wholeRun ? makeMinuteSim(wholeRun.segments[0], seed) : makeMinuteSim(daySel, seed);
     if (window.PRS_SOUND) window.PRS_SOUND.ambient(sim.segment, sim.clockMin, mapProfileFor(sim).id);   // ambient bed start, run-enter
@@ -2422,6 +2626,10 @@
   // =========================================================================
   // REPORT
   // =========================================================================
+  function focusReportScreen() {
+    var report = $('report'); if (!report) return;
+    try { report.focus({ preventScroll: true }); } catch (e) { report.focus(); }
+  }
   function finish() {
     clearInterval(timer); timer = null;
     camReleaseSafe(0);                            // §3 safety: no camera offset carries into the report stage
@@ -2431,7 +2639,7 @@
     if (wholeRun) {
       // Keep the legacy whole-trip scorer only for its individual/team tables;
       // completion is owned by the six authored day runs recorded above.
-      var legacy = P.createSim({ seed: wholeRun.seed, overrides: buildCfg().overrides }, 'all'), guard = 0;
+      var legacy = P.createSim(seededCfg(wholeRun.seed), 'all'), guard = 0;
       while (!legacy.finished && guard++ < 1000) P.tick(legacy);
       lastResult = { trip: P.score(legacy), day: null, segment: 'all', wholeTrip: true,
         segmentResults: wholeRun.results.slice(), segmentSims: wholeRun.sims, authoredClean: wholeRun.clean };
@@ -2446,7 +2654,7 @@
       finishTimer = null;
       if (sim !== simAt || wholeRun !== wholeAt) return;      // a mode/screen change won the race — don't pop the report over it
       closePawnCard();
-      stopAnim(); enterScreen('report'); renderReport(lastResult);
+      stopAnim(); enterScreen('report'); renderReport(lastResult); focusReportScreen();
     }, 700);
   }
 
@@ -2530,8 +2738,8 @@
     if (atom.maxPts > 0) return atom.earned >= atom.maxPts ? 'full' : (atom.earned > 0 ? 'partial' : 'zero');
     return atom.earned < 0 ? 'zero' : 'full';
   }
-  function renderLedger(trip, segment) {
-    var plan = currentPlan(), buckets = ledgerBucketsFor(segment), i, a;
+  function renderLedger(trip, segment, planIn) {
+    var plan = planIn || currentPlan(), buckets = ledgerBucketsFor(segment), i, a;
     var titleEl = $('ledger-title'); if (titleEl) titleEl.textContent = T().ledgerTitle;
     var byBucketDim = {};
     for (i = 0; i < trip.atoms.length; i++) {
@@ -2563,15 +2771,158 @@
     var t = T(), segTasks = P.tasksForSeg(plan, seg);
     function tn(id) { var x = byId(segTasks, id); return x ? nm(x.name) : id; }
     function cn(id) { var x = byId(plan.infoCards, id); return x ? nm(x.name).split('：')[0].split(':')[0] : id; }
+    function mn(id) { var x = byId(plan.manifest || [], id); return x ? nm(x.name) : id; }
     if (h.type === 'UNPLACED_REQUIRED') return t.rhUnplaced(tn(h.taskId));
     if (h.type === 'DECOY_PLACED') return t.rhDecoy(tn(h.taskId));
     if (h.type === 'MISASSIGNED') return t.rhMisassigned(tn(h.taskId));
-    if (h.type === 'MISSING_ARROW') return t.rhMissing(cn(h.cardId), tn(h.taskId));
+    if (h.type === 'SCENARIO_CHANNEL_UNAVAILABLE') return t.rhChannelUnavailable(cn(h.cardId), tn(h.taskId), channelText(h.channel));
+    if (h.type === 'MISSING_ARROW') {
+      var blocked = unavailableHandoffFor(plan, seg, h);
+      return blocked ? t.rhChannelUnavailable(cn(h.cardId), tn(h.taskId), channelText(blocked.channel)) : t.rhMissing(cn(h.cardId), tn(h.taskId));
+    }
     if (h.type === 'ARROW_LATE') return t.rhLate(cn(h.cardId), tn(h.taskId), h.lateMin);
     if (h.type === 'WRONG_FISH_RISK') return t.rhWrongFish(cn(h.cardId), tn(h.taskId));
     if (h.type === 'DEP_BROKEN') return t.rhDep(tn(h.taskId), tn(h.depId));
     if (h.type === 'OVERLOAD') { var pp = byId(plan.participants, h.personId); return t.rhOverload(pp ? nm(pp.name) : h.personId); }
+    if (h.type === 'TASK_UNSTAFFED') return t.rhUnstaffed(tn(h.taskId));
+    if (h.type === 'DUTY_UNASSIGNED') return t.rhDuty(nm(P.role(h.roleId).name));
+    if (h.type === 'CARRY_GAP') return t.rhCarryGap(mn(h.itemId));
     return h.type;
+  }
+
+  function executionReadiness(plan) {
+    if (typeof P.executionReadiness === 'function') {
+      try { var r = P.executionReadiness(plan); if (r && typeof r === 'object') return r; } catch (e) { }
+    }
+    var assumptions = [];
+    if (typeof P.criticalAssumptions === 'function') {
+      try { assumptions = P.criticalAssumptions(plan) || []; } catch (e2) { assumptions = []; }
+    }
+    if (!Array.isArray(assumptions) && assumptions && Array.isArray(assumptions.items)) assumptions = assumptions.items;
+    if (!Array.isArray(assumptions)) assumptions = [];
+    var unresolved = assumptions.filter(function (a) { return !a || a.status !== 'resolved'; });
+    return { status: unresolved.length ? 'rehearsal-complete' : 'real-execution-ready', rehearsalComplete: false,
+      realExecutionReady: false, assumptions: assumptions, unresolved: unresolved, unresolvedCount: unresolved.length };
+  }
+  function reportReadinessVerdict(plan, rehearsalComplete) {
+    var rr = executionReadiness(plan), n = rr.unresolvedCount == null ? ((rr.unresolved || []).length) : rr.unresolvedCount;
+    if (!rehearsalComplete) return null;
+    if (n > 0) return T().rehearsalFactsPending(n);
+    return rr.realExecutionReady ? T().realExecutionReady : T().rehearsalComplete;
+  }
+  function appendAssumptionCondition(plan) {
+    var rr = executionReadiness(plan), n = rr.unresolvedCount == null ? ((rr.unresolved || []).length) : rr.unresolvedCount;
+    if (!n) return;
+    $('r-conds').insertAdjacentHTML('beforeend', '<span class="cond unmet">' + T().assumptionsPending(n) + '</span>');
+  }
+
+  function evidenceCause(atom) {
+    var ref = atom.itemRef || {}, det = ref.detectorId || '';
+    if (atom.status === 'overlap' || atom.status === 'compressed' || det === 'fatigue' || atom.dimension === 'people') return 'capacity';
+    if (atom.status === 'late' || atom.status === 'present-but-late') return 'late-info';
+    if (atom.dimension === 'info') return 'missing-info';
+    if (det === 'reserve' || det === 'returnLogi') return 'resource';
+    if (det === 'budgetAuth' || det === 'safety' || det === 'report' || atom.dimension === 'safety') return 'authority';
+    if (atom.dimension === 'money' || atom.dimension === 'quality') return 'resource';
+    return atom.status === 'missing' || atom.status === 'broken' ? 'missing-info' : 'capacity';
+  }
+  function hintCause(h) {
+    if (h.type === 'MISSING_ARROW') return 'missing-info';
+    if (h.type === 'ARROW_LATE' || h.type === 'WRONG_FISH_RISK' || h.type === 'DEP_BROKEN') return 'late-info';
+    if (h.type === 'OVERLOAD' || h.type === 'TASK_UNSTAFFED' || h.type === 'DUTY_UNASSIGNED' || h.type === 'MISASSIGNED') return 'capacity';
+    if (h.type === 'CARRY_GAP' || h.type === 'UNPLACED_REQUIRED' || h.type === 'DECOY_PLACED') return 'resource';
+    return 'missing-info';
+  }
+  function classifyEvidence(plan, trip, res) {
+    var failing = (trip.atoms || []).filter(function (a) { return a.earned < a.maxPts; }).map(function (a) {
+      return { atom: a, lost: Math.max(0, a.maxPts - a.earned), cause: evidenceCause(a) };
+    });
+    failing.sort(function (a, b) { return b.lost - a.lost; });
+    var first = null, segs = res.segment === 'all' ? WHOLE_SEGMENTS.slice() : [res.segment || 'fishday'];
+    // In Challenge, surface the contingency that defines the exercise even when an unrelated seed
+    // gap occurs earlier. This is still observed engine evidence: the authoritative feasibility API
+    // reports the selected at-sea channel unavailable under the active scenario.
+    if (plan.scenarioId === 'comms-outage' && typeof P.channelFeasibility === 'function') {
+      for (var sfi = 0; sfi < segs.length && !first; sfi++) {
+        var scenarioSeg = segs[sfi], hs = P.handoffsForSeg(plan, scenarioSeg) || [];
+        for (var hi = 0; hi < hs.length; hi++) {
+          var hf = handoffFeasibility(plan, hs[hi], scenarioSeg);
+          if (!hf.ok && hf.reason === 'scenario-channel-unavailable') {
+            first = { cause: 'missing-info', item: { kind: 'scenario', segment: scenarioSeg, type: 'SCENARIO_CHANNEL_UNAVAILABLE', taskId: hs[hi].toTaskId,
+              cardId: hs[hi].cardId, channel: hs[hi].channel, reason: hf.reason } }; break;
+          }
+        }
+      }
+    }
+    if (!first) {
+      var observations = [];
+      segs.forEach(function (seg, si) {
+        var tasks = P.tasksForSeg(plan, seg), win = P.DAY_WINDOWS[seg] || [0, 0];
+        (P.dayReadiness(plan, seg) || []).forEach(function (h, oi) {
+          var task = h.taskId ? byId(tasks, h.taskId) : null;
+          observations.push({ segment: seg, segIndex: si, at: task && typeof task.startMin === 'number' ? task.startMin : win[0], order: oi, hint: h });
+        });
+      });
+      observations.sort(function (a, b) { return a.segIndex - b.segIndex || a.at - b.at || a.order - b.order; });
+      if (observations.length) {
+        var ob = observations[0], item = Object.assign({ kind: 'hint', segment: ob.segment }, ob.hint);
+        first = { cause: hintCause(ob.hint), item: item };
+      }
+    }
+    var items = [];
+    if (first) items.push(first.item);
+    failing.slice(0, Math.max(0, 3 - items.length)).forEach(function (x) {
+      items.push({ kind: 'atom', id: x.atom.id, reasonKey: x.atom.reasonKey, status: x.atom.status, dimension: x.atom.dimension, lost: x.lost });
+    });
+    return { cause: first ? first.cause : (failing.length ? failing[0].cause : 'none'), count: failing.length, items: items };
+  }
+  function compactBucketScores(trip) {
+    var out = {}; LEDGER_BUCKETS.forEach(function (bk) { var b = trip.byBucket[bk]; if (b) out[bk] = { earned: b.earned, maxPts: b.maxPts }; }); return out;
+  }
+  function ensureLearningAttempt(res, plan, trip) {
+    if (!res._learningSnapshot) {
+      res._learningSnapshot = { plan: plan, trip: trip, readiness: executionReadiness(plan), run: activeLearningRun || newLearningRun((sim && sim.cfg && sim.cfg.seed) || 1, res.segment || daySel) };
+    }
+    if (res._learningAttempt) return res._learningAttempt;
+    var run = res._learningSnapshot.run, actual = classifyEvidence(plan, trip, res);
+    var attempt = { id: run.id, at: run.at, level: run.level, segment: res.segment || run.segment || 'all', seed: run.seed,
+      scenario: (plan && plan.scenarioId) || run.scenario || 'normal', prediction: run.prediction || null,
+      score: trip.total, grade: trip.grade, gapCount: actual.count, actualCause: actual.cause, evidence: actual.items,
+      buckets: compactBucketScores(trip), unresolvedAssumptions: (res._learningSnapshot.readiness.unresolved || []).map(function (a) { return a.id; }),
+      reflection: { why: '', transfer: '' } };
+    res._learningAttempt = attempt;
+    learningAttempts = learningAttempts.filter(function (a) { return a.id !== attempt.id; });
+    learningAttempts.unshift(attempt); learningAttempts = learningAttempts.slice(0, 5); persistAttempts();
+    learningObserved = true; renderLearningChrome(); activeLearningRun = null;
+    return attempt;
+  }
+  function localizedEvidence(item, plan) {
+    if (item && item.kind === 'scenario') return readinessText(plan, item.segment, item);
+    if (item && item.kind === 'hint') return readinessText(plan, item.segment, item);
+    var v = item && item.reasonKey ? T()[item.reasonKey] : null;
+    var txt = typeof v === 'string' ? v : ledgerHumanizeId(item && item.id, '');
+    return txt + (item && item.lost ? ' (−' + item.lost + ')' : '');
+  }
+  function renderLearningDebrief(res, plan, trip) {
+    var box = $('learning-debrief'); if (!box) return;
+    var attempt = ensureLearningAttempt(res, plan, trip), pred = attempt.prediction;
+    var match = !!(pred && pred.cause === attempt.actualCause);
+    var evidence = attempt.evidence && attempt.evidence.length ? attempt.evidence.map(function (item) { return localizedEvidence(item, plan); }).join(' · ') : T().debriefEvidenceSummary(attempt.score, attempt.gapCount);
+    box.innerHTML = '<div class="debrief-compare"><div class="debrief-box"><small>' + T().debriefPrediction + '</small><b>' +
+      (pred ? causeLabel(pred.cause) : T().debriefNoPrediction) + '</b>' + (pred ? '<p>' + esc(pred.rationale) + '</p>' : '') + '</div>' +
+      '<div class="debrief-box"><small>' + T().debriefActual + '</small><b>' + causeLabel(attempt.actualCause) + '</b><p>' + T().debriefEvidenceSummary(attempt.score, attempt.gapCount) + '</p></div></div>' +
+      (pred ? '<div class="debrief-match ' + (match ? 'yes' : 'no') + '">' + (match ? T().debriefMatch : T().debriefMismatch) + '</div>' : '') +
+      '<div class="debrief-evidence"><b>' + T().debriefEvidence + ':</b> ' + esc(evidence) + '</div>' +
+      '<div class="debrief-form"><label>' + T().debriefWhyRepair + '<textarea id="debrief-why" maxlength="400">' + esc(attempt.reflection.why || '') + '</textarea></label>' +
+      '<label>' + T().debriefTransfer + '<textarea id="debrief-transfer" maxlength="400">' + esc(attempt.reflection.transfer || '') + '</textarea></label>' +
+      '<div class="debrief-actions"><span class="debrief-saved hidden" id="debrief-saved">' + T().debriefSaved + '</span><button type="button" class="btn primary" id="debrief-save">' + T().debriefSave + '</button></div></div>';
+    $('debrief-why').setAttribute('placeholder', T().debriefWhyPlaceholder);
+    $('debrief-transfer').setAttribute('placeholder', T().debriefTransferPlaceholder);
+    $('debrief-save').addEventListener('click', function () {
+      attempt.reflection.why = $('debrief-why').value.trim().slice(0, 400); attempt.reflection.transfer = $('debrief-transfer').value.trim().slice(0, 400);
+      for (var i = 0; i < learningAttempts.length; i++) if (learningAttempts[i].id === attempt.id) learningAttempts[i] = attempt;
+      persistAttempts(); renderAttemptHistory(); $('debrief-saved').classList.remove('hidden');
+    });
   }
 
   function renderReport(res) {
@@ -2586,7 +2937,8 @@
     // day-slice line below); a whole-trip ('all') run sees the full total. The verdict reads ledger
     // data only (no mixing with score()'s .reason). The fix-pack/individuals panels below still read
     // the legacy per-run scorer (sc) for their own content — never its total/grade.
-    var trip = P.scoreTrip(currentPlan());
+    var reportPlan = res._learningSnapshot ? res._learningSnapshot.plan : currentPlan();
+    var trip = res._learningSnapshot ? res._learningSnapshot.trip : P.scoreTrip(reportPlan);
     $('r-grade').textContent = trip.grade; $('r-grade').style.color = GRADE_COLOR[trip.grade];
     var authoredClean = !res.wholeTrip || !!res.authoredClean;
     var perfect = trip.gate.clean && trip.grade === 'A' && authoredClean;
@@ -2600,6 +2952,8 @@
     } else {
       $('r-verdict').textContent = trip.total + ' / 100 — ' + (trip.gate.clean ? t.rDone : t.rIncomplete);
     }
+    var readinessVerdict = reportReadinessVerdict(reportPlan, perfect);
+    if (readinessVerdict) $('r-verdict').textContent = trip.total + ' / 100 — ' + readinessVerdict;
     if (day) {
       $('r-conds').innerHTML = '<span class="cond ' + (day.clean ? 'met' : 'unmet') + '">' + (day.clean ? '✓' : '✗') + ' ' + t.dayTasksLine(day.tasksDone, day.tasksTotal) + '</span>';
       if (res.segment === 'fishday') {
@@ -2617,7 +2971,7 @@
     } else {
       // Whole Trip is the six authored schedules, not the legacy ten-day task
       // clock. Show every boundary's actual required-task completion.
-      $('r-conds').innerHTML = '<span class="cond">' + t.effTripLbl + ' ' + P.tripEfficiency(currentPlan()) + '%</span>' +
+      $('r-conds').innerHTML = '<span class="cond">' + t.effTripLbl + ' ' + P.tripEfficiency(reportPlan) + '%</span>' +
         (res.wholeTrip ? res.segmentResults.map(function (r) {
           return '<span class="cond ' + (r.clean ? 'met' : 'unmet') + '">' + (r.clean ? '✓' : '✗') + ' ' +
             dayLabel(r.segment) + ' · ' + t.dayTasksLine(r.tasksDone, r.tasksTotal) + '</span>';
@@ -2626,6 +2980,7 @@
           return '<span class="cond ' + (c.met ? 'met' : 'unmet') + '">' + (c.met ? '✓' : '✗') + ' ' + nm(c.text) + '</span>';
         }).join('');
     }
+    appendAssumptionCondition(reportPlan);
     // fix-pack: the rehearsed day's gaps (or all gaps for a whole-trip run)
     var fixes = day ? day.fixes : sc.fixes, authoredHints = [];
     if (res.wholeTrip) res.segmentResults.forEach(function (r) {
@@ -2638,7 +2993,7 @@
         '<button class="btn sm primary fix-apply" data-fix="' + f.fixId + '">' + t.applyFixBtn + '</button></div>';
     }).join('') + authoredHints.map(function (x) {
       return '<div class="fix-row"><div class="fix-main"><div class="fix-title">' + dayLabel(x.segment) + '</div>' +
-        '<div class="fix-body">' + readinessText(currentPlan(), x.segment, x.hint) + '</div></div></div>';
+        '<div class="fix-body">' + readinessText(reportPlan, x.segment, x.hint) + '</div></div></div>';
     }).join('');
     // individuals table
     var head = ['ivName', 'ivAction', 'ivDecision', 'ivLoad', 'ivFatigue', 'ivCoop', 'ivContribution'];
@@ -2650,20 +3005,21 @@
     }).join('');
     $('individuals').innerHTML = th + rows;
     renderRail('report', trip);
-    renderLedger(trip, res.segment);
+    renderLedger(trip, res.segment, reportPlan);
     bootReportStage(res, trip);   // §S3 report-on-stage: the harbor at dusk above the cards
+    renderLearningDebrief(res, reportPlan, trip);
   }
 
   // §20 Phase 5: coarse-day (arrival/ops/return) report — scored straight off the authored
   // plan.days arrangement, no sim/animation involved. Reuses the same DOM the animated fishday/
   // whole-trip report renders into (renderReport branches to this for res.coarse).
   function renderDayReport(res) {
-    var t = T(), seg = res.segment, plan = currentPlan();
+    var t = T(), seg = res.segment, plan = res._learningSnapshot ? res._learningSnapshot.plan : currentPlan();
     var hints = P.dayReadiness(plan, seg), ds = P.daySchedule(plan, seg);
     // §7.2 — headline grade/score/verdict come from the whole-trip ledger (scoreTrip); the day's own
     // efficiency chips come from that day's daySchedule (§7.3); the fix-list is dayReadiness. scoreDay's
     // grade/score/89-cap and its 8-category scorecard are gone from this player-facing path.
-    var trip = P.scoreTrip(plan);
+    var trip = res._learningSnapshot ? res._learningSnapshot.trip : P.scoreTrip(plan);
     var dayClean = hints.length === 0 && ds.unresolved === 0;
     $('r-grade').textContent = trip.grade; $('r-grade').style.color = GRADE_COLOR[trip.grade];
     if (trip.gate.withheldA) {
@@ -2681,6 +3037,9 @@
       '<span class="cond ' + (ds.idleTotal === 0 ? 'met' : 'unmet') + '">' + t.rcIdle(ds.idleTotal) + '</span>' +
       '<span class="cond ' + (ds.reworkTotal === 0 ? 'met' : 'unmet') + '">' + t.rcRework(ds.reworkTotal) + '</span>' +
       (ds.dinnerMin != null ? '<span class="cond ' + (ds.dinnerMin <= 1080 ? 'met' : 'unmet') + '">' + t.rcDinner(hhmm(ds.dinnerMin)) + '</span>' : '');
+    var dayVerdict = reportReadinessVerdict(plan, perfectD && dayClean);
+    if (dayVerdict) $('r-verdict').textContent = trip.total + ' / 100 — ' + dayVerdict;
+    appendAssumptionCondition(plan);
     // fix-list: every dayReadiness hint, worded with the same rh* strings the live editor uses
     var segT = P.tasksForSeg(plan, seg);
     function tn(id) { var x = byId(segT, id); return x ? nm(x.name) : id; }
@@ -2702,8 +3061,9 @@
     }).join('') + '<button class="btn primary" id="btn-day-autofix">' + t.autoArrangeBtn + '</button>';
     $('individuals').innerHTML = '';
     renderRail('report', trip);
-    renderLedger(trip, seg);
+    renderLedger(trip, seg, plan);
     bootReportStage(res, trip);   // §S3 report-on-stage (coarse animated day): same dusk harbor
+    renderLearningDebrief(res, plan, trip);
   }
 
   // "Auto-arrange the arrows ▶" — the coarse-day analogue of the fishday fix-pack: heal this
@@ -2946,7 +3306,7 @@
     } else if (sim && sim.mode === 'minute' && sim.sched) { RSTG.sim = sim; RSTG.seg = sim.segment; }
     else {
       wholeTrip = true; RSTG.seg = 'fishday';
-      var s = P.createSim({ seed: 1, overrides: buildCfg().overrides }, 'fishday'), g = 0;
+      var s = P.createSim(seededCfg(1), 'fishday'), g = 0;
       while (!s.finished && g++ < 600) { if (s.paused) { s.paused = false; s.checkpoint = null; } P.tick(s); }
       RSTG.sim = s;
     }
@@ -3327,6 +3687,7 @@
   function bind() {
     ensureDrawerShell();
     document.querySelectorAll('.lang button').forEach(function (b) { b.addEventListener('click', function () { L = b.getAttribute('data-lang'); applyLang(); }); });
+    $('learning-levels').addEventListener('click', function (e) { var b = e.target.closest('button[data-level]'); if (b) setLearningLevel(b.dataset.level); });
     // header 🔊 toggle: the ONE real user-gesture handler allowed to resume the AudioContext (sound.js §W3)
     var sndBtn = $('snd-toggle');
     if (sndBtn) sndBtn.addEventListener('click', function () { if (window.PRS_SOUND) window.PRS_SOUND.toggle(); updateSoundButton(); });
@@ -3345,6 +3706,11 @@
     $('rules-open').addEventListener('click', function () { modalOpening('rules-modal'); $('rules-modal').classList.add('show'); $('rules-close').focus(); });
     $('rules-close').addEventListener('click', function () { $('rules-modal').classList.remove('show'); modalClosed(); });
     $('rules-modal').addEventListener('click', function (e) { if (e.target === $('rules-modal')) { $('rules-modal').classList.remove('show'); modalClosed(); } });
+    $('prediction-cancel').addEventListener('click', function () { closePrediction(true); });
+    $('prediction-run').addEventListener('click', commitPredictionAndLaunch);
+    $('prediction-modal').addEventListener('click', function (e) { if (e.target === $('prediction-modal')) closePrediction(true); });
+    $('prediction-rationale').addEventListener('input', function () { $('prediction-error').classList.add('hidden'); });
+    $('prediction-causes').addEventListener('change', function () { $('prediction-error').classList.add('hidden'); });
 
     $('day-select').addEventListener('click', function (e) {
       var b = e.target.closest('.day-btn'); if (!b) return;
@@ -3672,15 +4038,11 @@
 
     // ---- keyboard access: Escape closes the TOP modal (visual stacking = DOM order,
     // rules on top); Tab is trapped inside an open dialog; Enter/Space activates targets ----
-    function topModal() {
-      var order = ['rules-modal', 'pick-modal', 'inspect-modal', 'arrow-modal', 'detail-modal'];
-      for (var i = 0; i < order.length; i++) if ($(order[i]).classList.contains('show')) return order[i];
-      return null;
-    }
     document.addEventListener('keydown', function (e) {
       var top = topModal();
       if (e.key === 'Escape') {
-        if (top === 'rules-modal') $('rules-modal').classList.remove('show');
+        if (top === 'prediction-modal') closePrediction(true);
+        else if (top === 'rules-modal') $('rules-modal').classList.remove('show');
         else if (top === 'pick-modal') closePicker();
         else if (top === 'inspect-modal') closeInspector();
         else if (top === 'arrow-modal') { arrowEdit = null; $('arrow-modal').classList.remove('show'); modalClosed(); }
@@ -3689,7 +4051,7 @@
       }
       if (e.key === 'Tab' && top) {              // aria-modal promises the background is inert — keep focus inside
         var sheet = $(top).querySelector('.sheet');
-        var focusables = sheet.querySelectorAll('button, select, input, [tabindex], summary');
+        var focusables = sheet.querySelectorAll('button, select, input, textarea, [tabindex], summary');
         if (!focusables.length) return;
         var first = focusables[0], last = focusables[focusables.length - 1], act = document.activeElement;
         if (!sheet.contains(act)) { e.preventDefault(); first.focus(); }
@@ -3754,9 +4116,9 @@
   function ldPanel(id) { ['ld-brief', 'ld-prompt', 'ld-spot', 'ld-result'].forEach(function (p) { var e = $(p); if (e) e.classList.toggle('on', p === id); }); }
   function closeModals() {
     var active = document.activeElement;
-    var activeModal = active && active.closest ? active.closest('#detail-modal.show,#inspect-modal.show,#arrow-modal.show,#rules-modal.show,#pick-modal.show') : null;
+    var activeModal = active && active.closest ? active.closest('#detail-modal.show,#inspect-modal.show,#arrow-modal.show,#rules-modal.show,#pick-modal.show,#prediction-modal.show') : null;
     var restore = lastFocus && document.body.contains(lastFocus) ? lastFocus : null;
-    ['detail-modal', 'inspect-modal', 'arrow-modal', 'rules-modal', 'pick-modal'].forEach(function (m) { var e = $(m); if (e) e.classList.remove('show'); });
+    ['detail-modal', 'inspect-modal', 'arrow-modal', 'rules-modal', 'pick-modal', 'prediction-modal'].forEach(function (m) { var e = $(m); if (e) e.classList.remove('show'); });
     closePawnCard(); clearDetailState(); lastFocus = null;
     if (activeModal) {
       if (!restore || restore.closest('.hidden')) restore = !$('run').classList.contains('hidden') ? $('btn-pause') : document.querySelector('.daytab.on') || $('launch');
@@ -3769,7 +4131,7 @@
 
   // the Morning-authored plan survives a Live detour: snapshot on the way in, restore on the way back
   function snapshotMorning() {
-    morningSnap = JSON.parse(JSON.stringify({ fixed: fixed, mcOv: mcOv, dayOv: dayOv, daySel: daySel, orgOv: orgOv }));
+    morningSnap = JSON.parse(JSON.stringify({ fixed: fixed, mcOv: mcOv, dayOv: dayOv, daySel: daySel, orgOv: orgOv, buddyOv: buddyOv }));
   }
   function restoreMorning() {
     if (!morningSnap) return;
@@ -3778,6 +4140,7 @@
     dayOv = JSON.parse(JSON.stringify(morningSnap.dayOv));
     daySel = morningSnap.daySel;
     orgOv = JSON.parse(JSON.stringify(morningSnap.orgOv));
+    buddyOv = JSON.parse(JSON.stringify(morningSnap.buddyOv || {}));
     placingChip = null;
   }
   // =========================================================================
@@ -3824,7 +4187,7 @@
     if (window.scrollTo) window.scrollTo(0, 0);
     var s = $('intro-start'); if (s) s.focus();
   }
-  function startFromIntro() { killVignette(); markIntroSeen(); $('intro').classList.add('hidden'); enterMode('live'); }
+  function startFromIntro() { killVignette(); markIntroSeen(); $('intro').classList.add('hidden'); enterMode(learningLevel === 'learn' ? 'live' : 'morning'); }
 
   // =========================================================================
   // §W4 COLD-OPEN VIGNETTE — a ~15s scripted, deterministic mini-run on the
@@ -4433,7 +4796,7 @@
     TRAY_OBJ.forEach(function (o) { if (fixed[DET_FIX[o.det]] && tokenPidFor(o.det) === p.id) held.push(o.ic + ' ' + t[o.key]); });
     var duty = '<div class="pc-duty">' + (t['duty_' + p.roleId] || '') + '</div>';
     var note = '<div class="pc-note">' + t.planSeat(nm(rr.name)) + '</div>';
-    var holds = held.length ? '<div class="pc-sec"><span class="pc-h">' + t.trayTitle + '</span><div class="ins-cards">' +
+    var holds = held.length && !learningHidesExact() ? '<div class="pc-sec"><span class="pc-h">' + t.trayTitle + '</span><div class="ins-cards">' +
       held.map(function (h) { return '<span class="ins-card ok">' + h + '</span>'; }).join('') + '</div></div>' : '';
     return head + duty + note + holds;
   }
@@ -4754,6 +5117,7 @@
   }
 
   function enterMode(m) {
+    if (m === 'live' && learningLevel !== 'learn') m = 'morning';
     var was = appMode;
     appMode = m;
     killVignette();                                               // §W4 lifecycle: the vignette dies with the intro (enterScreen repeats this; idempotent)
@@ -4774,6 +5138,7 @@
   }
 
   function startLive() {
+    activeLearningRun = null; pendingPrediction = null;
     wholeRun = null;
     for (var k in fixed) fixed[k] = true; fixed.fixHandoffs = false;   // classic decisions sound; the arrows are the puzzle
     fdReset(); mcReset(); buddyReset(); daySel = 'fishday'; placingChip = null;
@@ -4791,7 +5156,8 @@
 
   function launchLive() {
     stopAnim(); clearFinishTimer();                       // never stack a second rAF loop across re-runs
-    sim = P.createSim({ seed: (Math.floor(Math.random() * 1e9) >>> 0) || 1, overrides: buildCfg().overrides }, 'fishday');
+    sim = P.createSim(seededCfg((Math.floor(Math.random() * 1e9) >>> 0) || 1), 'fishday');
+    if (!activeLearningRun) activeLearningRun = newLearningRun(sim.cfg && sim.cfg.seed, 'fishday');
     if (window.PRS_SOUND) window.PRS_SOUND.ambient('fishday', sim.clockMin, mapProfileFor(sim).id);   // ambient bed start, run-enter
     paused = false; livePausedForFix = false; document.body.classList.add('running');
     closeModals(); speedMult = 2; document.querySelectorAll('.spd').forEach(function (x) { x.classList.toggle('on', x.getAttribute('data-spd') === '2'); });
@@ -4917,10 +5283,11 @@
     var cname = nm(card.name).split('：')[0].split(':')[0], sendMin = from ? from.startMin + from.durMin : to.startMin;
     var chips = LIVE_CH.map(function (ch) {
       var arr = sendMin + (P.CHANNELS[ch] || 0), onTime = arr <= to.startMin;
+      var ev = evaluateLiveChannel(g, ch); onTime = onTime && ev.feas.ok;
       return '<button class="ld-opt ' + (onTime ? 'fast' : 'slow') + '" type="button" data-ch="' + ch + '">' +
         '<span class="oc">' + chIcon(ch) + ' ' + t['ch' + ch.charAt(0).toUpperCase() + ch.slice(1)] + '</span>' +
         '<span class="lat">+' + (P.CHANNELS[ch] || 0) + t.chMin + '</span>' +
-        '<span class="verdict">' + (onTime ? t.vInTime : t.vTooLate) + '</span></button>';
+        '<span class="verdict">' + (ev.feas.ok ? (onTime ? t.vInTime : t.vTooLate) : feasibilityText(ev.feas.reason)) + '</span></button>';
     }).join('');
     var cl = liveState.currentCluster, step = (cl && cl.gaps.length > 1) ? '<span class="ld-step">' + t.spotStep(liveState.clusterIdx + 1, cl.gaps.length) + '</span>' : '';
     $('ld-spot').innerHTML =
@@ -4956,21 +5323,31 @@
     return cfg;
   }
 
+  function evaluateLiveChannel(g, ch) {
+    var cfg = hypCfg(g, ch), plan = P.mergePlan(cfg), to = byId(plan.tasks, g.taskId);
+    var hs = typeof P.handoffsForSeg === 'function' ? P.handoffsForSeg(plan, 'fishday') : plan.handoffs;
+    var matches = (hs || []).filter(function (h) { return h && h.cardId === g.cardId && to &&
+      (h.toTaskId === to.id || h.toRoleId === to.ownerRoleId) && h.channel === ch; });
+    var handoff = matches.length ? matches[matches.length - 1] : { cardId: g.cardId, toTaskId: g.taskId, channel: ch };
+    return { cfg: cfg, plan: plan, handoff: handoff, feas: handoffFeasibility(plan, handoff, 'fishday') };
+  }
+
   function previewChannel(g, ch, persist) {
-    var t = T(), cfg = hypCfg(g, ch), plan2 = P.mergePlan(cfg), fd2 = P.fishdaySchedule(plan2);
+    var t = T(), ev = evaluateLiveChannel(g, ch), plan2 = ev.plan, fd2 = P.fishdaySchedule(plan2);
     var to = byId(plan2.tasks, g.taskId), from = producerOf(plan2, g.cardId);
     var sendMin = from ? from.startMin + from.durMin : to.startMin, arr = sendMin + (P.CHANNELS[ch] || 0), onTime = arr <= to.startMin;
     var assume = (to.assumeOn || []).indexOf(g.cardId) >= 0;
     paintBlast(fd2, plan2);
     var pv = $('ld-preview'), txt = $('ld-pv-txt');
+    onTime = onTime && ev.feas.ok;
     pv.className = 'ld-preview ' + (onTime ? 'fast' : 'slow');
-    txt.innerHTML = onTime ? t.spotOnTime(hhmm(arr)) : (assume ? t.spotLateWrong(hhmm(arr), arr - to.startMin) : t.spotLateIdle(hhmm(arr), arr - to.startMin));
+    txt.textContent = ev.feas.ok ? (onTime ? t.spotOnTime(hhmm(arr)) : (assume ? t.spotLateWrong(hhmm(arr), arr - to.startMin) : t.spotLateIdle(hhmm(arr), arr - to.startMin))) : feasibilityText(ev.feas.reason);
     // §7.1: the blast-radius preview shows the projected Fishing-Day SLICE of the trip 100 for this
     // hypothetical channel choice (run scoreTrip on the merged hypothetical plan) — ledger currency.
     var slice = $('ld-pv-slice'), fb = P.scoreTrip(plan2).byBucket.fishday;
     if (slice) slice.textContent = t.daySliceLine(fb.earned, fb.maxPts, dayLabel('fishday'));
     var old = pv.querySelector('.ld-send'); if (old) old.remove();
-    if (persist) {
+    if (persist && ev.feas.ok) {
       var b = document.createElement('button'); b.className = 'btn primary ld-send'; b.type = 'button';
       b.textContent = onTime ? t.spotSend : t.spotSendLate;
       b.addEventListener('click', function () { commitChannel(g, ch); });
@@ -4991,6 +5368,8 @@
   }
 
   function commitChannel(g, ch) {
+    var evaluation = evaluateLiveChannel(g, ch);
+    if (!evaluation.feas.ok) { previewChannel(g, ch, false); return; }
     var plan = currentPlan(), to = byId(plan.tasks, g.taskId), from = producerOf(plan, g.cardId);
     if (g.kind !== 'late' && !from) return;      // no producer to send from — nothing to commit
     var trig = { type: 'onTaskDone', taskId: from ? from.id : null };
@@ -5004,7 +5383,7 @@
     }
     liveState.addressed[g.taskId + '|' + g.cardId] = true; liveState.fixes++;
     var now = sim.clockMin;
-    sim = P.createSim({ seed: sim.cfg.seed, overrides: buildCfg().overrides }, 'fishday');
+    sim = P.createSim(seededCfg(sim.cfg.seed), 'fishday');
     sim.paused = false;
     var guard = 0; while ((sim.clockMin || 0) < now && !sim.finished && guard++ < 400) { if (sim.paused) { sim.paused = false; sim.checkpoint = null; } P.tick(sim); }
     anim.cascade = P.cascadeTrace(sim.plan); anim.cascade.has = anim.cascade.hasFault;
@@ -5064,10 +5443,11 @@
     lastResult = { trip: P.score(sim), day: P.daySummary(sim), segment: 'fishday' };
     enterScreen('report');
     renderReport(lastResult);
+    focusReportScreen();
   }
 
   // ---- init ----
   bind(); applyLang();
   // first-time players land on the graphic cast intro; returning players (localStorage) go straight in.
-  if (introSeen()) enterMode('live'); else showIntro(true);   // first load autoplays the vignette (§W4)
+  if (introSeen()) enterMode(learningLevel === 'learn' ? 'live' : 'morning'); else showIntro(true);   // first load autoplays the vignette (§W4)
 })();

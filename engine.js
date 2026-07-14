@@ -79,6 +79,22 @@
   function clone(o) { return JSON.parse(JSON.stringify(o)); }
   function L(en, jp) { return { en: en, jp: jp }; }
 
+  // ---- deterministic teaching scenarios --------------------------------------
+  // Scenarios are constraints over the SAME authored plan, never alternate random
+  // timelines. `normal` is deliberately inert. During the communications-outage
+  // challenge, at-sea phone/chat/notice-board deliveries cannot arrive; marine radio
+  // remains available so the learner can repair the plan with a feasible fallback.
+  var SCENARIOS = {
+    normal: { id: 'normal', name: L('Normal rehearsal', '通常リハーサル'), unavailableAtSea: [] },
+    'comms-outage': { id: 'comms-outage', name: L('At-sea communications outage', '海上通信障害'), unavailableAtSea: ['phone', 'chat', 'board'] }
+  };
+  function applyScenario(cfg, id) {
+    var out = clone(cfg || { seed: 1, overrides: {} });
+    out.overrides = out.overrides || {};
+    out.scenarioId = SCENARIOS[id] ? id : 'normal';
+    return out;
+  }
+
   // ---- physical route vocabulary -------------------------------------------------
   // This is the factual route layer. It deliberately separates PHYSICAL places and
   // vessels from logical work stations such as "finance" or "mess", so renderers and
@@ -974,6 +990,9 @@
   function mergePlan(cfg) {
     var plan = makeTemplate(), o = (cfg && cfg.overrides) || {};
     var k;
+    // Scenario selection is metadata on the merged plan. The normal/no-scenario
+    // paths remain behaviorally identical; channelFeasibility reads this field.
+    if (cfg && cfg.scenarioId && SCENARIOS[cfg.scenarioId]) plan.scenarioId = cfg.scenarioId;
     // capture the template's DEFAULT seat holders (before any override mutates them) for the §seats remap below
     var SEAT_ROLES = ['owner', 'pm', 'siteLead', 'budgetLead', 'safetyLead', 'logi', 'comms', 'specialist'];
     var SEAT_DEFAULT_HOLDER = {}, SEAT_DEFAULT_PIDS = {};
@@ -1224,6 +1243,80 @@
     for (var i = 0; i < plan.handoffs.length; i++) { var h = plan.handoffs[i]; if (h.cardId === cardId && h.toRoleId === roleId) out.push(h); }
     return out;
   }
+  // Resolve a handoff's segment without requiring callers to know which of the
+  // classic fishday or authorable-day collections owns it.
+  function handoffSegment(plan, h, seg) {
+    if (seg) return seg;
+    if (!h) return null;
+    var i, k, hs;
+    for (i = 0; i < (plan.handoffs || []).length; i++) if (plan.handoffs[i] === h || plan.handoffs[i].id === h.id) return 'fishday';
+    for (k in (plan.days || {})) {
+      hs = (plan.days[k] && plan.days[k].handoffs) || [];
+      for (i = 0; i < hs.length; i++) if (hs[i] === h || hs[i].id === h.id) return k;
+    }
+    return null;
+  }
+  function handoffTask(plan, seg, id) {
+    var tasks = seg ? tasksForSeg(plan, seg) : [];
+    return byId(tasks, id) || byId(plan.tasks || [], id);
+  }
+  function handoffMinute(plan, h, seg, endpoint) {
+    var t, tr = h.trigger || {};
+    if (endpoint === 'to') {
+      t = handoffTask(plan, seg, h.toTaskId);
+      return t && typeof t.startMin === 'number' && isFinite(t.startMin) ? t.startMin : null;
+    }
+    if (tr.type === 'atMinute') return typeof tr.value === 'number' && isFinite(tr.value) ? tr.value : null;
+    t = handoffTask(plan, seg, tr.taskId || h.fromTaskId);
+    if (!t || typeof t.startMin !== 'number' || !isFinite(t.startMin)) return null;
+    if (tr.type === 'onTaskDone') return t.startMin + t.durMin;
+    if (tr.type === 'beforeTaskStart') return t.startMin - (tr.leadMin || 0);
+    return t.startMin;
+  }
+  function handoffContext(plan, h, seg, endpoint) {
+    var id = endpoint === 'from' ? ((h.trigger && h.trigger.taskId) || h.fromTaskId) : h.toTaskId;
+    var t = handoffTask(plan, seg, id), minute = handoffMinute(plan, h, seg, endpoint);
+    // The whole Voyage board takes place aboard Ogasawara-maru. Other route
+    // boards identify an underway endpoint with the physical vessel station;
+    // Fishing Day needs the finer dock-edge rule below because its vessel tasks
+    // span both briefing/boarding and actual time offshore.
+    var atSea = seg === 'voyage' || (seg !== 'fishday' && !!t && t.station === 'vessel');
+    // Fishing-day vessel work becomes physically at sea at departure and remains so
+    // until the return transit ends. A route-planning block at the dock therefore
+    // remains co-located, while a noon catch tally does not.
+    if (seg === 'fishday' && t && t.station === 'vessel') {
+      var dep = handoffTask(plan, seg, 't_f_depart'), ret = handoffTask(plan, seg, 't_f_return');
+      var seaStart = dep && typeof dep.startMin === 'number' ? dep.startMin : 420;
+      var seaEnd = ret && typeof ret.startMin === 'number' ? ret.startMin + ret.durMin : 840;
+      // The exact departure minute is the final dockside briefing/boarding edge;
+      // physical separation begins only after that edge.
+      atSea = minute != null && minute > seaStart && minute < seaEnd;
+    }
+    return { taskId: id || null, station: t ? t.station : null, minute: minute, atSea: atSea, place: atSea ? 'sea' : 'shore' };
+  }
+  // Backward-compatible channel validator. CHANNELS remains the canonical numeric
+  // latency table; feasibility is a separate, pure lens over physical context and
+  // the optional deterministic scenario.
+  function channelFeasibility(plan, handoff, seg) {
+    seg = handoffSegment(plan, handoff, seg);
+    var channel = handoff && handoff.channel;
+    var from = handoffContext(plan, handoff || {}, seg, 'from');
+    var to = handoffContext(plan, handoff || {}, seg, 'to');
+    var base = { channel: channel || null, segment: seg, fromContext: from, toContext: to };
+    function result(ok, reason) {
+      return { ok: ok, reason: reason, channel: base.channel, segment: base.segment,
+        fromContext: base.fromContext, toContext: base.toContext };
+    }
+    if (!Object.prototype.hasOwnProperty.call(CHANNELS, channel)) return result(false, 'unknown-channel');
+    if (seg === 'fishday' && from.atSea !== to.atSea && (channel === 'faceToFace' || channel === 'board')) {
+      return result(false, 'requires-colocation');
+    }
+    var scenario = SCENARIOS[plan.scenarioId || 'normal'] || SCENARIOS.normal;
+    if ((from.atSea || to.atSea) && scenario.unavailableAtSea.indexOf(channel) >= 0) {
+      return result(false, 'scenario-channel-unavailable');
+    }
+    return result(true, 'ok');
+  }
   // plan-time (static) send/arrival — what the editor's readiness panel shows (§7.2).
   // A trigger that cannot resolve to a finite minute (missing task, or a day-clock task
   // with no startMin) returns null — NaN must never masquerade as an on-time delivery.
@@ -1234,7 +1327,10 @@
     if (h.trigger.type === 'beforeTaskStart') { t = byId(plan.tasks, h.trigger.taskId || h.toTaskId); return (t && typeof t.startMin === 'number') ? (t.startMin - (h.trigger.leadMin || 0)) : null; }
     return null;
   }
-  function staticArrival(plan, h) { var s = resolveSendMin(plan, h); return s == null ? null : s + (CHANNELS[h.channel] || 0); }
+  function staticArrival(plan, h) {
+    if (!channelFeasibility(plan, h, 'fishday').ok) return null;
+    var s = resolveSendMin(plan, h); return s == null ? null : s + CHANNELS[h.channel];
+  }
   function infoArrival(plan, cardId, roleId) { // earliest static arrival over drawn arrows (null = never)
     var hs = arrowsTo(plan, roleId, cardId), best = null;
     for (var i = 0; i < hs.length; i++) { var a = staticArrival(plan, hs[i]); if (a != null && (best == null || a < best)) best = a; }
@@ -1283,7 +1379,10 @@
       if (h.trigger.type === 'beforeTaskStart') { t = fdById[h.trigger.taskId || h.toTaskId] || byId(plan.tasks, h.trigger.taskId || h.toTaskId); return (t && typeof t.startMin === 'number') ? (t.startMin - (h.trigger.leadMin || 0)) : null; }
       return null;
     }
-    function arrivalSeg(h) { var s = sendMinSeg(h); return s == null ? null : s + (CHANNELS[h.channel] || 0); }
+    function arrivalSeg(h) {
+      if (!channelFeasibility(plan, h, seg).ok) return null;
+      var s = sendMinSeg(h); return s == null ? null : s + CHANNELS[h.channel];
+    }
     // static design lens (billed to info, §9), per (consuming task, card) pair — the §6.2
     // checker's unit. Delivery = the EARLIEST drawn arrow, so a redundant slow arrow never
     // bills a pair another (faster) arrow already feeds, and drawing a faster duplicate is
@@ -1319,6 +1418,7 @@
             var hs = arrowsToSeg(t.ownerRoleId, cid), best = null, bestH = null, pend = false;
             for (k = 0; k < hs.length; k++) {
               var hh = hs[k], a;
+              if (!channelFeasibility(plan, hh, seg).ok) continue;
               if (hh.trigger.type === 'onTaskDone' && fdById[hh.trigger.taskId]) {
                 if (!eff[hh.trigger.taskId]) { pend = true; continue; }        // producer not scheduled yet (or cyclic)
                 a = eff[hh.trigger.taskId].end + (CHANNELS[hh.channel] || 0);  // DYNAMIC: producer's effective finish
@@ -2512,6 +2612,54 @@
     return avail > 0 ? Math.round(100 * avail / (avail + cost)) : 100;
   }
 
+  // Critical external facts are deliberately OUTSIDE scoreTrip: the rehearsal can
+  // be internally perfect while published/operator facts are still unconfirmed.
+  // This prevents a 100-point plan from being mislabeled ready for real execution.
+  function criticalAssumptions(plan) {
+    plan = plan || makeTemplate();
+    var legs = plan.itinerary || ITINERARY, vessels = plan.vessels || VESSELS;
+    var breakfast = byId(legs, 'out-breakfast');
+    var longHaul = byId(legs, 'out-ogasawara-maru');
+    var inter = byId(legs, 'out-interisland');
+    var interVessel = byId(vessels, 'interisland-vessel');
+    var returnLegs = legs.filter(function (x) { return x.direction === 'return'; });
+    var returnConfirmed = !!(plan.project && plan.project.route && plan.project.route.returnConfirmed) && returnLegs.length > 0 &&
+      returnLegs.every(function (x) {
+        return x.confirmed === true && ((typeof x.departMin === 'number' && isFinite(x.departMin)) ||
+          (typeof x.arriveMin === 'number' && isFinite(x.arriveMin)));
+      });
+    function assumption(id, en, jp, resolved, routeLegIds, fields) {
+      return { id: id, label: L(en, jp), status: resolved ? 'resolved' : 'unresolved', critical: true,
+        routeLegIds: routeLegIds, fields: fields };
+    }
+    return [
+      assumption('hotel-breakfast-time', 'Confirm the Tokyo hotel breakfast time', '東京ホテルの朝食時刻を確認',
+        !!breakfast && typeof breakfast.departMin === 'number' && isFinite(breakfast.departMin),
+        ['out-breakfast'], ['out-breakfast.departMin']),
+      assumption('interisland-vessel-name', 'Confirm the inter-island vessel name', '島間船の船名を確認',
+        !!interVessel && interVessel.knownName === true,
+        ['out-interisland'], ['interisland-vessel.knownName']),
+      assumption('chichijima-connection-time', 'Confirm the Chichijima connection timetable', '父島での乗継時刻を確認',
+        !!longHaul && typeof longHaul.arriveMin === 'number' && isFinite(longHaul.arriveMin) &&
+          !!inter && typeof inter.departMin === 'number' && isFinite(inter.departMin),
+        ['out-ogasawara-maru', 'out-chichijima-transfer', 'out-interisland'],
+        ['out-ogasawara-maru.arriveMin', 'out-interisland.departMin']),
+      assumption('return-timetable', 'Confirm the complete return timetable', '帰路全体の時刻表を確認',
+        returnConfirmed,
+        returnLegs.map(function (x) { return x.id; }), ['project.route.returnConfirmed', 'return.*.departMin|arriveMin'])
+    ];
+  }
+  function executionReadiness(plan) {
+    plan = plan || makeTemplate();
+    var assumptions = criticalAssumptions(plan);
+    var unresolved = assumptions.filter(function (x) { return x.status === 'unresolved'; });
+    var trip = scoreTrip(plan), rehearsalComplete = trip.total === 100 && trip.gate.clean === true;
+    var realExecutionReady = rehearsalComplete && unresolved.length === 0;
+    return { status: realExecutionReady ? 'real-execution-ready' : (rehearsalComplete ? 'rehearsal-complete' : 'rehearsal-incomplete'),
+      rehearsalComplete: rehearsalComplete, realExecutionReady: realExecutionReady,
+      assumptions: assumptions, unresolved: unresolved, unresolvedCount: unresolved.length };
+  }
+
   var api = {
     DT: DT, DAYS: DAYS, HEADCOUNT: HEADCOUNT, STATIONS: STATIONS, ROLES: ROLES, COMPANIES: COMPANIES,
     CAT_MAX: CAT_MAX, GRADE_BANDS: GRADE_BANDS, DETECTORS: DETECTORS,
@@ -2522,6 +2670,7 @@
     // fishday temporal layer (§6/§8)
     CHEFS: CHEFS, GUESTS: GUESTS, MIN_DT: MIN_DT, DAY_START_MIN: DAY_START_MIN, DAY_END_MIN: DAY_END_MIN,
     CHANNELS: CHANNELS, CHECKPOINTS: CHECKPOINTS,
+    SCENARIOS: SCENARIOS, applyScenario: applyScenario, channelFeasibility: channelFeasibility,
     fishdayTasks: fishdayTasks, resolveSendMin: resolveSendMin, staticArrival: staticArrival, infoArrival: infoArrival,
     tasksForSeg: tasksForSeg, handoffsForSeg: handoffsForSeg, isPlaced: isPlaced, deckFor: deckFor, daySchedule: daySchedule,
     dayReadiness: dayReadiness, scoreDay: scoreDay, projectedDay: projectedDay, canonDay: canonDay, applyDayFix: applyDayFix,
@@ -2537,6 +2686,7 @@
     SNAP_MIN: SNAP_MIN, DAY_WINDOWS: DAY_WINDOWS, AUTHORABLE: AUTHORABLE,
     // rubric v1.0 — the whole-trip 100-point derived ledger + trip-wide efficiency
     scoreTrip: scoreTrip, tripEfficiency: tripEfficiency,
+    criticalAssumptions: criticalAssumptions, executionReadiness: executionReadiness,
     // Physical route model: factual outbound chain + explicitly inferred reverse return.
     PHYSICAL_STOPS: PHYSICAL_STOPS, VESSELS: VESSELS, ITINERARY: ITINERARY,
     physicalStop: physicalStop, vessel: vessel, itineraryLeg: itineraryLeg,

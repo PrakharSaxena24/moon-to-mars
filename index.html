@@ -37,6 +37,35 @@
     </div>
   </div>
 
+  <!-- ============ LEARNING CONTRACT ============ -->
+  <section class="learning-hub card" id="learning-hub" aria-labelledby="mission-title">
+    <div class="mission-copy">
+      <div class="learning-kicker" data-i18n="missionKicker"></div>
+      <h2 id="mission-title" data-i18n="missionTitle"></h2>
+      <p data-i18n="missionRole"></p>
+      <div class="mission-outcomes" role="list" aria-label="Learning mission outcomes">
+        <span role="listitem" data-i18n="missionOutcomeSafe"></span>
+        <span role="listitem" data-i18n="missionOutcomeCare"></span>
+        <span role="listitem" data-i18n="missionOutcomeTrust"></span>
+        <span role="listitem" data-i18n="missionOutcomeLearn"></span>
+      </div>
+    </div>
+    <div class="learning-controls">
+      <div class="learning-level-label" id="learning-level-label" data-i18n="learningLevelLabel"></div>
+      <div class="learning-levels" id="learning-levels" role="group" aria-labelledby="learning-level-label">
+        <button type="button" data-level="learn" data-i18n="levelLearn"></button>
+        <button type="button" data-level="practice" data-i18n="levelPractice"></button>
+        <button type="button" data-level="challenge" data-i18n="levelChallenge"></button>
+      </div>
+      <p class="learning-level-desc" id="learning-level-desc"></p>
+      <div class="scenario-chip hidden" id="scenario-chip" role="status"></div>
+    </div>
+    <details class="attempt-history" id="attempt-history-wrap">
+      <summary data-i18n="attemptHistoryTitle"></summary>
+      <div id="attempt-history"></div>
+    </details>
+  </section>
+
   <!-- ============ INTRO / CAST (onboarding) ============ -->
   <!-- §W4 cold-open vignette: the hero shows the game in ~15s on the real stage renderer.
        #vig-stage's canvas + loop are created by bootVignette() and DESTROYED by killVignette()
@@ -275,7 +304,7 @@
   </section>
 
   <!-- ============ REPORT ============ -->
-  <section id="report" class="hidden">
+  <section id="report" class="hidden" tabindex="-1">
     <!-- §HarborComplete S3: report-on-stage — the same harbor at dusk. Stall markers glow where the
          day actually lost time (each is a click-through to the fixing surface); the grade lands as a
          hanko stamp. #report-stage's canvas + local rAF are created by bootReportStage() and
@@ -300,6 +329,10 @@
       <div class="conds" id="r-conds"></div>
     </div>
     <div class="card railcard"><div class="rail" id="rail-report"></div></div>
+    <div class="card learning-debrief-card" id="learning-debrief-card">
+      <h2 data-i18n="debriefTitle"></h2>
+      <div id="learning-debrief"></div>
+    </div>
     <div class="card"><h2 id="ledger-title"></h2>
       <div class="tag" style="margin:-6px 0 12px;"><a href="rubric.html" target="_blank" rel="noopener" data-i18n="rubricLink"></a></div>
       <div class="ledger" id="ledger"></div></div>
@@ -367,6 +400,30 @@
     <h2 id="rules-title" data-i18n="rulesTitle"></h2>
     <div id="rules-body"></div>
     <div class="foot"><button class="btn" id="rules-close" data-i18n="closeBtn"></button></div>
+  </div>
+</div>
+
+<!-- ============ PREDICT BEFORE RUN ============ -->
+<div class="modal" id="prediction-modal">
+  <div class="sheet prediction-sheet" role="dialog" aria-modal="true" aria-labelledby="prediction-title" aria-describedby="prediction-prompt">
+    <h2 id="prediction-title" data-i18n="predictionTitle"></h2>
+    <p class="tag" id="prediction-prompt" data-i18n="predictionPrompt"></p>
+    <fieldset class="prediction-causes" id="prediction-causes">
+      <legend data-i18n="predictionRootLabel"></legend>
+      <label><input type="radio" name="prediction-root" value="missing-info"><span data-i18n="causeMissingInfo"></span></label>
+      <label><input type="radio" name="prediction-root" value="late-info"><span data-i18n="causeLateInfo"></span></label>
+      <label><input type="radio" name="prediction-root" value="authority"><span data-i18n="causeAuthority"></span></label>
+      <label><input type="radio" name="prediction-root" value="capacity"><span data-i18n="causeCapacity"></span></label>
+      <label><input type="radio" name="prediction-root" value="resource"><span data-i18n="causeResource"></span></label>
+    </fieldset>
+    <label class="prediction-rationale" for="prediction-rationale"><span data-i18n="predictionWhyLabel"></span>
+      <textarea id="prediction-rationale" rows="3" maxlength="240" data-i18n-placeholder="predictionWhyPlaceholder"></textarea>
+    </label>
+    <div class="form-error hidden" id="prediction-error" role="alert" data-i18n="predictionError"></div>
+    <div class="foot prediction-foot">
+      <button class="btn ghost" type="button" id="prediction-cancel" data-i18n="predictionCancel"></button>
+      <button class="btn primary" type="button" id="prediction-run" data-i18n="predictionRun"></button>
+    </div>
   </div>
 </div>
 
