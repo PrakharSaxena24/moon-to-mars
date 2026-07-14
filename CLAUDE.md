@@ -459,7 +459,7 @@ OgasawaraSim/                   (at /Users/tanakai/aibos/OgasawaraSim — moved 
 ├─ engine.js    window.PRS — deterministic sim: data model, detectors, scoreTrip constitution (Node-runnable)
 ├─ i18n.js      all EN/JP strings (full parity, verify-asserted)
 ├─ app.js       wires PRS + i18n to the DOM (plan / run / report / Live / fix-and-rerun)
-├─ stage.js     window.PRS_STAGE — the Canvas 2D harbor renderer (world, lighting, camera, §21/§27)
+├─ stage.js     window.PRS_STAGE — route-aware Canvas worlds (Tokyo / ship / Ogasawara, lighting, camera)
 ├─ sprites.js   window.PRS_SPRITES — the SVG sprite cast (§27; strict procedural-fallback contract)
 ├─ sound.js     window.PRS_SOUND — procedural WebAudio ambience + cues (§28; deletable, muted-start)
 ├─ rubric.html  the public 100-point framework page (renders live from engine.js, per-cell breakdowns)
@@ -484,9 +484,9 @@ re-derived as scoring rubric v1.0 SHIPPED 2026-07-10 (§24).**
 **LIVE on GitHub Pages: https://prakharsaxena24.github.io/moon-to-mars/** (`main` → Pages serves `main`/root,
 auto-deploys on push; `gh` authed as PrakharSaxena24 — everything through §27 is pushed and live;
 `_config.yml` excludes CLAUDE.md/WORLD.md/docs/archive/verify.js from the published site).
-Headless-verified `node verify.js` **258 checks** (classic D→A gradient; the fishday temporal block — gappy
-plan idleTotal 1450 person-min, fishday-day efficiency 68%; the rubric v1.0 constitution — 89 atoms Σ=100,
-gappy trip 54/D, canonical 100/A/clean, arrow-draw the largest single fix jump; Layer 0 helpers; the §20
+Headless-verified `node verify.js` **343 checks** (classic D→A gradient; the fishday temporal block — gappy
+plan idleTotal 1450 person-min, fishday-day efficiency 68%; the rubric v1.0 constitution — 99 atoms Σ=100,
+gappy trip 53/D, canonical 100/A/clean, arrow-draw the largest single fix jump; Layer 0 helpers; the §20
 authorable-day anchors: per-day 100 via canonDay, cleared→D, monotone gradient, channel-at-hour pricing,
 façade equality, purity). Prior DOM passes: **69-check Playwright E2E** (§20.8) + headless-Chrome screenshot
 passes for §21/§22 + a 19-check runtime smoke for §24. Next: §13 contingency branches, Layers 2–4 (§16), and
@@ -1384,3 +1384,67 @@ the program-end everything-check.**
   pass (wiring is machine-verified; the *sound design* needs one human listen); Live mode stays fishday-only
   by design (and is carry-canonical as of the program-end fix); guest sprites, pan/zoom, §13 weather/scenario
   branches (next program).
+
+---
+
+## 29. Route-aware worlds — the map follows the campaign (BUILT 2026-07-14)
+Continuation of the Voyage presentation layer: the simulation already began in Tokyo and sailed to/from
+Ogasawara, but every land segment still borrowed the island harbor art. The renderer now follows the actual
+route without changing engine/scoring state.
+
+- **Seven presentation profiles:** Tokyo loading yard → outbound ship → Ogasawara → return pack-out →
+  homebound ship → Tokyo return, plus the whole-trip ship-transit still. `sceneProfile(sim, view)` is pure;
+  Return reads the solved, editable `hd_r_sail.start/end`, so a moved ferry changes scenery at its real time
+  and an unplaced ferry never leaves visually.
+- **One simulation vocabulary, location-correct labels:** land task/station ids and coordinates stay stable.
+  Profile overrides rename the visible anchors (e.g. Hinata → Loading base / Saloon / Arrival desk), while
+  hidden Command/Finance/Clinic crew, readiness, and problems fold truthfully into the colocated visible anchor.
+- **World art:** Tokyo gets a paved warehouse apron, skyline, tower, concrete quay, and no island foam; ship
+  profiles get a cached full-stage washi ocean base plus one continuous deck; island-only guests, skiff, rock,
+  particles, gulls, and jumping fish do not leak into Tokyo/ship. The offscreen terrain key includes profile,
+  size, DPR, and scale. `?dom` receives matching Tokyo/ship fallback worlds.
+- **All three surfaces agree:** setup previews follow the selected day; runs rebuild art-less hotspots only when
+  a profile changes; return reports replay a minute inside the most costly wait/rework interval. Report replay
+  reapplies sim-local hand-fed interventions, while score/inspection continue reading the completed result.
+- **Accessibility/lifecycle:** the map exposes a bilingual live location status; keyboard station focus survives
+  a route rebuild. Hinata sub-zone dialogs retain their invoker while the hub exists and close onto the visible
+  replacement anchor when the route removes it. The plan canvas keeps its full drag/crew instruction and appends
+  the location instead of replacing that accessible name.
+- **Verified:** `node verify.js` **343/343** — the original 323 plus exact profiles, driven Return boundaries,
+  editable/unplaced sail cases, presentation purity, bilingual metadata, folded state, strict Canvas API frames
+  for every world, profile/DPR cache invalidation and intervention-schedule replay. All JS syntax and `git diff
+  --check` pass. A visual browser click-through remains pending because this session exposed no browser backend.
+
+---
+
+## 30. Authoritative Hahajima route correction (BUILT 2026-07-14; supersedes §§28–29 route assumptions)
+
+The trip owner supplied the actual outbound itinerary after the first route-aware build. These facts are now
+the source of truth: breakfast is at a nearby Tokyo hotel (time unknown); the group leaves that hotel at
+**10:00**; the **Ogasawara-maru leaves Takeshiba at 11:00**; its crossing takes **about one day** to
+**Chichijima**; the group changes ships there; a separate inter-island vessel continues to **Hahajima**;
+and **Hinata is on Hahajima**. The inter-island vessel name, its connection times, the breakfast time, and
+the return timetable remain deliberately unknown. The reverse return chain is a labeled inference, not a
+claimed schedule.
+
+- **Physical route model:** `PHYSICAL_STOPS`, `VESSELS`, and `ITINERARY` separate places, route vessels,
+  and logical work stations. Unknown clocks are `null`; deterministic task anchors used by the rehearsal
+  carry `timeKnown:false`/an explicit status and the UI labels them as rehearsal sequence, never timetable.
+- **Outbound work:** Load spans the hotel and Takeshiba, with exact 10:00/11:00 anchors. Voyage covers the
+  roughly 24-hour Ogasawara-maru crossing. Arrival begins at Chichijima and explicitly includes disembark,
+  baggage/manifest handover, inter-island boarding/crossing, Hahajima unloading, and transfer to Hinata.
+- **Independent custody chains:** Tokyo→Takeshiba/Ogasawara-maru, Chichijima ship change, and inferred
+  return each track manifest custody. An omitted transfer item becomes missing downstream instead of being
+  treated as magically aboard forever.
+- **Six persistent scene identities:** `tokyo-hotel`, `takeshiba-terminal`, `ogasawara-maru`,
+  `chichijima-transfer`, `interisland-ferry`, and `hahajima-hinata`, plus `route-overview`. Long-haul ferry,
+  unnamed inter-island vessel, and the two local fishing boats remain visually and semantically distinct.
+- **Whole Trip:** all six authored segments run in order, honor solved task boundaries, rebuild scene/audio
+  at each physical transition, and require every authored task/result to finish before reporting done. The
+  truthful multi-day clock starts Whole Trip at an explicit 8× playback speed; users can slow it at any time.
+- **Presentation/accessibility:** planning and reports use the route overview; losses aggregate by physical
+  place; day badges use authored readiness; guests appear when transport/guest work requires them; Canvas and
+  `?dom` share geography; dialog focus survives scene changes; reduced-motion changes take effect live.
+
+The older direct-island/five-hour-return descriptions in §§28–29 remain only as implementation history and
+must not be used as itinerary facts.

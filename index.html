@@ -67,13 +67,6 @@
 
   <!-- ============ SETUP ============ -->
   <section id="setup">
-    <!-- §W1 ledger rail: the score receipt as the progress spine (sticky right column ≥1180px) -->
-    <aside class="setup-rail" id="rail-setup">
-      <div class="card railcard">
-        <div class="rail" id="rail-body"></div>
-        <button class="btn primary" id="launch" data-i18n="launchBtn"></button>
-      </div>
-    </aside>
     <div class="setup-main">
 
     <!-- §1/§2 PLAN STAGE — setup becomes stage-first: the pre-dawn harbor + a command tray of
@@ -86,6 +79,9 @@
         <div class="plan-halos" id="plan-halos" aria-hidden="true"></div>
         <div class="plan-tokens" id="plan-tokens"></div>
       </div>
+      <!-- Visible keyboard equivalent for the code-native canvas pawns. app.js
+           populates compact crew-inspection buttons and the localized label. -->
+      <div class="plan-roster" id="plan-roster" role="group"></div>
       <div class="cmd-tray" id="cmd-tray" role="group">
         <div class="tray-hint" id="tray-hint">
           <span id="tray-hint-txt"></span>
@@ -158,11 +154,13 @@
     </div><!-- /.all-settings -->
 
     <!-- day-drawer shell (WA ships it; WB animates open/close). #fd-card lives permanently in #dd-body. -->
-    <div class="day-drawer" id="day-drawer" aria-hidden="true">
+    <div class="day-drawer" id="day-drawer" role="dialog" aria-modal="false" aria-labelledby="dd-title" aria-hidden="true" tabindex="-1">
       <div class="dd-head" id="dd-head">
-        <h2 id="dd-title"></h2>
-        <div class="dd-tabs" id="dd-tabs"></div>
-        <button class="btn sm ghost" id="dd-close" type="button" data-i18n="ddClose"></button>
+        <h2 class="dd-title" id="dd-title"></h2>
+        <div class="dd-tabs" id="dd-tabs" role="group" aria-labelledby="dd-title"></div>
+        <button class="dd-close" id="dd-close" type="button" aria-controls="dd-body">
+          <span aria-hidden="true">×</span><span class="sr-only" data-i18n="ddClose"></span>
+        </button>
       </div>
       <div class="dd-body" id="dd-body">
         <div class="card hidden" id="fd-card">
@@ -183,13 +181,23 @@
     </div>
 
     </div><!-- /.setup-main -->
+
+    <!-- §W1 ledger rail: after the plan in source order on narrow screens;
+         the desktop grid pins it as the sticky right-hand column at ≥1180px. -->
+    <aside class="setup-rail" id="rail-setup">
+      <div class="card railcard">
+        <div class="rail" id="rail-body"></div>
+        <button class="btn primary" id="launch" data-i18n="launchBtn"></button>
+      </div>
+    </aside>
   </section>
 
   <!-- ============ RUN ============ -->
   <section id="run" class="hidden">
     <div class="runwrap" id="runwrap">
+      <div class="run-main">
       <div class="sitemap" id="sitemap">
-        <canvas id="stage"></canvas>
+        <canvas id="stage" aria-hidden="true"></canvas>
         <div class="skytint" id="skytint"></div>
         <div class="paths" id="paths"></div>
         <div id="stations"></div>
@@ -201,7 +209,39 @@
         <div class="dinnertag hidden" id="dinnertag"></div>
         <div class="fanfare" id="fanfare"></div>
       </div>
+      <!-- Canvas pawns must not create an invisible 11-button tab run. app.js can
+           remove inert when it supplies an equivalent visible keyboard roster. -->
       <div id="stage-roster" class="sr-only" aria-live="polite"></div>
+
+      <!-- LIVE MODE dock: cold-open briefing → freeze prompt → spotlight one-question fix → result -->
+      <div class="live-dock hidden" id="live-dock" aria-live="polite">
+        <div class="ld-panel" id="ld-brief"></div>
+        <div class="ld-panel" id="ld-prompt"></div>
+        <div class="ld-panel" id="ld-spot"></div>
+        <div class="ld-panel" id="ld-result"></div>
+      </div>
+
+      <div class="legend" id="legend"></div>
+      <div class="speedrow"><span class="muted2" data-i18n="speedLbl"></span>
+        <button class="spd" data-spd="0.5">0.5×</button>
+        <button class="spd on" data-spd="1">1×</button>
+        <button class="spd" data-spd="2">2×</button>
+        <button class="spd" data-spd="4">4×</button>
+        <button class="spd" data-spd="8">8×</button>
+      </div>
+
+      <div class="controls">
+        <button class="btn" id="btn-pause" type="button"></button>
+        <button class="btn ghost" id="btn-guests" type="button" aria-controls="stage" aria-pressed="false"></button>
+        <button class="btn ghost" id="btn-drawer" type="button" aria-controls="dashboard" aria-expanded="true"></button>
+        <button class="btn ghost" id="btn-quit" type="button" data-i18n="quitBtn"></button>
+      </div>
+
+      <div class="logbox" id="logbox"></div>
+      </div><!-- /.run-main -->
+
+      <!-- Keep the live prompt and run controls before this dashboard in source
+           order; the desktop grid still pins the dashboard beside the map. -->
       <aside class="dashboard" id="dashboard">
         <div class="dash-head"><span class="dash-day" id="dash-day"></span><span class="dash-phase" id="dash-phase"></span></div>
         <div class="dash-sec">
@@ -229,31 +269,8 @@
           <div id="dash-perf" class="perfwrap"></div>
         </div>
       </aside>
-    </div>
 
-    <!-- LIVE MODE dock: cold-open briefing → freeze prompt → spotlight one-question fix → result -->
-    <div class="live-dock hidden" id="live-dock" aria-live="polite">
-      <div class="ld-panel" id="ld-brief"></div>
-      <div class="ld-panel" id="ld-prompt"></div>
-      <div class="ld-panel" id="ld-spot"></div>
-      <div class="ld-panel" id="ld-result"></div>
     </div>
-
-    <div class="legend" id="legend"></div>
-    <div class="speedrow"><span class="muted2" data-i18n="speedLbl"></span>
-      <button class="spd" data-spd="0.5">0.5×</button>
-      <button class="spd on" data-spd="1">1×</button>
-      <button class="spd" data-spd="2">2×</button>
-    </div>
-
-    <div class="controls">
-      <button class="btn" id="btn-pause"></button>
-      <button class="btn ghost" id="btn-guests"></button>
-      <button class="btn ghost" id="btn-drawer"></button>
-      <button class="btn ghost" id="btn-quit" data-i18n="quitBtn"></button>
-    </div>
-
-    <div class="logbox" id="logbox"></div>
   </section>
 
   <!-- ============ REPORT ============ -->

@@ -524,35 +524,35 @@ console.log('\n=== SEAT ASSIGNMENT — overrides.seats bijection (default = no-o
 // ============================================================================
 console.log('\n=== COARSE-DAY ANIMATION — opt-in minute-sim (§21.12) ===');
 (function () {
-  // §7/§13.4 P2 re-tune: Arrival now ships HALF-cleared (6 of its 11 required tasks placed;
-  // the other 5 blanked) — the placed subset is an internally-consistent, on-time chain (a
-  // structural authoring gap on the still-unplaced tasks, not a live temporal stall), so it
-  // animates those 6 tasks with zero stalls. Ops/Return still ship fully wired, so they keep
-  // the original "seeded gaps -> live stall" shape.
+  // Every authored segment now carries its full physical-route chain. Keep this check
+  // data-driven: the seed may intentionally leave required cards unplaced, while every
+  // placed card must still have a solved animation row and every canonical day must run
+  // without a live handoff stall.
   ['arrival', 'ops', 'return'].forEach(function (seg) {
     var anim = P.createSim(base, seg, { animate: true });
     ok(anim.mode === 'minute', 'coarse ' + seg + ': {animate:true} => minute-clock sim');
     ok(P.createSim(base, seg).mode !== 'minute', 'coarse ' + seg + ': 2-arg createSim stays the classic day clock (verify-safe gate)');
     if (seg === 'arrival') {
-      ok(anim.tasks.length === 6 && anim.tasks.every(function (t) { return anim.sched.byTask[t.id]; }),
-        'coarse arrival (half-cleared seed): the 6 placed tasks animate, scheduled (' + anim.tasks.length + ')');
+      var arrivalPlaced = Object.keys(P.daySchedule(P.mergePlan(base), seg).byTask).length;
+      ok(anim.tasks.length === arrivalPlaced && anim.tasks.every(function (t) { return anim.sched.byTask[t.id]; }),
+        'coarse arrival: every placed route task animates with a solved schedule row (' + anim.tasks.length + ')');
       ok(P.dayReadiness(P.mergePlan(base), seg).some(function (r) { return r.type === 'UNPLACED_REQUIRED'; }),
-        'coarse arrival (half-cleared seed): dayReadiness flags UNPLACED_REQUIRED for the still-unplaced tasks');
+        'coarse arrival: dayReadiness flags UNPLACED_REQUIRED for the still-unplaced tasks');
     } else {
       ok(anim.tasks.length > 0 && anim.tasks.every(function (t) { return anim.sched.byTask[t.id]; }),
         'coarse ' + seg + ': every animated task is scheduled (sim.tasks <-> sched.byTask lock-step)');
     }
     ok(anim.clockMin === anim.winStart && anim.winEnd > anim.winStart, 'coarse ' + seg + ': clock starts at the segment window start');
-    // seeded (gappy) day: someone stalls on a gap -> pauses on a cp_stall at least once
-    // (arrival's placed subset is internally consistent, so it correctly pauses zero times)
-    var g = 0, stalls = 0;
-    while (!anim.finished && g < 400) { P.tick(anim); if (anim.paused) { if (anim.checkpoint.id === 'cp_stall') stalls++; P.resume(anim); } g++; }
+    // Seeded (gappy) day: someone stalls on a gap -> pauses on cp_stall. The
+    // return canvas spans more than a day, so derive the guard from its window.
+    var g = 0, stalls = 0, guardLimit = Math.ceil((anim.winEnd - anim.winStart) / P.MIN_DT) + 100;
+    while (!anim.finished && g < guardLimit) { P.tick(anim); if (anim.paused) { if (anim.checkpoint.id === 'cp_stall') stalls++; P.resume(anim); } g++; }
     ok(anim.finished, 'coarse ' + seg + ': runs to a finish');
-    if (seg === 'arrival') ok(stalls === 0, 'coarse arrival (half-cleared seed): the placed chain is clean -> zero cp_stall pauses');
-    else ok(stalls > 0, 'coarse ' + seg + ' (seeded gaps): pauses on a cp_stall at least once');
+    ok(stalls > 0, 'coarse ' + seg + ' (seeded gaps): pauses on a cp_stall at least once');
     // auto-arranged arrows + restored placements -> no handoff stall -> zero pauses, 100% efficiency
     var cfg = P.applyDayFix(base, seg), clean = P.createSim(cfg, seg, { animate: true }), g2 = 0, p2 = 0;
-    while (!clean.finished && g2 < 400) { P.tick(clean); if (clean.paused) { p2++; P.resume(clean); } g2++; }
+    var cleanGuard = Math.ceil((clean.winEnd - clean.winStart) / P.MIN_DT) + 100;
+    while (!clean.finished && g2 < cleanGuard) { P.tick(clean); if (clean.paused) { p2++; P.resume(clean); } g2++; }
     ok(p2 === 0, 'coarse ' + seg + ' (auto-arranged arrows): no stall pause');
     ok(P.scoreDay(P.mergePlan(cfg), seg).efficiency === 100, 'coarse ' + seg + ' (auto-arranged): scoreDay efficiency 100%');
   });
@@ -1014,18 +1014,43 @@ console.log('\n=== VOYAGE §1 — new-seg structural anchors (load/voyage) ===')
   ok(ALL_AUTHORABLE.every(function (s) { return P.AUTHORABLE.indexOf(s) >= 0; }) && P.AUTHORABLE.length === ALL_AUTHORABLE.length,
     'AUTHORABLE carries exactly the 6 campaign segments, no more/fewer (' + P.AUTHORABLE.join(',') + ')');
 
-  // windows: spec §1's phase table gives EXACT hours (not "~" targets) — Day 0 06:00-11:00 Tokyo
-  // (load), 11:00-21:00 aboard (voyage). Pinned in day-clock minutes, matching the existing
-  // arrival/ops/return [openMin,closeMin] convention (06:00=360, 11:00=660, 21:00=1260).
-  ok(P.DAY_WINDOWS.load && P.DAY_WINDOWS.load[0] === 360 && P.DAY_WINDOWS.load[1] === 660,
-    'DAY_WINDOWS.load === [360,660] (06:00-11:00 Tokyo) (' + JSON.stringify(P.DAY_WINDOWS.load) + ')');
-  ok(P.DAY_WINDOWS.voyage && P.DAY_WINDOWS.voyage[0] === 660 && P.DAY_WINDOWS.voyage[1] === 1260,
-    'DAY_WINDOWS.voyage === [660,1260] (11:00-21:00 aboard) (' + JSON.stringify(P.DAY_WINDOWS.voyage) + ')');
+  // The load canvas opens at a neutral rehearsal anchor because breakfast time is
+  // unknown. The only confirmed clocks are hotel departure at 10:00 and the
+  // Ogasawara-maru departure at 11:00; the voyage boundary is approximately +24h.
+  ok(P.DAY_WINDOWS.load && P.DAY_WINDOWS.load[0] === 480 && P.DAY_WINDOWS.load[1] === 660,
+    'DAY_WINDOWS.load uses an 08:00 rehearsal canvas and ends at the confirmed 11:00 sailing (' + JSON.stringify(P.DAY_WINDOWS.load) + ')');
+  ok(P.DAY_WINDOWS.voyage && P.DAY_WINDOWS.voyage[0] === 660 && P.DAY_WINDOWS.voyage[1] === 2100,
+    'DAY_WINDOWS.voyage spans the confirmed 11:00 departure plus about one day (' + JSON.stringify(P.DAY_WINDOWS.voyage) + ')');
   ok(!!(P.DAY_WINDOWS.load && P.DAY_WINDOWS.voyage) && P.DAY_WINDOWS.load[1] === P.DAY_WINDOWS.voyage[0],
     'load ends exactly where voyage begins (11:00, the fixed sailing time — "what misses the ship cannot be fixed at sea")');
 
   var canonCfg = trueCanonCfgV();
   var canonPlan = P.mergePlan(canonCfg);
+
+  function leg(id) { return (P.ITINERARY || []).filter(function (x) { return x.id === id; })[0] || null; }
+  var breakfast = leg('out-breakfast'), hotelMove = leg('out-hotel-takeshiba');
+  var longHaul = leg('out-ogasawara-maru'), chichi = leg('out-chichijima-transfer');
+  var inter = leg('out-interisland'), hinata = leg('out-hinata');
+  var interVessel = (P.VESSELS || []).filter(function (v) { return v.id === 'interisland-vessel'; })[0] || null;
+  var returnLegs = (P.ITINERARY || []).filter(function (x) { return x.direction === 'return'; });
+  ok(canonPlan.project && canonPlan.project.location && /Hahajima/.test(canonPlan.project.location.en) && /Hinata/.test(canonPlan.project.location.en),
+    'authoritative destination is Hahajima · Hinata (' + (canonPlan.project && canonPlan.project.location && canonPlan.project.location.en) + ')');
+  ok(breakfast && breakfast.sceneId === 'tokyo-hotel' && breakfast.departMin === null && breakfast.arriveMin === null,
+    'breakfast is at the nearby Tokyo hotel and its time remains unknown');
+  ok(hotelMove && hotelMove.fromStopId === 'tokyo-hotel' && hotelMove.toStopId === 'takeshiba-terminal' && hotelMove.departMin === 600,
+    'hotel departure for Takeshiba is pinned exactly at 10:00');
+  ok(longHaul && longHaul.vesselId === 'ogasawara-maru' && longHaul.departMin === 660 && longHaul.durationMin === 1440 && /approx/.test(longHaul.timeStatus),
+    'Ogasawara-maru leaves Takeshiba exactly at 11:00 for an approximately 24-hour voyage');
+  ok(chichi && chichi.kind === 'ship-transfer' && chichi.fromStopId === 'chichijima-transfer' && chichi.departMin === null,
+    'outbound itinerary explicitly changes ships at Chichijima without inventing a connection time');
+  ok(inter && inter.fromStopId === 'chichijima-transfer' && inter.toStopId === 'hahajima-hinata' && inter.vesselId === 'interisland-vessel' &&
+     inter.departMin === null && inter.arriveMin === null && inter.durationMin === null && inter.timeStatus === 'unknown' &&
+     interVessel && interVessel.knownName === false && interVessel.outboundDepartMin === null && interVessel.outboundDurationMin === null,
+    'separate Chichijima→Hahajima vessel keeps its name and all timetable fields unconfirmed');
+  ok(hinata && hinata.toStopId === 'hahajima-hinata', 'outbound route terminates at Hinata on Hahajima');
+  ok(returnLegs.length === 5 && returnLegs.every(function (x) {
+    return x.inferred === true && x.confirmed === false && x.departMin === null && x.arriveMin === null;
+  }), 'reverse return route is explicit inference and exposes no confirmed timetable');
 
   // rosters non-empty (required tasks + at least one decoy each, per plan §W2a)
   NEW_SEGS.forEach(function (seg) {
@@ -1072,10 +1097,16 @@ console.log('\n=== VOYAGE §2 — carryover purity: all-aboard is carry-inert; a
 
   var cs = carryStateSafe(loadFixedPlan);
   ok(cs && typeof cs === 'object' && Object.keys(cs).length > 0, 'carryState returns a non-empty {itemId: {seg: status}} map (' + Object.keys(cs).length + ' items)');
-  var allAboard = Object.keys(cs).every(function (itemId) {
-    return Object.keys(cs[itemId]).every(function (seg) { return cs[itemId][seg] === 'aboard'; });
+  var outboundAboard = Object.keys(cs).every(function (itemId) {
+    return ['load', 'voyage', 'arrival', 'ops', 'fishday'].every(function (seg) { return cs[itemId][seg] === 'aboard'; });
   });
-  ok(allAboard, 'canonical Load day (applyDayFix) -> every manifest item reads "aboard" in every segment carryState reports');
+  ok(outboundAboard, 'canonical Load day -> every manifest item remains aboard through the outbound stay');
+
+  var fullRouteCs = carryStateSafe(P.mergePlan(trueCanonCfgV()));
+  var fullRouteAboard = Object.keys(fullRouteCs).every(function (itemId) {
+    return fullRouteCs[itemId].return === 'aboard' || fullRouteCs[itemId].return === 'not-required';
+  });
+  ok(fullRouteAboard, 'canonical transfer and return chains bring every return-required item back aboard');
 
   // reuse the EXISTING pre-Voyage fishday pins verbatim (§7/§13.4 P2 re-tune): with everything
   // aboard, the fishday arrow-based teaching gradient (idle/efficiency — unrelated to carry) must
@@ -1101,18 +1132,16 @@ console.log('\n=== VOYAGE §2 — carryover purity: all-aboard is carry-inert; a
 
   // (b) constructed failure: the jig case never makes the truck run -> the fishday gear pre-check
   // (t_f_gearload) records a stall (idle or rework), never a silent/free pass.
-  // [integrator note] discovery is NAME-based (a manifest item literally named "jig case", per
-  // spec §4's own wording; load tasks whose English name mentions "truck") because the exact
-  // custody-linking field on load tasks is engine-internal and not pinned by the plan. If landed
-  // naming differs, adjust the two regexes below — the assertion's INTENT (an item that misses
-  // its truck run stalls the downstream fishday task that needs it) must be preserved.
+  // The hotel→Takeshiba move is a physical route leg, so discover it by the stable
+  // route id rather than by obsolete vehicle wording in its display name.
   var jigItem = (loadFixedPlan.manifest || []).filter(function (m) { return /jig/i.test((m.name && m.name.en) || ''); })[0];
   ok(!!jigItem, 'plan.manifest carries an item named "jig case" (' + (jigItem && jigItem.id) + ')');
 
   if (jigItem) {
     var loadTasks = P.tasksForSeg(loadFixedPlan, 'load');
-    var truckTasks = loadTasks.filter(function (t) { return /truck/i.test((t.name && t.name.en) || ''); });
-    ok(truckTasks.length > 0, 'the Load roster has at least one "truck" task (' + truckTasks.map(function (t) { return t.id; }).join(',') + ')');
+    var truckTasks = loadTasks.filter(function (t) { return t.routeLegId === 'out-hotel-takeshiba'; });
+    ok(truckTasks.length === 1 && truckTasks[0].id === 'hd_l_truck',
+      'Load has one hotel→Takeshiba custody move (' + truckTasks.map(function (t) { return t.id; }).join(',') + ')');
 
     var missCfg = P.applyDayFix(P.applyAllFixes(base), 'load');
     missCfg.overrides.days = missCfg.overrides.days || {};
@@ -1131,6 +1160,12 @@ console.log('\n=== VOYAGE §2 — carryover purity: all-aboard is carry-inert; a
     var gearRework = (missFd.wrongFish || []).indexOf('t_f_gearload') >= 0;
     ok((gearTask && gearTask.idleMin > 0) || gearRework,
       'missing jig case -> the fishday gear pre-check (t_f_gearload) records idle or rework (idleMin=' + (gearTask && gearTask.idleMin) + ', rework=' + gearRework + ')');
+
+    var transferCfg = trueCanonCfgV();
+    transferCfg.overrides.days.arrival.placement.hd_a_transfer = null;
+    var transferStatus = carryStateSafe(P.mergePlan(transferCfg))[jigItem.id] || {};
+    ok(transferStatus.voyage === 'aboard' && transferStatus.arrival === 'missing' && transferStatus.fishday === 'missing',
+      'breaking the Chichijima vessel-transfer chain loses custody only after the long-haul voyage (' + JSON.stringify(transferStatus) + ')');
   }
 })();
 
@@ -1315,6 +1350,225 @@ console.log('\n=== VOYAGE — i18n additions (plan §Key pinned interfaces) ==='
   // segment name so this survives a rename
   ok(enKeys.some(function (k) { return /load|voyage/i.test(k); }), 'i18n: at least one EN key names load/voyage');
   ok(jaKeys.some(function (k) { return /load|voyage/i.test(k); }), 'i18n: at least one JA key names load/voyage');
+})();
+
+console.log('\n=== SEGMENT-AWARE MAP PROFILES (presentation-only) ===');
+(function () {
+  // stage.js is browser-first; a tiny window shim exposes its pure profile API
+  // without a browser or canvas dependency.
+  global.window = { PRS: P };
+  delete require.cache[require.resolve('./stage.js')];
+  require('./stage.js');
+  var S = global.window.PRS_STAGE;
+  function profile(seg, min, requested, cfg) {
+    var s = P.createSim(cfg || base, seg, { animate: true });
+    if (typeof min === 'number') s.clockMin = min;
+    return { sim: s, p: S.sceneProfile(s, { mapProfile: requested || seg }) };
+  }
+  var loadRef = profile('load'), hotelMove = loadRef.sim.sched.byTask.hd_l_truck;
+  ok(profile('load', hotelMove.start - 1).p.id === 'tokyo-hotel' && profile('load', hotelMove.start).p.id === 'takeshiba-terminal',
+    'map: Load changes from the Tokyo hotel to Takeshiba at the solved 10:00 departure');
+  ok(profile('voyage', 660).p.id === 'ogasawara-maru', 'map: Voyage uses the Ogasawara-maru scene');
+
+  var arrivalRef = profile('arrival'), disembark = arrivalRef.sim.sched.byTask.hd_a_disembark;
+  var cross = arrivalRef.sim.sched.byTask.hd_a_cross;
+  ok(profile('arrival', disembark.start - 1).p.id === 'ogasawara-maru' &&
+     profile('arrival', disembark.start).p.id === 'chichijima-transfer' &&
+     profile('arrival', cross.start).p.id === 'interisland-ferry' &&
+     profile('arrival', cross.end).p.id === 'hahajima-hinata',
+    'map: Arrival follows Ogasawara-maru → Chichijima transfer → inter-island vessel → Hahajima');
+  ok(profile('ops', 600).p.id === 'hahajima-hinata' && profile('fishday', 780).p.id === 'hahajima-hinata',
+    'map: Ops/Fishing Day stay at Hinata on Hahajima');
+
+  var allSim = P.createSim(base, 'all', { animate: true });
+  var allProfile = S.sceneProfile(allSim, { mapProfile: 'all' });
+  var overviewPts = S.routePoints({ lang: 'en' });
+  ok(allProfile.id === 'route-overview' && overviewPts.map(function (p) { return p.profileId; }).join('>') ===
+     'tokyo-hotel>takeshiba-terminal>ogasawara-maru>chichijima-transfer>interisland-ferry>hahajima-hinata',
+    'map: Whole Trip overview preserves all six physical route identities in order');
+
+  var returnRef = profile('return'), interReturn = returnRef.sim.sched.byTask.hd_r_interisland;
+  var sail = returnRef.sim.sched.byTask.hd_r_sail;
+  ok(profile('return', interReturn.start - 1).p.id === 'hahajima-hinata',
+    'map: Return stays at Hinata until the solved inter-island crossing starts');
+  ok(profile('return', interReturn.start).p.id === 'interisland-ferry' &&
+     profile('return', interReturn.end).p.id === 'chichijima-transfer',
+    'map: Return crosses on the inter-island vessel and then reaches the Chichijima transfer');
+  ok(profile('return', sail.start).p.id === 'ogasawara-maru' && profile('return', sail.end).p.id === 'takeshiba-terminal',
+    'map: Return changes at Chichijima to Ogasawara-maru and ends at Takeshiba');
+  var returnProfile = profile('return', sail.start).p;
+  ok(returnProfile.routeDirection === 'return' && returnProfile.inferred === true,
+    'map: every rendered reverse-route scene remains explicitly inferred');
+
+  var movedCfg = { seed: 1, overrides: { days: { return: { placement: {
+    hd_r_sail: { startMin: 900, durMin: 300, assignedIds: ['p03'] }
+  } } } } };
+  var movedRef = profile('return', null, null, movedCfg), movedSail = movedRef.sim.sched.byTask.hd_r_sail;
+  var unplacedCfg = { seed: 1, overrides: { days: { return: { placement: { hd_r_sail: null } } } } };
+  ok(profile('return', movedSail.start - 1, null, movedCfg).p.id === 'chichijima-transfer' &&
+     profile('return', movedSail.start, null, movedCfg).p.id === 'ogasawara-maru' &&
+     profile('return', movedSail.end, null, movedCfg).p.id === 'takeshiba-terminal' &&
+     profile('return', 2000, null, unplacedCfg).p.id === 'chichijima-transfer',
+     'map: edited long-haul time drives the transition, and an unplaced sailing remains at Chichijima');
+
+  // Drive the real five-minute clock too: the first rendered ship/Tokyo frames
+  // must land on the first tick at or after the solved schedule boundaries.
+  var drivenReturn = P.createSim(base, 'return', { animate: true });
+  var drivenInter = drivenReturn.sched.byTask.hd_r_interisland, drivenSail = drivenReturn.sched.byTask.hd_r_sail;
+  var firstInter = null, firstChichi = null, firstShip = null, firstTokyo = null, driveGuard = 0;
+  var driveLimit = Math.ceil((drivenReturn.winEnd - drivenReturn.winStart) / P.MIN_DT) + 100;
+  while (!drivenReturn.finished && driveGuard++ < driveLimit) {
+    if (drivenReturn.paused) { drivenReturn.paused = false; drivenReturn.checkpoint = null; }
+    P.tick(drivenReturn);
+    var drivenId = S.sceneProfile(drivenReturn, { mapProfile: 'return' }).id;
+    if (firstInter == null && drivenId === 'interisland-ferry') firstInter = drivenReturn.clockMin;
+    if (firstChichi == null && drivenId === 'chichijima-transfer') firstChichi = drivenReturn.clockMin;
+    if (firstShip == null && drivenId === 'ogasawara-maru') firstShip = drivenReturn.clockMin;
+    if (firstTokyo == null && drivenId === 'takeshiba-terminal') firstTokyo = drivenReturn.clockMin;
+  }
+  ok(firstInter >= drivenInter.start && firstInter < drivenInter.start + P.MIN_DT &&
+     firstChichi >= drivenInter.end && firstChichi < drivenInter.end + P.MIN_DT,
+    'map: driven Return enters the inter-island vessel and Chichijima on their first engine ticks (' + firstInter + '/' + firstChichi + ')');
+  ok(firstShip >= drivenSail.start && firstShip < drivenSail.start + P.MIN_DT,
+    'map: driven Return enters Ogasawara-maru on the first engine tick after solved departure (' + firstShip + ')');
+  ok(firstTokyo >= drivenSail.end && firstTokyo < drivenSail.end + P.MIN_DT,
+    'map: driven Return enters Takeshiba on the first engine tick after solved arrival (' + firstTokyo + ')');
+
+  var puritySim = P.createSim(base, 'return', { animate: true }), purityBefore = JSON.stringify(puritySim);
+  S.sceneProfile(puritySim, { mapProfile: 'return' });
+  S.stationsForScene(puritySim, { mapProfile: 'return' });
+  S.stationStateForScene('mess', puritySim, { mapProfile: 'return' }, P.stationReadiness(puritySim));
+  ok(JSON.stringify(puritySim) === purityBefore, 'map: exported profile/station helpers are presentation-pure');
+
+  var profileIds = ['tokyo-hotel','takeshiba-terminal','ogasawara-maru','chichijima-transfer','interisland-ferry','hahajima-hinata','route-overview'];
+  ok(profileIds.every(function (id) { var p0 = S.sceneProfile(null, { mapProfile: id }); return p0.en && p0.jp && p0.family && p0.stationSet; }),
+    'map: every exact scene profile has bilingual status + family/station metadata');
+
+  var loadP = profile('load', hotelMove.start - 1), islandP = profile('fishday', 780);
+  var loadKey = S.groundCacheKey(loadP.p, 900, 500, 2, 1);
+  var islandKey = S.groundCacheKey(islandP.p, 900, 500, 2, 1);
+  ok(loadKey !== islandKey &&
+     loadKey !== S.groundCacheKey(loadP.p, 901, 500, 2, 1) &&
+     loadKey !== S.groundCacheKey(loadP.p, 900, 500, 1, 1) &&
+     loadKey !== S.groundCacheKey(loadP.p, 900, 500, 2, 1.1),
+    'map: terrain cache key separates profile, size, DPR, and scale');
+  var loadNames = S.stationsForScene(loadP.sim, { mapProfile: 'load' }).filter(function (st) { return !st.hidden; }).map(function (st) { return st.name.en; });
+  ok(loadNames.indexOf('Hotel lobby') >= 0 && loadNames.indexOf('Breakfast room') >= 0 &&
+     !loadNames.some(function (name) { return /Hinata|Hahajima/.test(name); }),
+    'map: Tokyo hotel preparation uses hotel fixtures, never Hinata fixtures');
+
+  var loadLive = P.createSim(base, 'load', { animate: true }); P.tick(loadLive);
+  var loadAnchor = S.stationsForScene(loadLive, { mapProfile: 'load' }).filter(function (st) { return st.id === 'mess'; })[0];
+  var loadState = S.stationStateForScene(loadAnchor, loadLive, { mapProfile: 'load' }, P.stationReadiness(loadLive));
+  ok(loadState.crewCount === 1 && loadState.readiness === 'green',
+    'map: hotel breakfast activity aggregates into the visible breakfast room');
+  var returnIslandSim = profile('return', interReturn.start - 1).sim;
+  var returnInterSim = profile('return', interReturn.start).sim;
+  var returnChichiSim = profile('return', interReturn.end).sim;
+  var returnShipSim = profile('return', sail.start).sim;
+  ok(S.stationForScene('finance', returnIslandSim, { mapProfile: 'return' }).id === 'mess' &&
+     S.stationForScene('finance', returnInterSim, { mapProfile: 'return' }).id === 'mess' &&
+     S.stationForScene('finance', returnChichiSim, { mapProfile: 'return' }).id === 'command' &&
+     S.stationForScene('finance', returnShipSim, { mapProfile: 'return' }).id === 'purser',
+    'map: folded Finance work follows the physical fixture for Hahajima, inter-island vessel, Chichijima, and Ogasawara-maru');
+  var returnFlags = S.domFlagsForScene(returnIslandSim, { mapProfile: 'return' });
+  var fishingFlags = S.domFlagsForScene(profile('fishday', 780).sim, { mapProfile: 'fishday' });
+  ok(returnFlags.localBoat === false && returnFlags.inferred === true && fishingFlags.localBoat === true && fishingFlags.seaLife === true,
+    'map: local fishing boats/sea life stay on Hahajima operations and disappear from inferred return transport');
+
+  // Render one static frame of every profile through a STRICT recording-canvas
+  // shim. Unknown methods/properties throw, so a misspelled Canvas API cannot
+  // silently pass as it would under an accept-everything Proxy.
+  var grad = function () { return { addColorStop: function () {} }; };
+  var canvasMethods = { arc:1, arcTo:1, beginPath:1, clearRect:1, clip:1, closePath:1, drawImage:1,
+    ellipse:1, fill:1, fillRect:1, fillText:1, lineTo:1, moveTo:1, quadraticCurveTo:1, restore:1,
+    rotate:1, save:1, scale:1, setLineDash:1, setTransform:1, stroke:1, strokeRect:1, translate:1 };
+  var canvasProps = { fillStyle:1, strokeStyle:1, lineWidth:1, lineCap:1, lineJoin:1, lineDashOffset:1,
+    shadowColor:1, shadowBlur:1, font:1, textAlign:1, textBaseline:1, globalAlpha:1, globalCompositeOperation:1,
+    _prsGrain:1, _prsLand:1 };
+  function strictCanvas(onClear) { return new Proxy({ globalAlpha: 1 }, {
+    get: function (t, prop) {
+      if (Object.prototype.hasOwnProperty.call(t, prop)) return t[prop];
+      if (prop === 'measureText') return function (s) { return { width: String(s).length * 6 }; };
+      if (prop === 'createLinearGradient' || prop === 'createRadialGradient') return grad;
+      if (prop === 'createPattern') return function () { return null; };
+      if (prop === 'clearRect' && onClear) return onClear;
+      if (canvasMethods[prop]) return function () {};
+      if (canvasProps[prop]) return undefined;
+      throw new Error('Unknown CanvasRenderingContext2D member: ' + String(prop));
+    },
+    set: function (t, prop, value) {
+      if (!canvasProps[prop]) throw new Error('Unknown CanvasRenderingContext2D property: ' + String(prop));
+      t[prop] = value; return true;
+    }
+  }); }
+  var ctx = strictCanvas();
+  var frames = [
+    ['load', hotelMove.start - 1], ['load', hotelMove.start], ['voyage', 660],
+    ['arrival', disembark.start], ['arrival', cross.start], ['arrival', cross.end],
+    ['ops', 600], ['fishday', 780], ['return', interReturn.start],
+    ['return', interReturn.end], ['return', sail.start], ['return', sail.end],
+    ['all', null, 'all']
+  ];
+  var renderErr = null;
+  try {
+    frames.forEach(function (row) {
+      var x = profile(row[0], row[1], row[2]), fig = {};
+      x.sim.participants.forEach(function (person) {
+        var st = P.station(person.station);
+        fig[person.id] = { pid: person.id, cx: st.x * 900, cy: st.y * 500, tx: st.x * 900, ty: st.y * 500, walking: false, faceL: false };
+      });
+      S.scene(ctx, x.sim, 1, { w: 900, h: 500, scale: 1, lang: 'en', rm: row[0] !== 'voyage', mapProfile: row[2] || row[0], night: false,
+        guestsVisible: false, fig: fig, guest: {}, boat: { cx: 468, cy: 275 }, wakes: [], motes: [],
+        cascade: { hops: [], has: false }, ghost: [{}, {}, {}], trail: [], chain: [], hotPts: [], frozen: false });
+    });
+  } catch (e) { renderErr = e; }
+  ok(!renderErr, 'map: every scene profile renders a dependency-free static frame' + (renderErr ? ' (' + renderErr.message + ')' : ''));
+
+  // Exercise the real offscreen-cache branch too. Equal dimensions must redraw
+  // for each physical scene rather than reusing terrain from a prior stop.
+  var cacheClears = 0;
+  var offCtx = strictCanvas(function () { cacheClears++; });
+  global.document = { createElement: function () { return { width: 0, height: 0, getContext: function () { return offCtx; } }; } };
+  try {
+    [
+      ['load', hotelMove.start - 1], ['load', hotelMove.start - 1],
+      ['load', hotelMove.start], ['load', hotelMove.start],
+      ['voyage', 660], ['voyage', 660],
+      ['arrival', disembark.start], ['arrival', cross.start],
+      ['fishday', 780]
+    ].forEach(function (row) {
+      var x = profile(row[0], row[1]), fig = {};
+      x.sim.participants.forEach(function (person) {
+        var st = P.station(person.station);
+        fig[person.id] = { pid: person.id, cx: st.x * 900, cy: st.y * 500, tx: st.x * 900, ty: st.y * 500, walking: false, faceL: false };
+      });
+      S.scene(ctx, x.sim, 1, { w: 900, h: 500, scale: 1, lang: 'en', rm: true, mapProfile: row[0], night: false,
+        guestsVisible: false, fig: fig, guest: {}, boat: { cx: 468, cy: 275 }, wakes: [], motes: [],
+        cascade: { hops: [], has: false }, ghost: [{}, {}, {}], trail: [], chain: [], hotPts: [], frozen: false });
+    });
+    S.resizeStage({ w: 900, h: 500 }, 2);
+    var dprFrame = profile('fishday', 780), dprFig = {};
+    dprFrame.sim.participants.forEach(function (person) {
+      var st = P.station(person.station);
+      dprFig[person.id] = { pid: person.id, cx: st.x * 900, cy: st.y * 500, tx: st.x * 900, ty: st.y * 500, walking: false, faceL: false };
+    });
+    S.scene(ctx, dprFrame.sim, 1, { w: 900, h: 500, scale: 1, lang: 'en', rm: true, mapProfile: 'fishday', night: false,
+      guestsVisible: false, fig: dprFig, guest: {}, boat: { cx: 468, cy: 275 }, wakes: [], motes: [],
+      cascade: { hops: [], has: false }, ghost: [{}, {}, {}], trail: [], chain: [], hotPts: [], frozen: false });
+  } finally { delete global.document; }
+  ok(cacheClears === 7,
+    'map: cache reuses identical profiles but redraws hotel→terminal→long-haul→Chichijima→inter-island→Hahajima and on DPR change (' + cacheClears + ' redraws)');
+
+  // Report replays rebuild a fresh sim; prove that copying the completed run's
+  // sim-local hand-feeds reproduces its final schedule exactly.
+  var intervened = P.createSim(base, 'return', { animate: true });
+  intervened.clockMin = 480; P.intervene(intervened, 'ic_cash', 'logi');
+  var replayed = P.createSim(intervened.cfg, 'return', { animate: true });
+  replayed.injections = intervened.injections.map(function (inj) { return { cardId: inj.cardId, toRoleId: inj.toRoleId, min: inj.min }; });
+  replayed.sched = P.daySchedule(replayed.plan, 'return', replayed.injections);
+  ok(JSON.stringify(replayed.sched) === JSON.stringify(intervened.sched),
+    'map report: reapplying sim-local interventions reproduces the completed Return schedule');
 })();
 
 console.log('\n' + (fail === 0 ? 'ALL ' + pass + ' CHECKS PASSED ✓' : pass + ' passed, ' + fail + ' FAILED ✗'));

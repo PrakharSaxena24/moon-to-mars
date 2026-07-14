@@ -23,7 +23,20 @@
   var daySel = 'arrival';   // which day is being planned / rehearsed
   function detsForDay(d) { return (d === 'all') ? DETS.slice() : DETS.filter(function (id) { return DET_SEG[id].indexOf(d) >= 0; }); }
   function dayLabel(seg) { if (seg === 'all') return T().wholeTrip; var s = null; P.SEGMENTS.forEach(function (x) { if (x.id === seg) s = x; }); return s ? nm(s.name) : seg; }
-  function dayGapCount(seg) { return P.gapsForSegment(currentPlan(), seg).length; }
+  // Day tabs describe the authorable schedule, not the legacy detector slice.  In
+  // particular, an empty Voyage deck is not "clean" merely because no classic
+  // detector happens to point at it.
+  function dayStatus(seg) {
+    var plan = currentPlan();
+    if (seg === 'all') {
+      var trip = P.scoreTrip(plan);
+      return { score: trip.total, grade: trip.grade, gaps: trip.atoms.filter(function (a) { return a.earned < a.maxPts; }).length,
+        clean: !!(trip.gate && trip.gate.clean) };
+    }
+    var sc = P.scoreDay(plan, seg), gaps = P.dayReadiness(plan, seg);
+    return { score: sc.score, grade: sc.grade, gaps: gaps.length, clean: !!sc.clean && gaps.length === 0 };
+  }
+  function dayGapCount(seg) { return dayStatus(seg).gaps; }
   // Rail/ledger bucket label (sb_* keys carry all 7 buckets incl. load/voyage since W2a)
   function sbLabel(bk) { var v = T()['sb_' + bk]; return typeof v === 'string' ? v : ('sb_' + bk); }
 
@@ -106,13 +119,46 @@
   }
   function currentPlan() { return P.mergePlan(buildCfg()); }
   function activeProblemIds() { return P.detect(currentPlan()).map(function (p) { return p.id; }); }
-  function hhmm(min) { var h = Math.floor(min / 60), m = Math.round(min % 60); return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m; }
+  function hhmm(min) {
+    if (typeof min !== 'number' || !isFinite(min)) return '—';
+    var day = Math.floor(min / 1440), local = ((min % 1440) + 1440) % 1440;
+    var h = Math.floor(local / 60), m = Math.round(local % 60);
+    if (m === 60) { h = (h + 1) % 24; m = 0; }
+    return (day > 0 ? 'D+' + day + ' ' : '') + (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m;
+  }
+  function minuteOfDay(min) { return typeof min === 'number' ? ((min % 1440) + 1440) % 1440 : 0; }
+  function isNightMinute(min) { var local = minuteOfDay(min); return local < 330 || local >= 1110; }
+  function taskTimeUnconfirmed(task) {
+    return !!task && (task.timeKnown === false || /^unknown/.test(String(task.timeStatus || '')));
+  }
+  function segmentHasUnconfirmedTimes(plan, seg) {
+    return P.tasksForSeg(plan, seg).some(function (task) { return task.required !== false && taskTimeUnconfirmed(task); });
+  }
+  function taskTimeText(task) {
+    if (taskTimeUnconfirmed(task)) {
+      if (typeof task.confirmedStartMin === 'number') return hhmm(task.confirmedStartMin) + ' · ' + T().routeConfirmedDeparture;
+      return (/approx/.test(String(task.timeStatus || '')) ? T().routeApprox + ' · ' : '') + T().routeTimeUnconfirmedShort;
+    }
+    var approx = /approx/.test(String(task.timeStatus || '')) ? '≈' : '';
+    return approx + hhmm(task.startMin) + '–' + approx + hhmm(task.startMin + task.durMin);
+  }
+  function simClockText(s) {
+    if (s.segment !== 'fishday' && segmentHasUnconfirmedTimes(s.plan, s.segment)) {
+      var win = P.DAY_WINDOWS[s.segment] || [s.clockMin, s.clockMin], elapsed = Math.max(0, s.clockMin - win[0]);
+      var eh = Math.floor(elapsed / 60), em = Math.round(elapsed % 60);
+      return T().routeClockAssumption + ' +' + eh + ':' + (em < 10 ? '0' : '') + em;
+    }
+    return hhmm(s.clockMin);
+  }
 
   var sim = null, timer = null, paused = false, BASE_TICK = 520, speedMult = 1, lastResult = null;
+  var wholeRun = null;                    // authored Load→…→Return orchestration for Whole Trip
   var appMode = 'live', runFn = null, livePausedForFix = false, liveState = null;
   var finishTimer = null;                  // finish()'s 700ms report reveal — cleared on any screen change
   var morningSnap = null;                  // the Morning-authored plan, preserved across a Live detour
   var lastDetailStation = null;            // so a language switch can re-render an open problem panel
+  var lastDetailAnchor = null;             // visible scene anchor (may fold a hidden logical station)
+  var lastDetailSection = null;            // or the open Hinata sub-zone (mutually exclusive with station)
   // W3 pawn inspection: hover feeds the canvas name chip; the click popover is anchored near a pawn
   var hoverPid = null;                     // nearest pawn under the pointer -> view.hoverPid (canvas name chip)
   var pawnCardPid = null;                  // the pawn whose popover is open (null = closed)
@@ -154,7 +200,10 @@
     // open modals re-render in the new language (their content is built, not data-i18n)
     if ($('inspect-modal').classList.contains('show')) openInspector();
     if ($('arrow-modal').classList.contains('show') && arrowEdit) openArrowPanel(arrowEdit);
-    if ($('detail-modal').classList.contains('show') && lastDetailStation) openProblemPanel(lastDetailStation);
+    if ($('detail-modal').classList.contains('show')) {
+      if (lastDetailSection) openSectionPanel(lastDetailSection);
+      else if (lastDetailStation) openProblemPanel(lastDetailStation, lastDetailAnchor);
+    }
   }
 
   // =========================================================================
@@ -186,10 +235,11 @@
     var box = $('day-select'); if (!box) return;
     var opts = ['load', 'voyage', 'arrival', 'ops', 'fishday', 'return', 'all'];   // chronological display order
     box.innerHTML = opts.map(function (seg) {
-      var n = dayGapCount(seg), clean = n === 0;
+      var st = dayStatus(seg), n = st.gaps, clean = st.clean;
+      var gapTxt = clean ? '✓' : n + ' ' + (n === 1 ? T().fixGapLbl : T().fixGapLblN);
       return '<button class="day-btn' + (seg === daySel ? ' on' : '') + '" data-day="' + seg + '">' +
         '<span class="db-name">' + dayLabel(seg) + '</span>' +
-        '<span class="db-gaps ' + (clean ? 'ok' : 'bad') + '">' + (clean ? '✓' : n + ' ' + (n === 1 ? T().fixGapLbl : T().fixGapLblN)) + '</span></button>';
+        '<span class="db-gaps ' + (clean ? 'ok' : 'bad') + '">' + st.score + '/' + st.grade + ' · ' + gapTxt + '</span></button>';
     }).join('');
   }
 
@@ -253,19 +303,30 @@
   }
 
   function buildTimeline() {
-    var plan = P.makeTemplate(), box = $('timeline'); if (!box) return;
-    var days = plan.project.days, rail = '';
-    var raySel = { arrival: function (d) { return d === 1; }, ops: function (d) { return d >= 2 && d <= 9; }, fishday: function (d) { return d === 3; }, return: function (d) { return d === days; }, all: function () { return true; } }[daySel] || function () { return false; };
-    for (var d = 1; d <= days; d++) { var cls = (d === 1) ? 'arr' : (d === days ? 'ret' : (d === 3 ? 'fish' : 'ops')); rail += '<span class="tl-day ' + cls + (raySel(d) ? ' sel' : '') + '">' + d + '</span>'; }
-    var phases = [], seen = {}, segByCls = { arr: 'arrival', ops: 'ops', ret: 'return', fish: 'fishday' };
-    plan.tasks.forEach(function (t) { var k = t.phase.en; if (!seen[k]) { seen[k] = { phase: t.phase, tasks: [], cls: '' }; phases.push(seen[k]); } seen[k].tasks.push(t); });
-    if (phases[0]) phases[0].cls = 'arr'; if (phases[1]) phases[1].cls = 'ops'; if (phases[2]) phases[2].cls = 'ret'; if (phases[3]) phases[3].cls = 'fish';
-    var blocks = phases.map(function (ph) {
-      var sel = (daySel === 'all' || segByCls[ph.cls] === daySel) ? ' sel' : '';
-      var shown = ph.tasks.slice(0, 6);
-      var chips = shown.map(function (t) { return '<span class="tl-chip">' + P.station(t.station).icon + ' ' + nm(t.name) + '</span>'; }).join('');
-      if (ph.tasks.length > shown.length) chips += '<span class="tl-chip">… +' + (ph.tasks.length - shown.length) + '</span>';
-      return '<div class="tl-stage ' + ph.cls + sel + '"><div class="tl-h">' + nm(ph.phase) + '</div>' + chips + '</div>';
+    var plan = currentPlan(), box = $('timeline'); if (!box) return;
+    var days = plan.project.days, rail = '', segs = ['load', 'voyage', 'arrival', 'ops', 'fishday', 'return'];
+    function daySelected(d) {
+      if (daySel === 'all') return true;
+      if (daySel === 'load') return d === 0;
+      if (daySel === 'voyage') return d === 0 || d === 1;
+      if (daySel === 'arrival') return d === 1;
+      if (daySel === 'fishday') return d === 3;
+      if (daySel === 'return') return d === days;
+      return daySel === 'ops' && d >= 2 && d < days;
+    }
+    for (var d = 0; d <= days; d++) {
+      var cls = d === 0 ? 'load' : (d === 1 ? 'arr' : (d === days ? 'ret' : (d === 3 ? 'fish' : 'ops')));
+      rail += '<span class="tl-day ' + cls + (daySelected(d) ? ' sel' : '') + '">' + d + '</span>';
+    }
+    var blocks = segs.map(function (seg) {
+      var tasks = P.tasksForSeg(plan, seg) || [], shown = tasks.slice(0, 6);
+      var chips = shown.map(function (task) {
+        var station = P.station(task.station), icon = station ? station.icon : '•';
+        return '<span class="tl-chip">' + icon + ' ' + nm(task.name) + '</span>';
+      }).join('');
+      if (tasks.length > shown.length) chips += '<span class="tl-chip">… +' + (tasks.length - shown.length) + '</span>';
+      return '<div class="tl-stage ' + seg + (daySel === 'all' || daySel === seg ? ' sel' : '') + '">' +
+        '<div class="tl-h">' + dayLabel(seg) + '</div>' + chips + '</div>';
     }).join('');
     box.innerHTML = '<div class="tl-rail">' + rail + '</div><div class="tl-blocks">' + blocks + '</div>';
   }
@@ -458,8 +519,7 @@
 
   function updatePlanUI() {
     var open = {}; activeProblemIds().forEach(function (id) { open[id] = true; });
-    var t = T(), dayDets = detsForDay(daySel), gaps = 0;
-    dayDets.forEach(function (d) { if (open[d]) gaps++; });
+    var t = T(), gaps = dayStatus(daySel).gaps;
     var trip = P.scoreTrip(currentPlan());
     paintReceiptRows(open, trip.total);
     buildOrg();
@@ -590,7 +650,10 @@
     var seg = daySel, t0 = T(), plan = currentPlan();
     var segT = P.tasksForSeg(plan, seg), segH = P.handoffsForSeg(plan, seg), fd = P.daySchedule(plan, seg);
     if (seg === 'fishday') { $('fd-title').textContent = t0.fdTitle; $('fd-hint').textContent = t0.fdHint; }
-    else { $('fd-title').textContent = t0.dayGridTitle(dayLabel(seg)); $('fd-hint').textContent = t0.dayGridHint; }
+    else {
+      $('fd-title').textContent = t0.dayGridTitle(dayLabel(seg));
+      $('fd-hint').textContent = t0.dayGridHint + (segmentHasUnconfirmedTimes(plan, seg) ? ' · ' + t0.routeTimeUnknown : '');
+    }
     $('fd-arrows-lbl').textContent = t0.fdArrowsLbl;
     // Reset the button's visual AND the real armed flag (dataset.armed) on every repaint, or an
     // armed-then-edited "Clear day" fires on a single unconfirmed click (§20 Fix C) — the two must
@@ -603,7 +666,11 @@
     buildDeck();
     var win = segWin(seg), lanes = plan.participants;
     var W = fdX(win[1]) + 16, H = RULER_H + lanes.length * LANE_H + 6, html = '';
-    for (var m = win[0]; m <= win[1]; m += 60) html += '<div class="fd-tick" style="left:' + fdX(m) + 'px">' + hhmm(m) + '</div>';
+    var unknownBasis = segmentHasUnconfirmedTimes(plan, seg);
+    for (var m = win[0]; m <= win[1]; m += 60) {
+      var tickLabel = unknownBasis ? (m === win[0] ? t0.routeClockAssumption : '+' + Math.round((m - win[0]) / 60) + 'h') : hhmm(m);
+      html += '<div class="fd-tick" style="left:' + fdX(m) + 'px">' + tickLabel + '</div>';
+    }
     lanes.forEach(function (pp, i) {
       var rr = P.role(pp.roleId), top = RULER_H + i * LANE_H;
       html += '<div class="fd-lane" style="top:' + top + 'px;width:' + W + 'px"></div>' +
@@ -621,7 +688,7 @@
       });
       var port = (tk.produces || []).length ? '<span class="fd-port" data-task="' + tk.id + '" data-card="' + tk.produces[0] + '" title="○ ' + nm(byId(plan.infoCards, tk.produces[0]).name) + '"></span>' : '';
       var multi = tk.assignedIds.length > 1 ? '<i class="fd-x">×' + tk.assignedIds.length + '</i>' : '';
-      html += '<div class="fd-block' + (g.w < 60 ? ' sm' : '') + (e && e.wrongFish ? ' wf' : '') + '" tabindex="0" data-task="' + tk.id + '" style="left:' + g.x + 'px;top:' + g.y + 'px;width:' + g.w + 'px" title="' + nm(tk.name) + '  ' + hhmm(tk.startMin) + '–' + hhmm(tk.startMin + tk.durMin) + '">' +
+      html += '<div class="fd-block' + (g.w < 60 ? ' sm' : '') + (e && e.wrongFish ? ' wf' : '') + (taskTimeUnconfirmed(tk) ? ' time-unknown' : '') + '" tabindex="0" data-task="' + tk.id + '" style="left:' + g.x + 'px;top:' + g.y + 'px;width:' + g.w + 'px" title="' + nm(tk.name) + ' · ' + taskTimeText(tk) + '">' +
         sock + '<span class="fd-bname">' + P.station(tk.station).icon + (g.w >= 60 ? ' ' + nm(tk.name) : '') + '</span>' + multi + port + '<span class="fd-rsz"></span></div>';
     });
     var box = $('fd-canvas');
@@ -660,9 +727,11 @@
     var t = T(), segT = P.tasksForSeg(plan, seg), segH = P.handoffsForSeg(plan, seg);
     $('fd-arrowlist').innerHTML = segH.map(function (h) {
       var to = byId(segT, h.toTaskId); if (!to) return '';
+      var from = byId(segT, h.fromTaskId);
       var sa = arrivalInSeg(segT, h), late = sa == null || sa > to.startMin;
       var card = byId(plan.infoCards, h.cardId);
-      return '<button class="fd-ar-chip ' + (late ? 'late' : 'ok') + '" data-h="' + h.id + '">' + (late ? '⚑' : '✓') + ' ' + nm(card ? card.name : h.cardId).split('：')[0].split(':')[0] + ' <span class="muted2">' + (sa == null ? '—' : hhmm(sa)) + ' ' + t['ch' + h.channel.charAt(0).toUpperCase() + h.channel.slice(1)].split(' ')[0] + '</span></button>';
+      var clock = taskTimeUnconfirmed(to) || taskTimeUnconfirmed(from) ? t.routeTimeUnconfirmedShort : (sa == null ? '—' : hhmm(sa));
+      return '<button class="fd-ar-chip ' + (late ? 'late' : 'ok') + '" data-h="' + h.id + '">' + (late ? '⚑' : '✓') + ' ' + nm(card ? card.name : h.cardId).split('：')[0].split(':')[0] + ' <span class="muted2">' + clock + ' ' + t['ch' + h.channel.charAt(0).toUpperCase() + h.channel.slice(1)].split(' ')[0] + '</span></button>';
     }).join('');
   }
   function buildFdReady(plan, fd, seg) {
@@ -929,13 +998,15 @@
       return '<option value="' + c + '"' + (h.channel === c ? ' selected' : '') + '>' + t['ch' + c.charAt(0).toUpperCase() + c.slice(1)] + ' (+' + P.CHANNELS[c] + t.chMin + ')</option>';
     }).join('');
     var arr = arrivalInSeg(segT, h), needBy = to ? to.startMin : 0, late = arr == null || arr > needBy;
+    var unknownClock = taskTimeUnconfirmed(from) || taskTimeUnconfirmed(to);
     $('ar-body').innerHTML =
+      (unknownClock ? '<div class="ar-note">' + t.routeTimeUnknown + '</div>' : '') +
       '<div class="ar-row"><span class="dt-h">' + t.arTrigger + '</span>' +
         '<select class="ar-sel" id="ar-trig"><option value="onTaskDone"' + (trigDone ? ' selected' : '') + '>' + t.arTrigDone + (from ? ' — ' + nm(from.name) : '') + '</option>' +
         '<option value="atMinute"' + (!trigDone ? ' selected' : '') + '>' + t.arTrigAt + '</option></select>' +
         '<input class="ar-time" id="ar-time" type="time" step="300" min="' + hhmm(minSend) + '" value="' + hhmm(sendMin == null ? needBy : Math.max(sendMin, minSend)) + '"' + (trigDone ? ' disabled' : '') + '></div>' +
       '<div class="ar-row"><span class="dt-h">' + t.arChannel + '</span><select class="ar-sel" id="ar-ch">' + chOpts + '</select></div>' +
-      '<div class="ar-arrive ' + (late ? 'late' : 'ok') + '">' + (arr == null ? '—' : (late ? t.arriveLate(hhmm(arr), arr - needBy) : t.arriveOk(hhmm(arr)))) + ' <span class="muted2">(' + (to ? nm(to.name) + ' ' + hhmm(needBy) : '') + ')</span></div>' +
+      '<div class="ar-arrive ' + (late ? 'late' : 'ok') + '">' + (unknownClock ? t.routeTimeUnconfirmedShort : (arr == null ? '—' : (late ? t.arriveLate(hhmm(arr), arr - needBy) : t.arriveOk(hhmm(arr))))) + ' <span class="muted2">(' + (to ? nm(to.name) + ' ' + (unknownClock ? t.routeClockAssumption : hhmm(needBy)) : '') + ')</span></div>' +
       (h.ifLate === 'assume' ? '<div class="ar-note">' + t.arriveAssume + '</div>' : '');
     modalOpening('arrow-modal');
     $('arrow-modal').classList.add('show');
@@ -999,17 +1070,23 @@
     var w = (anim && anim.w) || 1000, h = (anim && anim.h) || 560;
     return Math.max(1, Math.min(Math.min(w / 1000, h / 560), 1.7));
   }
-  var ADJ_MAP = null;
-  function adjMap() {                                          // undirected adjacency built once from ADJ
-    if (ADJ_MAP) return ADJ_MAP;
+  function sceneLinksFor(s, requested) {
+    if (window.PRS_STAGE && typeof PRS_STAGE.linksForScene === 'function') {
+      return PRS_STAGE.linksForScene(s, mapViewFor(s, requested)) || [];
+    }
+    return ADJ;
+  }
+  function adjMap(links) {
     var m = {}, i;
     function add(a, b) { if (!m[a]) m[a] = []; m[a].push(b); }
-    for (i = 0; i < ADJ.length; i++) { add(ADJ[i][0], ADJ[i][1]); add(ADJ[i][1], ADJ[i][0]); }
-    ADJ_MAP = m; return m;
+    for (i = 0; i < links.length; i++) { add(links[i][0], links[i][1]); add(links[i][1], links[i][0]); }
+    return m;
   }
-  function stationPath(from, to) {                            // BFS shortest station path [from .. to]
+  function stationPath(from, to, s, requested) {             // BFS shortest visual-station path [from .. to]
+    var fromSt = mapStationFor(from, s, requested), toSt = mapStationFor(to, s, requested);
+    from = fromSt ? fromSt.id : from; to = toSt ? toSt.id : to;
     if (from === to) return [from];
-    var m = adjMap(), q = [from], prev = {}, i, cur, nb, n, c, path;
+    var m = adjMap(sceneLinksFor(s, requested)), q = [from], prev = {}, i, cur, nb, n, c, path;
     prev[from] = from;
     while (q.length) {
       cur = q.shift(); nb = m[cur] || [];
@@ -1025,8 +1102,8 @@
     return [from, to];                                        // disconnected fallback -> single straight leg
   }
   function routeWaypoints(f, fromId, toId) {                  // store pass-through station centres (final leg = fanned tx/ty)
-    var path = stationPath(fromId, toId), W = anim.w, H = anim.h, feet = FEET_BASE * (USE_CANVAS ? stageScaleNow() : 1), wp = [], i, st;
-    for (i = 1; i < path.length - 1; i++) { st = P.station(path[i]); wp.push({ x: st.x * W, y: st.y * H + feet }); }
+    var path = stationPath(fromId, toId, sim), W = anim.w, H = anim.h, feet = FEET_BASE * (USE_CANVAS ? stageScaleNow() : 1), wp = [], i, st;
+    for (i = 1; i < path.length - 1; i++) { st = mapStationFor(path[i], sim); wp.push({ x: st.x * W, y: st.y * H + feet }); }
     f.wp = wp; f.wpi = 0;
   }
   function figSpeedMul(pid) {                                 // deterministic slight per-person speed (~0.85..1.17)
@@ -1081,6 +1158,115 @@
   var stageTrail = [], stageGhost = [{}, {}, {}], stageChain = [];  // canvas-owned cascade scratch (separate from anim.*)
   var stageSpotPid = null, stageTint = null, stageGapState = null;  // §21.4 Live draw-state bridge -> the scene() view
   function mapDims() { var m = $('sitemap'); return { w: m.clientWidth || 900, h: m.clientHeight || 480 }; }
+  // Defensive app-side route vocabulary. stage.js normally owns the richer
+  // profiles/station labels; these keep the no-stage DOM path location-correct.
+  var MAP_FALLBACK_PROFILES = {
+    'tokyo-hotel':         { id: 'tokyo-hotel', family: 'tokyo', stationSet: 'land', en: 'TOKYO HOTEL', jp: '東京のホテル' },
+    'takeshiba-terminal':  { id: 'takeshiba-terminal', family: 'tokyo', stationSet: 'land', en: 'TAKESHIBA TERMINAL', jp: '竹芝客船ターミナル' },
+    'ogasawara-maru':      { id: 'ogasawara-maru', family: 'ship', stationSet: 'voyage', en: 'OGASAWARA-MARU', jp: 'おがさわら丸' },
+    'chichijima-transfer': { id: 'chichijima-transfer', family: 'island', stationSet: 'land', en: 'CHICHIJIMA TRANSFER', jp: '父島・乗り継ぎ' },
+    'interisland-ferry':   { id: 'interisland-ferry', family: 'ship', stationSet: 'voyage', en: 'INTER-ISLAND VESSEL · NAME/TIMES UNCONFIRMED', jp: '島間船・船名／時刻未確認' },
+    'hahajima-hinata':     { id: 'hahajima-hinata', family: 'island', stationSet: 'land', en: 'HAHAJIMA · HINATA', jp: '母島・ひなた' },
+    'route-overview':      { id: 'route-overview', family: 'route', stationSet: 'land', en: 'TOKYO → HAHAJIMA ROUTE', jp: '東京 → 母島 ルート' }
+  };
+  MAP_FALLBACK_PROFILES['tokyo-load'] = MAP_FALLBACK_PROFILES['tokyo-hotel'];
+  MAP_FALLBACK_PROFILES['ship-outbound'] = MAP_FALLBACK_PROFILES['ogasawara-maru'];
+  MAP_FALLBACK_PROFILES['ship-transit'] = MAP_FALLBACK_PROFILES['ogasawara-maru'];
+  MAP_FALLBACK_PROFILES.ogasawara = MAP_FALLBACK_PROFILES['hahajima-hinata'];
+  MAP_FALLBACK_PROFILES['return-island'] = MAP_FALLBACK_PROFILES['hahajima-hinata'];
+  MAP_FALLBACK_PROFILES['return-ship'] = MAP_FALLBACK_PROFILES['ogasawara-maru'];
+  MAP_FALLBACK_PROFILES['tokyo-return'] = MAP_FALLBACK_PROFILES['takeshiba-terminal'];
+  function mapViewFor(s, requested) { return { mapProfile: requested || (s && s.segment) || daySel }; }
+  function authoredSceneAt(s, seg) {
+    if (!s || !s.plan) return null;
+    if (typeof P.routeSceneId === 'function') {
+      var routed = P.routeSceneId(s.plan, seg, s.clockMin);
+      if (routed) return routed;
+    }
+    var tasks = P.tasksForSeg(s.plan, seg), now = s.clockMin, active = null, prior = null;
+    for (var i = 0; i < tasks.length; i++) {
+      var task = tasks[i]; if (!task.sceneId) continue;
+      if (typeof task.startMin !== 'number') { if (!prior) prior = task.sceneId; continue; }
+      if (typeof now === 'number' && task.startMin <= now) prior = task.sceneId;
+      if (typeof now === 'number' && task.startMin <= now && now < task.startMin + (task.durMin || 0)) { active = task.sceneId; break; }
+    }
+    return active || prior;
+  }
+  function mapProfileFor(s, requested) {
+    if (window.PRS_STAGE && PRS_STAGE.sceneProfile) return PRS_STAGE.sceneProfile(s, mapViewFor(s, requested));
+    var seg = requested || (s && s.segment) || 'fishday';
+    if (MAP_FALLBACK_PROFILES[seg]) return MAP_FALLBACK_PROFILES[seg];
+    if (seg === 'all') return MAP_FALLBACK_PROFILES['route-overview'];
+    var authored = authoredSceneAt(s, seg);
+    if (authored && MAP_FALLBACK_PROFILES[authored]) return MAP_FALLBACK_PROFILES[authored];
+    if (seg === 'load') return MAP_FALLBACK_PROFILES['tokyo-hotel'];
+    if (seg === 'voyage') return MAP_FALLBACK_PROFILES['ogasawara-maru'];
+    if (seg === 'arrival') return MAP_FALLBACK_PROFILES['chichijima-transfer'];
+    if (seg === 'ops' || seg === 'fishday' || seg === 'return') return MAP_FALLBACK_PROFILES['hahajima-hinata'];
+    return MAP_FALLBACK_PROFILES['route-overview'];
+  }
+  function mapProfileLabel(profile) { return (L === 'ja' ? profile.jp : profile.en) || profile.id; }
+  function mapSceneFlags(s, requested) {
+    if (window.PRS_STAGE && typeof PRS_STAGE.domFlagsForScene === 'function') return PRS_STAGE.domFlagsForScene(s, mapViewFor(s, requested)) || {};
+    var p = mapProfileFor(s, requested), id = p.id || '';
+    return p.dom || {
+      water: p.family === 'ship' || id === 'hahajima-hinata' || id === 'chichijima-transfer',
+      seaLife: id === 'hahajima-hinata', localBoat: id === 'hahajima-hinata',
+      guests: true, guestsRequired: id !== 'hahajima-hinata'
+    };
+  }
+  function sceneShowsGuests(s, requested) {
+    var flags = mapSceneFlags(s, requested);
+    return !!flags.guestsRequired || (!!flags.guests && guestsVisible);
+  }
+  function syncDomGuestVisibility() {
+    if (!sim) return;
+    var show = sceneShowsGuests(sim);
+    document.querySelectorAll('#ambient .guest').forEach(function (el) { el.classList.toggle('hidden', !show); });
+  }
+  function mapStationsFor(s, requested) {
+    if (window.PRS_STAGE && PRS_STAGE.stationsForScene) return PRS_STAGE.stationsForScene(s, mapViewFor(s, requested));
+    var profile = mapProfileFor(s, requested);
+    return profile.stationSet === 'voyage' && P.VOYAGE_STATIONS ? P.VOYAGE_STATIONS : P.STATIONS;
+  }
+  function mapStationFor(id, s, requested) {
+    if (window.PRS_STAGE && PRS_STAGE.stationForScene) return PRS_STAGE.stationForScene(id, s, mapViewFor(s, requested));
+    var list = mapStationsFor(s, requested);
+    for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
+    return P.station(id);
+  }
+  function mapAnchorIdFor(id, s, requested) {
+    var logical = s && byId(s.stations, id) || P.station(id);
+    if (!logical) return id;
+    var visual = mapStationFor(id, s, requested);
+    if (visual && !visual.hidden) return visual.id;
+    var list = mapStationsFor(s, requested);
+    for (var e = 0; e < list.length; e++) if (list[e].id === id && !list[e].hidden) return id;
+    for (var i = 0; i < list.length; i++) {
+      if (!list[i].hidden && Math.abs(list[i].x - logical.x) < 1e-6 && Math.abs(list[i].y - logical.y) < 1e-6) return list[i].id;
+    }
+    return id;
+  }
+  function mapStationStateFor(st, s, terr, requested) {
+    if (window.PRS_STAGE && PRS_STAGE.stationStateForScene) {
+      return PRS_STAGE.stationStateForScene(st, s, mapViewFor(s, requested), terr);
+    }
+    var out = { crewCount: 0, dominantProblem: null, problemStationId: st.id, readiness: 'none' };
+    if (!s || !s.stations) return out;
+    var tr = { none: 0, green: 1, amber: 2, red: 3 }, pr = { low: 1, med: 2, high: 3 }, best = -1;
+    for (var i = 0; i < s.stations.length; i++) {
+      var raw = s.stations[i];
+      if (Math.abs(raw.x - st.x) > 1e-6 || Math.abs(raw.y - st.y) > 1e-6) continue;
+      var n = (raw.crewIds || []).length, tv = terr && terr[raw.id] || 'none';
+      out.crewCount += n;
+      if ((tr[tv] || 0) > (tr[out.readiness] || 0)) out.readiness = tv;
+      if (raw.dominantProblem && n) {
+        var rank = pr[raw.dominantProblem.severity] || 0;
+        if (rank > best) { best = rank; out.dominantProblem = raw.dominantProblem; out.problemStationId = raw.id; }
+      }
+    }
+    return out;
+  }
 
   // =========================================================================
   // §3 AUTO-CINEMATIC CAMERA (freeze punch-in / dinner breathe-out).
@@ -1132,7 +1318,7 @@
     if (!to && sim) to = byId(sim.tasks, taskId);
     var pid = to && to.assignedIds && to.assignedIds[0], f = pid && anim.fig[pid];
     if (f && typeof f.cx === 'number') return { x: f.cx, y: f.cy };
-    var st = to && P.station(to.station);
+    var st = to && mapStationFor(to.station, sim);
     if (st) return { x: st.x * anim.w, y: st.y * anim.h };
     return { x: anim.w / 2, y: anim.h / 2 };
   }
@@ -1141,7 +1327,7 @@
   function animReset() {
     anim = { running: false, raf: null, last: 0, w: 0, h: 0, fig: {}, guest: {}, boat: null, wakes: [], hotPts: [],
       cascade: { hops: [], has: false }, ghost: [], trail: [], strikeSeg: -1, chain: [], chainOn: false,
-      motes: [], acts: null, actsAt: -1, tweens: {}, fanfared: false, skyKey: '' };
+      motes: [], acts: null, actsAt: -1, tweens: {}, fanfared: false, skyKey: '', sceneKey: '' };
     // §21.4 bridge state is module-scoped: clear it per run so a frozen gap's tint/spotlight can't leak into the next cold-open
     stageTint = null; stageSpotPid = null; stageGapState = null;
     camReleaseSafe(0);   // §3 safety: no camera offset survives a (re-)run start
@@ -1163,8 +1349,10 @@
   }
   function rebuildPaths() {
     var W = anim.w, H = anim.h, paths = $('paths'); paths.innerHTML = '';
-    ADJ.forEach(function (e) {
-      var a = P.station(e[0]), b = P.station(e[1]);
+    var profile = mapProfileFor(sim), flags = mapSceneFlags(sim), links = sceneLinksFor(sim);
+    if (profile.family === 'route' || flags.roads === false) return;
+    links.forEach(function (e) {
+      var a = mapStationFor(e[0], sim), b = mapStationFor(e[1], sim);
       var ax = a.x * W, ay = a.y * H, bx = b.x * W, by = b.y * H;
       var len = Math.sqrt((bx - ax) * (bx - ax) + (by - ay) * (by - ay)), ang = Math.atan2(by - ay, bx - ax) * 180 / Math.PI;
       var p = document.createElement('div'); p.className = 'path'; p.style.left = ax + 'px'; p.style.top = ay + 'px'; p.style.width = len + 'px'; p.style.transform = 'rotate(' + ang + 'deg)';
@@ -1197,11 +1385,16 @@
 
   // keepActors=true (language switch / resize) reuses the ambient cast so nobody teleports
   function buildSitemap(keepActors) {
+    var focused = document.activeElement && document.activeElement.closest ? document.activeElement.closest('.station') : null;
+    var focusedId = focused && focused.getAttribute('data-st');
+    var focusedSection = document.activeElement && document.activeElement.closest ? document.activeElement.closest('.sec-hot') : null;
+    var focusedSectionId = focusedSection && focusedSection.getAttribute('data-sec');
+    var modalInvokerId = lastFocus && lastFocus.classList && lastFocus.classList.contains('station') ? lastFocus.getAttribute('data-st') : null;
+    var modalInvokerSectionId = lastFocus && lastFocus.classList && lastFocus.classList.contains('sec-hot') ? lastFocus.getAttribute('data-sec') : null;
     var box = $('stations'); box.innerHTML = '';
-    // §voyage W4: a ship-day run draws the 5 ship stations, so its hotspots must sit on them,
-    // not on the land coordinates (sim.stations already carries the full {id,name,icon,x,y} set)
-    var atSea = !!(sim && sim.segment === 'voyage' && sim.stations);
-    (atSea ? sim.stations : P.STATIONS).forEach(function (s) {
+    var profile = mapProfileFor(sim), displayStations = mapStationsFor(sim), sceneFlags = mapSceneFlags(sim);
+    anim.sceneKey = profile.id;
+    displayStations.forEach(function (s) {
       if (s.hidden) return;   // §map v2: hidden stations (command folded into Hinata, finance off) get no hotspot
       var d = document.createElement('div'); d.className = 'station'; d.id = 'st-' + s.id;
       d.setAttribute('data-st', s.id); d.setAttribute('tabindex', '0'); d.setAttribute('role', 'button');
@@ -1213,7 +1406,8 @@
     // §map: clickable hotspots over Hinata's Food / Fishing-rod / Transport sections (canvas only;
     // positioned each frame in frame() from PRS_STAGE.hubSections so they track the drawn sub-zones;
     // no hub aboard ship, so a voyage run skips them)
-    if (!atSea && USE_CANVAS && window.PRS_STAGE && PRS_STAGE.hubSections) {
+    var hasHub = displayStations.some(function (s) { return !!s.hub && !s.hidden; });
+    if (hasHub && USE_CANVAS && window.PRS_STAGE && PRS_STAGE.hubSections) {
       ['food', 'rod', 'transport'].forEach(function (sid) {
         var b = document.createElement('div'); b.className = 'sec-hot'; b.id = 'sec-' + sid;
         b.setAttribute('data-sec', sid); b.setAttribute('tabindex', '0'); b.setAttribute('role', 'button');
@@ -1221,6 +1415,18 @@
       });
     }
     var map = $('sitemap');
+    map.classList.remove('scene-tokyo', 'scene-ship', 'scene-island');
+    map.classList.add('scene-' + profile.family);
+    map.setAttribute('data-scene', profile.id);
+    map.setAttribute('role', 'region');
+    var profileLabel = mapProfileLabel(profile);
+    map.setAttribute('aria-label', profileLabel);
+    var sceneStatus = $('scene-status');
+    if (!sceneStatus) {
+      sceneStatus = document.createElement('div'); sceneStatus.id = 'scene-status'; sceneStatus.className = 'sr-only';
+      sceneStatus.setAttribute('role', 'status'); sceneStatus.setAttribute('aria-live', 'polite'); map.appendChild(sceneStatus);
+    }
+    if (sceneStatus.textContent !== profileLabel) sceneStatus.textContent = profileLabel;
     var dims = mapDims(); anim.w = dims.w; anim.h = dims.h;
     rebuildPaths();
     // Tier 2: mount + size the canvas stage; body.canvas-stage hides the DOM stage layers (CSS)
@@ -1232,10 +1438,13 @@
     // sea + micro-life layer (west-coast water band, drifting gulls, jumping fish) — pure ambience
     var sea = document.getElementById('sealayer');
     if (!sea) { sea = document.createElement('div'); sea.id = 'sealayer'; sea.className = 'sealayer'; map.insertBefore(sea, $('paths')); }
-    var life = '<div class="water"></div>';
-    for (var gi = 0; gi < GULLS; gi++) life += '<span class="gull" style="top:' + (8 + gi * 9) + '%;animation-delay:' + (-gi * 5.5) + 's;animation-duration:' + (17 + gi * 4) + 's"></span>';
-    for (var fi = 0; fi < FISH; fi++) life += '<span class="splash" style="left:' + (3 + fi * 5) + '%;top:' + (55 + fi * 13) + '%;animation-delay:' + (fi * 2.3) + 's"></span>';
+    var life = sceneFlags.water === false ? '' : '<div class="water"></div>';
+    if (sceneFlags.seaLife) {
+      for (var gi = 0; gi < GULLS; gi++) life += '<span class="gull" style="top:' + (8 + gi * 9) + '%;animation-delay:' + (-gi * 5.5) + 's;animation-duration:' + (17 + gi * 4) + 's"></span>';
+      for (var fi = 0; fi < FISH; fi++) life += '<span class="splash" style="left:' + (3 + fi * 5) + '%;top:' + (55 + fi * 13) + '%;animation-delay:' + (fi * 2.3) + 's"></span>';
+    }
     sea.innerHTML = life;
+    sea.classList.toggle('hidden', sceneFlags.water === false);
     // ambient layer: 13 hosted guests (coloured, with activities from the engine) + the skiff
     var amb = document.getElementById('ambient');
     if (!amb) { amb = document.createElement('div'); amb.id = 'ambient'; amb.className = 'ambient'; map.insertBefore(amb, $('figs')); }
@@ -1254,15 +1463,18 @@
     var pr = P.makeTemplate().project, gt = document.getElementById('guests-tag');
     if (!gt) { gt = document.createElement('div'); gt.id = 'guests-tag'; gt.className = 'guests-tag'; map.appendChild(gt); }
     gt.innerHTML = '👥 <b>' + pr.guests + '</b> ' + T().guestsShort;
+    gt.classList.toggle('hidden', !sceneFlags.guests && !sceneFlags.guestsRequired);
     // wire the rAF caches, preserving live coordinates across rebuilds (language switch, resize)
     anim.guest = {};
     for (var g = 0; g < P.GUESTS; g++) {
       var ge = $('gg' + g), cast = acts0[g] && acts0[g].act === 'cast';
+      ge.classList.toggle('hidden', !sceneShowsGuests(sim));
       anim.guest['g' + g] = { el: ge, cast: cast, act: (acts0[g] && acts0[g].act) || 'stroll',
         homeX: cast ? 0.165 + (g % 4) * 0.013 : 0, homeY: cast ? 0.48 + ((g * 7) % 5) * 0.09 : 0,
         cx: ge._cx != null ? ge._cx : dims.w * 0.5, cy: ge._cy != null ? ge._cy : dims.h * 0.62 };
     }
     var be = $('boat');
+    be.classList.toggle('hidden', !sceneFlags.localBoat);
     anim.boat = { el: be, cx: be._cx != null ? be._cx : DOCK.x * dims.w, cy: be._cy != null ? be._cy : DOCK.y * dims.h, lastParam: 0 };
     anim.wakes = [];
     for (var wj = 0; wj < 3; wj++) anim.wakes.push({ el: $('wk' + wj), x: 0, y: 0, t0: 0 });
@@ -1285,6 +1497,31 @@
     var oldc = map.querySelectorAll('.cstatic');
     for (var oc = 0; oc < oldc.length; oc++) oldc[oc].remove();
     anim.chain = []; anim.chainOn = false;      // updateCascade rebuilds the RM chain from live state
+    // Return changes scenery mid-run. Recreating the profile's hotspots must
+    // not throw a keyboard user back to <body>; stable station ids let us put
+    // focus on the corresponding anchor in the new world.
+    var sectionFallback = $('st-mess') || box.querySelector('.station') || $('btn-pause');
+    if (keepActors && (focusedId || focusedSectionId)) {
+      var restored = focusedId ? $('st-' + focusedId) : $('sec-' + focusedSectionId);
+      if (!restored) restored = sectionFallback;
+      if (restored) { try { restored.focus({ preventScroll: true }); } catch (e) { restored.focus(); } }
+    }
+    if (modalInvokerId) lastFocus = $('st-' + modalInvokerId) || sectionFallback || lastFocus;
+    if (modalInvokerSectionId) lastFocus = $('sec-' + modalInvokerSectionId) || sectionFallback || lastFocus;
+    if ($('detail-modal').classList.contains('show')) {
+      if (lastDetailSection) {
+        // Hinata's three sub-zones do not exist in Tokyo or aboard ship. If
+        // the route changes underneath the dialog, close it onto the visible
+        // replacement anchor instead of leaving focus in a detached control.
+        if (hasHub && $('sec-' + lastDetailSection)) openSectionPanel(lastDetailSection);
+        else { lastFocus = sectionFallback || lastFocus; closeDetail(); }
+      } else if (lastDetailStation) {
+        var detailAnchor = mapAnchorIdFor(lastDetailStation, sim), detailVisible = false;
+        for (var di = 0; di < displayStations.length; di++) if (displayStations[di].id === detailAnchor && !displayStations[di].hidden) detailVisible = true;
+        if (detailVisible && $('st-' + detailAnchor)) openProblemPanel(lastDetailStation, detailAnchor);
+        else { lastFocus = sectionFallback || lastFocus; closeDetail(); }
+      }
+    }
   }
 
   // ---- P21: the hand-offs themselves fly the map — gold on time, hanko-red late ----
@@ -1323,7 +1560,7 @@
       if (!pairs[key] || arr < pairs[key].arr) pairs[key] = { arr: arr, send: send, h: h, from: from, to: to };
     });
     Object.keys(pairs).forEach(function (k) {
-      var b = pairs[k], A = P.station(b.from.station), B = P.station(b.to.station);
+      var b = pairs[k], A = mapStationFor(b.from.station, s), B = mapStationFor(b.to.station, s);
       if (!A || !B) return;
       // late if ANY consuming task of this role needs the card before the winning arrival
       var late = false;
@@ -1336,12 +1573,20 @@
       setXY(el, A.x * anim.w, A.y * anim.h);
       anim.motes.push({ el: el, role: b.h.toRoleId, card: b.h.cardId, send: b.send,
         ax: A.x, ay: A.y, bx: B.x, by: B.y, late: late,
-        same: b.from.station === b.to.station, toSt: b.to.station, state: 0, t0: 0,
+        same: A.id === B.id, fromSt: b.from.station, toSt: b.to.station, state: 0, t0: 0,
         dur: 650 + Math.min(900, Math.max(0, b.arr - b.send) * 55) });
     });
   }
+  function remapMotes(s) {
+    for (var i = 0; i < anim.motes.length; i++) {
+      var mote = anim.motes[i], A = mapStationFor(mote.fromSt, s), B = mapStationFor(mote.toSt, s);
+      if (!A || !B) continue;
+      mote.ax = A.x; mote.ay = A.y; mote.bx = B.x; mote.by = B.y; mote.same = A.id === B.id;
+      if (mote.state === 0 && mote.el) setXY(mote.el, A.x * anim.w, A.y * anim.h);
+    }
+  }
   function pingStation(stId, late) {
-    var n = $('st-' + stId); if (!n) return;
+    var n = $('st-' + mapAnchorIdFor(stId, sim)); if (!n) return;
     var cls = late ? 'ping-red' : 'ping';
     n.classList.remove('ping', 'ping-red'); void n.offsetWidth; n.classList.add(cls);
     setTimeout(function () { n.classList.remove(cls); }, 560);
@@ -1387,18 +1632,66 @@
     return { phase: seg === 'arrival' ? 'inbound' : 'outbound', param: param, atSea: param > 0.02 };
   }
 
+  var WHOLE_SEGMENTS = ['load', 'voyage', 'arrival', 'ops', 'fishday', 'return'];
+  function makeMinuteSim(seg, seed) {
+    return P.createSim({ seed: seed || 1, overrides: buildCfg().overrides }, seg, { animate: true });
+  }
+  function wholeSegmentResult(s) {
+    var plan = s.plan, seg = s.segment, readiness = P.dayReadiness(plan, seg), sched = P.daySchedule(plan, seg);
+    var required = P.tasksForSeg(plan, seg).filter(function (t) { return t.required !== false; });
+    var done = required.filter(function (t) {
+      var live = byId(s.tasks, t.id);
+      return live && live.state === 'done';
+    }).length;
+    return { segment: seg, clean: readiness.length === 0 && sched.unresolved === 0 && done === required.length,
+      tasksDone: done, tasksTotal: required.length, readiness: readiness, sim: s };
+  }
+  function startWholeSegment(index) {
+    if (!wholeRun || index < 0 || index >= wholeRun.segments.length) return false;
+    wholeRun.index = index;
+    var seg = wholeRun.segments[index];
+    sim = makeMinuteSim(seg, wholeRun.seed + index);
+    stopAnim(); closePawnCard();
+    if (topModal() && $('btn-pause')) { try { $('btn-pause').focus({ preventScroll: true }); } catch (e) { $('btn-pause').focus(); } }
+    closeModals();
+    $('figs').innerHTML = ''; $('banner').classList.remove('show');
+    animReset(); buildSitemap();
+    anim.cascade = seg === 'fishday' ? P.cascadeTrace(sim.plan) : { hops: [], has: false };
+    anim.cascade.has = !!anim.cascade.hasFault;
+    buildMotes(sim); renderSim(sim);
+    if (window.PRS_SOUND) window.PRS_SOUND.ambient(seg, sim.clockMin, mapProfileFor(sim).id);
+    if (RM.matches) drawRunOnce(); else startAnim();
+    return true;
+  }
+  function advanceWholeRun() {
+    if (!wholeRun || !sim) return false;
+    var result = wholeSegmentResult(sim);
+    wholeRun.results.push(result); wholeRun.sims[sim.segment] = sim;
+    if (!result.clean) wholeRun.clean = false;
+    var next = wholeRun.index + 1;
+    if (next < wholeRun.segments.length) { startWholeSegment(next); return true; }
+    return false;
+  }
+
   function launch() {
     stopAnim(); clearFinishTimer();                       // never stack a second rAF loop or a stale report reveal
     // §21.8b: every authored day now ANIMATES on the minute clock — the coarse days (arrival/ops/return)
     // opt into the minute-sim via {animate:true} so people walk + comment + PAUSE-on-stall like the fishday.
     // The run ends in the whole-trip ledger report (finish()→renderDayReport); the plan gaps that caused
     // the pauses are exactly what mark the day slice down. Whole-trip ('all') is not authorable → classic clock.
-    sim = P.createSim({ seed: (Math.floor(Math.random() * 1e9) >>> 0) || 1, overrides: buildCfg().overrides }, daySel, { animate: true });
-    if (window.PRS_SOUND) window.PRS_SOUND.ambient(daySel, sim.clockMin);   // ambient bed start, run-enter (sound.js §W3)
+    var seed = (Math.floor(Math.random() * 1e9) >>> 0) || 1;
+    wholeRun = daySel === 'all' ? { segments: WHOLE_SEGMENTS.slice(), index: 0, seed: seed, results: [], sims: {}, clean: true } : null;
+    sim = wholeRun ? makeMinuteSim(wholeRun.segments[0], seed) : makeMinuteSim(daySel, seed);
+    if (window.PRS_SOUND) window.PRS_SOUND.ambient(sim.segment, sim.clockMin, mapProfileFor(sim).id);   // ambient bed start, run-enter
     paused = false; livePausedForFix = false; document.body.classList.add('running');
     closeModals();
     $('live-dock').classList.add('hidden');               // a morning run never shows the live dock
-    speedMult = 1; document.querySelectorAll('.spd').forEach(function (x) { x.classList.toggle('on', x.getAttribute('data-spd') === '1'); });
+    // A truthful Whole Trip contains roughly two days of clocked travel. Start that
+    // orchestration at an explicit, user-visible 8× speed so it completes in about
+    // 90 seconds while still rendering every five-minute tick and every checkpoint.
+    // Standalone rehearsals retain the calmer 1× default.
+    speedMult = wholeRun ? 8 : 1;
+    document.querySelectorAll('.spd').forEach(function (x) { x.classList.toggle('on', parseFloat(x.getAttribute('data-spd')) === speedMult); });
     enterScreen('run');
     $('figs').innerHTML = ''; $('banner').classList.remove('show');
     var ff = $('fanfare'); if (ff) ff.classList.remove('show');
@@ -1408,7 +1701,7 @@
     anim.cascade = (sim.mode === 'minute' && sim.segment === 'fishday') ? P.cascadeTrace(sim.plan) : { hops: [], has: false };
     anim.cascade.has = anim.cascade.hasFault;
     buildMotes(sim);
-    renderSim(sim); startAnim();
+    renderSim(sim); if (RM.matches) drawRunOnce(); else startAnim();
     runFn = step;
     if (timer) clearInterval(timer); timer = setInterval(step, tickMs());
   }
@@ -1416,13 +1709,16 @@
   function step() {
     if (paused || !sim) return;
     if (sim.paused) return;                       // checkpoint: wait for Resume
-    P.tick(sim); renderSim(sim);
+    P.tick(sim); renderSim(sim); if (RM.matches) drawRunOnce();
     if (sim.paused && sim.checkpoint) {
       if (window.PRS_SOUND) window.PRS_SOUND.cue('freeze');   // coarse/fishday-morning freeze point (sound.js §W3)
       if (sim.checkpoint.id === 'cp_stall') camPunchStall(sim);   // §3: punch in on the coarse-day stall
       openInspector();
     }
-    if (sim.finished) finish();
+    if (sim.finished) {
+      if (wholeRun && advanceWholeRun()) return;
+      finish();
+    }
   }
   // find whoever just stalled (waitinfo/rework, in-scope) and punch the camera in on them
   function camPunchStall(s) {
@@ -1435,15 +1731,18 @@
   // px target for each duty-holder: its engine station + a fanned stack below it
   // (anchor = the sprite's FEET; rows of 4, wide enough that name chips stay legible)
   function figTargets(s) {
-    var pos = {}, bucket = {}; s.stations.forEach(function (st) { bucket[st.id] = []; });
-    s.participants.forEach(function (p) { bucket[p.station].push(p); });
+    var pos = {}, bucket = {}, visualById = {};
+    s.participants.forEach(function (p) {
+      var visual = mapStationFor(p.station, s), id = visual.id;
+      visualById[id] = visual; (bucket[id] = bucket[id] || []).push(p);
+    });
     var W = anim.w, H = anim.h, sc = USE_CANVAS ? stageScaleNow() : 1;   // only scale the fan when the (scaled) canvas is active
     var colGap = FAN_COL * sc, rowGap = FAN_ROW * sc, feet = FEET_BASE * sc;   // scale fan+feet so bigger pawns don't overlap
-    s.stations.forEach(function (st) {
-      var n = bucket[st.id].length;
-      bucket[st.id].forEach(function (p, i) {
+    Object.keys(bucket).forEach(function (id) {
+      var visual = visualById[id], n = bucket[id].length;
+      bucket[id].forEach(function (p, i) {
         var col = i % 4, row = Math.floor(i / 4), rowN = Math.min(4, n - row * 4);
-        pos[p.id] = { x: st.x * W + (col - (rowN - 1) / 2) * colGap, y: st.y * H + feet + row * rowGap };
+        pos[p.id] = { x: visual.x * W + (col - (rowN - 1) / 2) * colGap, y: visual.y * H + feet + row * rowGap };
       });
     });
     return pos;
@@ -1452,6 +1751,18 @@
   // ---- the continuous animation loop (walking, guests, boat, motes, cascade) ----
   function startAnim() { if (!anim.running) { anim.running = true; anim.last = 0; anim.raf = requestAnimationFrame(frame); } }
   function stopAnim() { if (anim && anim.raf) cancelAnimationFrame(anim.raf); if (anim) { anim.running = false; anim.raf = null; } }
+  var drawingRunOnce = false;
+  // Reduced motion has no continuous stage loop. Paint one deterministic frame
+  // after each simulation tick so the canvas stays current without drifting.
+  function drawRunOnce() {
+    if (drawingRunOnce || !anim || !sim || $('run').classList.contains('hidden')) return;
+    drawingRunOnce = true;
+    anim.running = true;
+    frame(window.performance ? performance.now() : Date.now());
+    if (anim.raf) cancelAnimationFrame(anim.raf);
+    anim.raf = null; anim.running = false;
+    drawingRunOnce = false;
+  }
   function frame(ts) {
     if (!anim || !anim.running) return;
     if ($('run').classList.contains('hidden')) { anim.running = false; return; }
@@ -1524,8 +1835,9 @@
     if (USE_CANVAS && stageCtx && sim && window.PRS_STAGE) {
       var stageView = {
         w: anim.w, h: anim.h, scale: stageScaleNow(), lang: L, rm: RM.matches,
-        night: sim.mode === 'minute' && (sim.clockMin < 330 || sim.clockMin >= 1110),
-        speedMult: speedMult, guestsVisible: guestsVisible,
+        mapProfile: sim.segment,
+        night: sim.mode === 'minute' && isNightMinute(sim.clockMin),
+        speedMult: speedMult, guestsVisible: sceneShowsGuests(sim),
         hoverPid: hoverPid, spotlightPid: stageSpotPid, tintMap: stageTint, gapState: stageGapState,
         hoverWord: (function () { if (!hoverPid) return '';
           var hp = null, hi; for (hi = 0; hi < sim.participants.length; hi++) if (sim.participants[hi].id === hoverPid) hp = sim.participants[hi];
@@ -1539,7 +1851,7 @@
       // documented view.cam per-frame contract (null => stage.js uses identity/module CAM)
       stageView.cam = camFallbackFrame(ts);
       PRS_STAGE.scene(stageCtx, sim, ts / 1000, stageView);
-      if (PRS_STAGE.hubSections) syncHubSections(PRS_STAGE.hubSections(stageView));
+      if (PRS_STAGE.hubSections) syncHubSections(PRS_STAGE.hubSections(stageView, sim));
     }
     anim.raf = requestAnimationFrame(frame);
   }
@@ -1555,7 +1867,7 @@
       if (wantChain && !anim.chainOn) {
         anim.chainOn = true; anim.chain = [];
         c.hops.forEach(function (hp) {
-          var st = P.station(hp.station), d2 = document.createElement('span'); d2.className = 'cstatic';
+          var st = mapStationFor(hp.station, sim), d2 = document.createElement('span'); d2.className = 'cstatic';
           d2.style.transform = 'translate3d(' + (st.x * anim.w) + 'px,' + (st.y * anim.h - 30) + 'px,0)';
           $('sitemap').appendChild(d2); anim.chain.push(d2);
         });
@@ -1567,7 +1879,7 @@
     var HOP = 1000, hops = c.hops, span = (hops.length - 1) * HOP, total = span + 900, tt = ts % total;
     if (tt >= span) { pulse.classList.remove('show'); hideGhosts(); anim.strikeSeg = -1; anim.trail.length = 0; return; }
     var seg = Math.floor(tt / HOP), f0 = (tt % HOP) / HOP, frac = f0 * f0 * (3 - 2 * f0);
-    var A = P.station(hops[seg].station), B = P.station(hops[Math.min(hops.length - 1, seg + 1)].station);
+    var A = mapStationFor(hops[seg].station, sim), B = mapStationFor(hops[Math.min(hops.length - 1, seg + 1)].station, sim);
     var x = (A.x + (B.x - A.x) * frac) * anim.w, y = (A.y + (B.y - A.y) * frac) * anim.h;
     setXY(pulse, x, y); pulse.classList.add('show');
     // trail ghosts follow the comet's recent path
@@ -1583,7 +1895,7 @@
     // arriving at a hop strikes that station — cause → effect, not a cruising dot
     if (seg !== anim.strikeSeg) {
       if (anim.strikeSeg >= 0 && seg > 0) {
-        var hitSt = hops[seg].station, node = $('st-' + hitSt);
+        var hitSt = hops[seg].station, node = $('st-' + mapAnchorIdFor(hitSt, sim));
         if (node) { node.classList.remove('strike'); void node.offsetWidth; node.classList.add('strike'); setTimeout(function () { node.classList.remove('strike'); }, 340); }
       }
       anim.strikeSeg = seg;
@@ -1635,7 +1947,7 @@
       if (anim.skyKey !== 'off') { anim.skyKey = 'off'; el.style.background = 'none'; map.classList.remove('night'); }
       return;
     }
-    var m = clamp(s.clockMin, 240, 1200);
+    var m = clamp(minuteOfDay(s.clockMin), 240, 1200);
     if (anim.skyKey === m) return;
     anim.skyKey = m;
     var i = 0;
@@ -1650,6 +1962,17 @@
   }
 
   function renderSim(s) {
+    // Return changes world twice (island -> homebound deck -> Tokyo). Rebuild
+    // only the art-less hotspot shadow when the profile id changes; actors keep
+    // their interpolated coordinates through buildSitemap(true).
+    var nextScene = mapProfileFor(s);
+    var sceneChanged = !!(anim.sceneKey && anim.sceneKey !== nextScene.id);
+    if (sceneChanged) { buildSitemap(true); remapMotes(s); }
+    anim.sceneKey = nextScene.id;
+    if (sceneChanged) {
+      updateRunButtons();
+    }
+    if (window.PRS_SOUND) window.PRS_SOUND.ambient(s.segment, s.clockMin, nextScene.id);
     var pos = figTargets(s);
     anim.hotPts = [];
     s.participants.forEach(function (p) {
@@ -1660,7 +1983,7 @@
         el.style.setProperty('--rc', P.role(p.roleId).color);
         el.innerHTML = '<div class="fig"><span class="sh"></span><div class="pw"><span class="lg l"></span><span class="lg r"></span><span class="tr"></span><span class="hd"></span><span class="hat"></span></div></div><div class="nm"></div><div class="bub"></div>';
         $('figs').appendChild(el);
-        var st0 = P.station(p.station);
+        var st0 = mapStationFor(p.station, s);
         var feet0 = FEET_BASE * (USE_CANVAS ? stageScaleNow() : 1);
         f = anim.fig[p.id] = { el: el, bub: el.querySelector('.bub'), nmEl: el.querySelector('.nm'),
           cx: st0.x * anim.w, cy: st0.y * anim.h + feet0, tx: st0.x * anim.w, ty: st0.y * anim.h + feet0, st: '', lang: '',
@@ -1682,29 +2005,33 @@
         f.st = p.state; f.el._st = p.state; f.bubT0 = anim.last || 0;
         if (!RM.matches && f.bub.textContent) { f.bub.classList.remove('pop'); void f.bub.offsetWidth; f.bub.classList.add('pop'); }
       }
-      if (STALL_STATES[p.state]) { var st = P.station(p.station); anim.hotPts.push({ x: st.x, y: st.y }); }
+      if (STALL_STATES[p.state]) { var st = mapStationFor(p.station, s); anim.hotPts.push({ x: st.x, y: st.y }); }
     });
-    // stations: crew count + dominant problem badge + "territory" tint (green/amber/red)
+    // stations: aggregate colocated logical stations into each visible scene
+    // anchor (command/finance/clinic are intentionally hidden at the same x/y).
     var terr = P.stationReadiness(s);
-    s.stations.forEach(function (st) {
-      var ring = $('ring-' + st.id); if (ring) { ring.textContent = st.crewIds.length ? st.crewIds.length : ''; ring.classList.toggle('show', st.crewIds.length > 0); }
+    mapStationsFor(s).forEach(function (st) {
+      if (st.hidden) return;
+      var live = mapStationStateFor(st, s, terr);
+      var ring = $('ring-' + st.id); if (ring) { ring.textContent = live.crewCount ? live.crewCount : ''; ring.classList.toggle('show', live.crewCount > 0); }
       var badge = $('badge-' + st.id), node = $('st-' + st.id);
-      var hot = st.dominantProblem && st.crewIds.length;
-      if (badge) { badge.textContent = hot ? ('⛔ ' + T()['p_' + st.dominantProblem.id + '_title']) : ''; badge.classList.toggle('show', !!hot); }
+      var hot = live.dominantProblem && live.crewCount;
+      if (badge) { badge.textContent = hot ? ('⛔ ' + T()['p_' + live.dominantProblem.id + '_title']) : ''; badge.classList.toggle('show', !!hot); }
       if (node) {
         node.classList.toggle('stalled', !!hot);
-        var tv = terr[st.id] || 'none';
+        var tv = live.readiness;
         node.classList.toggle('terr-green', tv === 'green');
         node.classList.toggle('terr-amber', tv === 'amber');
         node.classList.toggle('terr-red', tv === 'red');
+        node.setAttribute('data-detail-st', live.problemStationId || st.id);
         // §21.4: canvas hides .st-nm, so keep the hotspot's accessible name current (+ live problem status)
-        node.setAttribute('aria-label', nm(P.station(st.id).name) + (hot ? ' — ' + T()['p_' + st.dominantProblem.id + '_title'] : ''));
+        node.setAttribute('aria-label', nm(st.name) + (hot ? ' — ' + T()['p_' + live.dominantProblem.id + '_title'] : ''));
       }
     });
     var ban = $('banner'); if (s.bannerOn && appMode !== 'live') { ban.textContent = T().bannerText; ban.classList.add('show'); } else ban.classList.remove('show');
     $('sitemap').classList.toggle('blocked', !!s.bannerOn);
     $('nowtag').textContent = s.mode === 'minute'
-      ? (s.segment === 'fishday' ? T().fdDayLine(hhmm(s.clockMin)) : dayLabel(s.segment) + ' · ' + hhmm(s.clockMin))
+      ? (s.segment === 'fishday' ? T().fdDayLine(hhmm(s.clockMin)) : dayLabel(s.segment) + ' · ' + simClockText(s))
       : T().dayLine(Math.min(P.DAYS, Math.ceil(s.day)), P.DAYS) + (s.phaseLabel ? ' · ' + nm(s.phaseLabel) : '');
     updateSky(s);
     scheduleMotes(s);
@@ -1723,9 +2050,8 @@
     var lines = s.participants.map(function (p) {
       // §21.4: during a Live freeze the canvas shows the gap taxonomy on the spotlighted crewmate — mirror it to AT
       var pst = (stageGapState && stageGapState.pid === p.id) ? stageGapState.state : p.state;
-      // W3 a11y: each row is a button opening the same popover (the keyboard path to inspection)
-      return '<li><button type="button" class="sr-pawn" data-pid="' + p.id + '">' +
-        P.role(p.roleId).icon + ' ' + nm(p.name) + ' — ' + (t[STATE_KEY[pst]] || pst) + '</button></li>';
+      return '<li><span class="sr-pawn-state">' + P.role(p.roleId).icon + ' ' + nm(p.name) + ' — ' +
+        (t[STATE_KEY[pst]] || pst) + '</span></li>';
     });
     var sig = L + '|' + lines.join('¦');
     if (el._sig === sig) return;
@@ -1770,7 +2096,7 @@
     // so only fetch it for a fishday-minute run or the whole-trip (non-minute) run.
     var wantTeam = !(minute && s.segment !== 'fishday');
     var team = wantTeam ? P.score(s).team : null;
-    $('dash-day').textContent = minute ? (s.segment === 'fishday' ? t.fdDayLine(hhmm(s.clockMin)) : dayLabel(s.segment) + ' · ' + hhmm(s.clockMin)) : T().dayLine(Math.min(P.DAYS, Math.ceil(s.day)), P.DAYS);
+    $('dash-day').textContent = minute ? (s.segment === 'fishday' ? t.fdDayLine(hhmm(s.clockMin)) : dayLabel(s.segment) + ' · ' + simClockText(s)) : T().dayLine(Math.min(P.DAYS, Math.ceil(s.day)), P.DAYS);
     $('dash-phase').textContent = s.phaseLabel ? nm(s.phaseLabel) : '';
     // day-scoped Efficiency % beside the grade (§7.3) + idle/rework minutes
     $('dash-fd').classList.toggle('hidden', !minute);
@@ -1834,9 +2160,20 @@
   function updateRunButtons() {
     $('btn-pause').textContent = paused ? T().resumeBtn : T().pauseBtn;
     var gb = $('btn-guests');
-    if (gb) { gb.textContent = guestsVisible ? T().guestsHide : T().guestsShow; gb.setAttribute('aria-label', T().guestsToggleAria); }
+    if (gb) {
+      var guestFlags = sim ? mapSceneFlags(sim) : { guests: true }, guestsOn = sim ? sceneShowsGuests(sim) : guestsVisible;
+      var canShowGuests = !!guestFlags.guests || !!guestFlags.guestsRequired;
+      gb.textContent = guestsOn ? T().guestsHide : T().guestsShow;
+      gb.setAttribute('aria-label', T().guestsToggleAria);
+      gb.setAttribute('aria-pressed', guestsOn ? 'true' : 'false');
+      gb.setAttribute('aria-controls', 'stage ambient');
+      gb.disabled = !canShowGuests || !!guestFlags.guestsRequired;
+    }
     var db = $('btn-drawer');
-    if (db) { db.textContent = dashboardOpen ? T().drawerHide : T().drawerShow; db.setAttribute('aria-label', T().drawerAria); }
+    if (db) {
+      db.textContent = dashboardOpen ? T().drawerHide : T().drawerShow; db.setAttribute('aria-label', T().drawerAria);
+      db.setAttribute('aria-expanded', dashboardOpen ? 'true' : 'false'); db.setAttribute('aria-controls', 'dashboard');
+    }
     updateSoundButton();
   }
   // header 🔊 toggle label — lives outside #run (works on every screen), so it gets its own
@@ -2022,13 +2359,16 @@
   function pawnCardOpen() { var c = $('pawn-card'); return c && !c.classList.contains('hidden'); }
 
   // ---- problem detail panel ----
-  function openProblemPanel(stationId) {
+  function openProblemPanel(stationId, anchorId) {
     if (!sim) return;
     lastDetailStation = stationId;
+    lastDetailAnchor = anchorId || stationId;
+    lastDetailSection = null;
     var st = byId(sim.stations, stationId);
+    var shown = mapStationFor(anchorId || stationId, sim) || st;
     var p = st ? st.dominantProblem : null, t = T();
-    $('detail-ic').textContent = st ? st.icon : '🔍';
-    $('detail-title').textContent = st ? nm(st.name) : '';
+    $('detail-ic').textContent = shown ? shown.icon : '🔍';
+    $('detail-title').textContent = shown ? nm(shown.name) : '';
     if (!p) { $('detail-sub').textContent = ''; $('detail-body').innerHTML = '<div class="dt-note">' + t.detailDecoy + '</div>'; }
     else {
       $('detail-sub').textContent = t['p_' + p.id + '_title'];
@@ -2042,10 +2382,12 @@
     $('detail-modal').classList.add('show');
     if (!wasOpen) $('detail-close').focus();
   }
-  function closeDetail() { $('detail-modal').classList.remove('show'); modalClosed(); }
+  function clearDetailState() { lastDetailStation = null; lastDetailAnchor = null; lastDetailSection = null; }
+  function closeDetail() { $('detail-modal').classList.remove('show'); modalClosed(); clearDetailState(); }
   // §map: clicking a Hinata section (Food / Fishing rod / Transport) opens an info panel
   function openSectionPanel(id) {
     var t = T(), ic = { food: '🍱', rod: '🎣', transport: '🚤' };
+    lastDetailStation = null; lastDetailAnchor = null; lastDetailSection = id;
     $('detail-ic').textContent = ic[id] || '📍';
     $('detail-title').textContent = t['sec_' + id + '_t'] || id;
     $('detail-sub').textContent = nm(P.station('mess').name);   // "Hinata"
@@ -2074,16 +2416,23 @@
     // §7.2: a coarse animated day (arrival/ops/return) report reads the whole-trip ledger (scoreTrip)
     // + that day's daySchedule/dayReadiness in renderDayReport — no scoreDay grade/score is rendered,
     // so res.day is unused for the coarse path.
-    if (sim.mode === 'minute' && sim.segment !== 'fishday') {
+    if (wholeRun) {
+      // Keep the legacy whole-trip scorer only for its individual/team tables;
+      // completion is owned by the six authored day runs recorded above.
+      var legacy = P.createSim({ seed: wholeRun.seed, overrides: buildCfg().overrides }, 'all'), guard = 0;
+      while (!legacy.finished && guard++ < 1000) P.tick(legacy);
+      lastResult = { trip: P.score(legacy), day: null, segment: 'all', wholeTrip: true,
+        segmentResults: wholeRun.results.slice(), segmentSims: wholeRun.sims, authoredClean: wholeRun.clean };
+    } else if (sim.mode === 'minute' && sim.segment !== 'fishday') {
       lastResult = { trip: null, day: null, segment: sim.segment, coarse: true };
     } else {
       lastResult = { trip: P.score(sim), day: (sim.segment !== 'all' ? P.daySummary(sim) : null), segment: sim.segment };
     }
-    var simAt = sim;
+    var simAt = sim, wholeAt = wholeRun;
     clearFinishTimer();
     finishTimer = setTimeout(function () {
       finishTimer = null;
-      if (sim !== simAt) return;      // a mode/screen change won the race — don't pop the report over it
+      if (sim !== simAt || wholeRun !== wholeAt) return;      // a mode/screen change won the race — don't pop the report over it
       closePawnCard();
       stopAnim(); enterScreen('report'); renderReport(lastResult);
     }, 700);
@@ -2198,6 +2547,21 @@
     }).join('');
   }
 
+  function readinessText(plan, seg, h) {
+    var t = T(), segTasks = P.tasksForSeg(plan, seg);
+    function tn(id) { var x = byId(segTasks, id); return x ? nm(x.name) : id; }
+    function cn(id) { var x = byId(plan.infoCards, id); return x ? nm(x.name).split('：')[0].split(':')[0] : id; }
+    if (h.type === 'UNPLACED_REQUIRED') return t.rhUnplaced(tn(h.taskId));
+    if (h.type === 'DECOY_PLACED') return t.rhDecoy(tn(h.taskId));
+    if (h.type === 'MISASSIGNED') return t.rhMisassigned(tn(h.taskId));
+    if (h.type === 'MISSING_ARROW') return t.rhMissing(cn(h.cardId), tn(h.taskId));
+    if (h.type === 'ARROW_LATE') return t.rhLate(cn(h.cardId), tn(h.taskId), h.lateMin);
+    if (h.type === 'WRONG_FISH_RISK') return t.rhWrongFish(cn(h.cardId), tn(h.taskId));
+    if (h.type === 'DEP_BROKEN') return t.rhDep(tn(h.taskId), tn(h.depId));
+    if (h.type === 'OVERLOAD') { var pp = byId(plan.participants, h.personId); return t.rhOverload(pp ? nm(pp.name) : h.personId); }
+    return h.type;
+  }
+
   function renderReport(res) {
     // the individuals table has no coarse-day analogue — hide its card for a coarse report, and
     // restore it for the animated fishday/whole-trip paths (idempotent either way).
@@ -2212,9 +2576,12 @@
     // the legacy per-run scorer (sc) for their own content — never its total/grade.
     var trip = P.scoreTrip(currentPlan());
     $('r-grade').textContent = trip.grade; $('r-grade').style.color = GRADE_COLOR[trip.grade];
-    var perfect = trip.gate.clean && trip.grade === 'A';
+    var authoredClean = !res.wholeTrip || !!res.authoredClean;
+    var perfect = trip.gate.clean && trip.grade === 'A' && authoredClean;
     var badge = $('r-badge'); badge.textContent = perfect ? (day ? t.badgeDayClean : t.badgePerfect) : ''; badge.classList.toggle('show', perfect);
-    if (trip.gate.withheldA) {
+    if (res.wholeTrip && !authoredClean) {
+      $('r-verdict').textContent = trip.total + ' / 100 — ' + t.rIncomplete;
+    } else if (trip.gate.withheldA) {
       $('r-verdict').textContent = t.gradeGateB(trip.total);
     } else if (day) {
       $('r-verdict').textContent = day.clean ? t.rDayScoreOk(dayLabel(res.segment), trip.total) : t.rDayScoreGaps(dayLabel(res.segment), trip.total, day.gaps);
@@ -2236,19 +2603,30 @@
       var b = trip.byBucket[res.segment];
       if (b) $('r-conds').innerHTML += '<span class="cond">' + t.daySliceLine(b.earned, b.maxPts, dayLabel(res.segment)) + '</span>';
     } else {
-      // whole-trip ('all') run: a trip-scoped efficiency chip (§7.3) + the classic condition list.
+      // Whole Trip is the six authored schedules, not the legacy ten-day task
+      // clock. Show every boundary's actual required-task completion.
       $('r-conds').innerHTML = '<span class="cond">' + t.effTripLbl + ' ' + P.tripEfficiency(currentPlan()) + '%</span>' +
+        (res.wholeTrip ? res.segmentResults.map(function (r) {
+          return '<span class="cond ' + (r.clean ? 'met' : 'unmet') + '">' + (r.clean ? '✓' : '✗') + ' ' +
+            dayLabel(r.segment) + ' · ' + t.dayTasksLine(r.tasksDone, r.tasksTotal) + '</span>';
+        }).join('') : '') +
         sc.conditions.map(function (c) {
           return '<span class="cond ' + (c.met ? 'met' : 'unmet') + '">' + (c.met ? '✓' : '✗') + ' ' + nm(c.text) + '</span>';
         }).join('');
     }
     // fix-pack: the rehearsed day's gaps (or all gaps for a whole-trip run)
-    var fixes = day ? day.fixes : sc.fixes;
-    if (!fixes.length) $('fixpack').innerHTML = '<div class="fix-clean">' + (day ? t.fixpackCleanDay(dayLabel(res.segment)) : t.fixpackClean) + '</div>';
+    var fixes = day ? day.fixes : sc.fixes, authoredHints = [];
+    if (res.wholeTrip) res.segmentResults.forEach(function (r) {
+      r.readiness.forEach(function (h) { authoredHints.push({ segment: r.segment, hint: h }); });
+    });
+    if (!fixes.length && !authoredHints.length) $('fixpack').innerHTML = '<div class="fix-clean">' + (day ? t.fixpackCleanDay(dayLabel(res.segment)) : t.fixpackClean) + '</div>';
     else $('fixpack').innerHTML = fixes.map(function (f) {
       return '<div class="fix-row sev-' + f.severity + '"><div class="fix-main"><div class="fix-title">' + (f.severity === 'high' ? '⛔ ' : '⚠️ ') + t['p_' + f.id + '_title'] + '</div>' +
         '<div class="fix-body">' + t['p_' + f.id + '_fix'] + '</div></div>' +
         '<button class="btn sm primary fix-apply" data-fix="' + f.fixId + '">' + t.applyFixBtn + '</button></div>';
+    }).join('') + authoredHints.map(function (x) {
+      return '<div class="fix-row"><div class="fix-main"><div class="fix-title">' + dayLabel(x.segment) + '</div>' +
+        '<div class="fix-body">' + readinessText(currentPlan(), x.segment, x.hint) + '</div></div></div>';
     }).join('');
     // individuals table
     var head = ['ivName', 'ivAction', 'ivDecision', 'ivLoad', 'ivFatigue', 'ivCoop', 'ivContribution'];
@@ -2347,18 +2725,19 @@
   // SAME harbor at dusk. Stall markers (DOM hotspots) glow at the stations where
   // idle/rework actually accrued — each click-through routes to the surface that
   // fixes it (frame gap → its receipt row; day gap → the day drawer, pre-scrolled
-  // to the hollow socket). The grade lands as a hanko stamp. Pawns stand at their
-  // end-of-day stations, inspectable via the shared #pawn-card (memberInfo at the
-  // final minute). Pure presentation: reads the finished sim / daySchedule
-  // read-offs, never writes to sim state. Lifecycle mirrors the plan stage:
+  // to the hollow socket). The grade lands as a hanko stamp. Return reports can
+  // replay the most costly stall minute so map + pawn positions share one scene;
+  // inspection still reads the completed result (memberInfo at the final minute).
+  // Pure presentation: reads the finished sim / daySchedule and a separate
+  // deterministic replay, never writes to the completed sim. Lifecycle mirrors the plan stage:
   // bootReportStage() creates the canvas ctx + local rAF, killReportStage()
   // (enterScreen, idempotent) destroys them — never merely hidden.
   // view.dusk / view.stallMarkers / view.stamp are the S2 render contracts; the
   // canvas dusk grade no-ops until stage.js's layers land (DOM overlays carry
   // the feature on their own until then).
   // =========================================================================
-  var RSTG = { raf: null, sim: null, ctx: null, cv: null, host: null, w: 0, h: 0, sc: 1,
-    fig: {}, boat: null, hoverPid: null, last: 0, markers: [], seg: 'fishday', stamp: null };
+  var RSTG = { raf: null, sim: null, resultSim: null, resultSims: [], ctx: null, cv: null, host: null, w: 0, h: 0, sc: 1,
+    fig: {}, boat: null, hoverPid: null, last: 0, markers: [], seg: 'fishday', mapProfile: 'fishday', overview: false, stamp: null };
   var rsStampKey = null;   // grade|total|segment of the last stamped report — a language re-render never re-thocks
 
   function rsDims() {
@@ -2374,54 +2753,63 @@
     return (st && st.hidden) ? 'mess' : (st ? st.id : 'mess');
   }
   function rsShortCard(cid) {
-    var c = RSTG.sim ? byId(RSTG.sim.plan.infoCards, cid) : null;
+    var facts = RSTG.resultSim || RSTG.resultSims[0] || RSTG.sim;
+    var c = facts ? byId(facts.plan.infoCards, cid) : null;
     return nm(c ? c.name : cid).split('：')[0].split(':')[0];
   }
   // ---- stall aggregation: daySchedule byTask idle/rework → task.station (sev by person-minutes);
   // classic frame gaps (t.problem → hard stall) count their whole blocked block ----
   function rsStalls() {
-    var s = RSTG.sim, agg = {}, order = [], i, j;
-    if (!s) return [];
-    var sch = s.sched || null;
+    var sources = RSTG.resultSims.length ? RSTG.resultSims : [RSTG.resultSim || RSTG.sim];
+    var agg = {}, order = [], i, j;
+    if (!sources[0]) return [];
     // primary pick = the marker's click-through target: a NAMEABLE gap (an info card socket or
     // a frame decision) always outranks a bare dep-chain wait — the drawer-with-socket / receipt
     // row is the fixing surface, "upstream delay" is only a fallback. Minutes break ties in rank.
     function itemRank(it) { return (it.kind === 'frame' || it.cardId) ? 1 : 0; }
-    function add(stId, min, item) {
-      var a = agg[stId];
-      if (!a) { a = agg[stId] = { stationId: stId, min: 0, primary: null, _pMin: -1, _pRank: -1 }; order.push(a); }
+    function add(sceneId, stId, min, item) {
+      var key = sceneId + '|' + stId, a = agg[key];
+      if (!a) { a = agg[key] = { sceneId: sceneId, stationId: stId, min: 0, primary: null, _pMin: -1, _pRank: -1 }; order.push(a); }
       a.min += min;
       if (item) {
         var rk = itemRank(item);
         if (rk > a._pRank || (rk === a._pRank && min > a._pMin)) { a._pRank = rk; a._pMin = min; a.primary = item; }
       }
     }
-    for (i = 0; i < s.tasks.length; i++) {
-      var t = s.tasks[i];
-      if (t.scope !== 'in') continue;
-      var n = Math.max(1, (t.assignedIds || []).length);
-      var anchor = rsAnchorStation(t.station);
-      if (t.problem) {   // classic design gap: the task never completes — bill its whole block
-        var bm = Math.round((t.durMin || 60) * n);
-        add(anchor, bm, { kind: 'frame', det: t.problem.id, taskId: t.id });
-        continue;
+    sources.forEach(function (s) {
+      if (!s) return;
+      var sch = s.sched || null;
+      for (i = 0; i < s.tasks.length; i++) {
+        var task = s.tasks[i];
+        if (task.scope !== 'in') continue;
+        var n = Math.max(1, (task.assignedIds || []).length), entry = sch && sch.byTask[task.id];
+        var minute = entry ? entry.start : task.startMin;
+        var authored = byId(P.tasksForSeg(s.plan, s.segment), task.id);
+        var sceneId = (authored && authored.sceneId) || task.sceneId || mapProfileFor({ segment: s.segment, mode: s.mode, clockMin: minute, sched: sch }, s.segment).id;
+        var visual = mapStationFor(task.station, s, sceneId);
+        var anchor = visual && visual.id || rsAnchorStation(task.station);
+        if (task.problem) {   // classic design gap: the task never completes — bill its whole block
+          var bm = Math.round((task.durMin || 60) * n);
+          add(sceneId, anchor, bm, { kind: 'frame', det: task.problem.id, taskId: task.id, segment: s.segment, sceneId: sceneId });
+          continue;
+        }
+        if (!entry) continue;
+        var lost = Math.round(((entry.idleMin || 0) + (entry.extension || 0)) * n);
+        if (lost <= 0 && !entry.wrongFish) continue;
+        var item = null, w;
+        for (j = 0; j < (entry.waits || []).length; j++) {
+          w = entry.waits[j];
+          if (w.cardId) { item = { kind: 'day', taskId: task.id, cardId: w.cardId, late: !w.missing, segment: s.segment, sceneId: sceneId }; break; }
+        }
+        if (!item && entry.wrongFish && sch) {
+          for (j = 0; j < sch.missing.length; j++) if (sch.missing[j].taskId === task.id) { item = { kind: 'day', taskId: task.id, cardId: sch.missing[j].cardId, late: false, segment: s.segment, sceneId: sceneId }; break; }
+          if (!item) for (j = 0; j < sch.late.length; j++) if (sch.late[j].taskId === task.id) { item = { kind: 'day', taskId: task.id, cardId: sch.late[j].cardId, late: true, segment: s.segment, sceneId: sceneId }; break; }
+        }
+        if (!item) item = { kind: 'day', taskId: task.id, cardId: null, segment: s.segment, sceneId: sceneId };
+        if (lost <= 0) lost = 15;
+        add(sceneId, anchor, lost, item);
       }
-      var e = sch && sch.byTask[t.id]; if (!e) continue;
-      var lost = Math.round((e.idleMin + e.extension) * n);
-      if (lost <= 0 && !e.wrongFish) continue;
-      var item = null, w;
-      for (j = 0; j < (e.waits || []).length; j++) {
-        w = e.waits[j];
-        if (w.cardId) { item = { kind: 'day', taskId: t.id, cardId: w.cardId, late: !w.missing }; break; }
-      }
-      if (!item && e.wrongFish && sch) {   // a wrong-assumption task: the fix is the arrow that should have fed it
-        for (j = 0; j < sch.missing.length; j++) if (sch.missing[j].taskId === t.id) { item = { kind: 'day', taskId: t.id, cardId: sch.missing[j].cardId, late: false }; break; }
-        if (!item) for (j = 0; j < sch.late.length; j++) if (sch.late[j].taskId === t.id) { item = { kind: 'day', taskId: t.id, cardId: sch.late[j].cardId, late: true }; break; }
-      }
-      if (!item) item = { kind: 'day', taskId: t.id, cardId: null };   // dep-chain wait: route to the day drawer itself
-      if (lost <= 0) lost = 15;   // a wrong-fish source with no local minutes still deserves a visible marker
-      add(anchor, lost, item);
-    }
+    });
     var out = [];
     for (i = 0; i < order.length; i++) {
       var a = order[i];
@@ -2440,13 +2828,16 @@
   }
   // ---- pawn end-of-day placement: fan-stack per station (figTargets' rule on RSTG dims) ----
   function rsTargets(s) {
-    var pos = {}, bucket = {};
-    s.stations.forEach(function (st) { bucket[st.id] = []; });
-    s.participants.forEach(function (p) { if (bucket[p.station]) bucket[p.station].push(p); });
+    var pos = {}, bucket = {}, visualById = {};
+    if (RSTG.overview) return pos;
+    s.participants.forEach(function (p) {
+      var visual = mapStationFor(p.station, s, RSTG.mapProfile), id = visual.id;
+      visualById[id] = visual; (bucket[id] = bucket[id] || []).push(p);
+    });
     var colGap = 23 * FIGK * RSTG.sc, rowGap = 24 * FIGK * RSTG.sc, feet = 36 * RSTG.sc;   // fan tracks sprite-era pawn size
-    s.stations.forEach(function (st) {
-      var sd = P.station(st.id), n = bucket[st.id].length;
-      bucket[st.id].forEach(function (p, i2) {
+    Object.keys(bucket).forEach(function (id) {
+      var sd = visualById[id], n = bucket[id].length;
+      bucket[id].forEach(function (p, i2) {
         var col = i2 % 4, row = Math.floor(i2 / 4), rowN = Math.min(4, n - row * 4);
         pos[p.id] = { x: sd.x * RSTG.w + (col - (rowN - 1) / 2) * colGap, y: sd.y * RSTG.h + feet + row * rowGap };
       });
@@ -2455,6 +2846,8 @@
   }
   function rsSyncFigs() {
     if (!RSTG.sim) return;
+    RSTG.fig = {};
+    if (RSTG.overview) return;
     var pos = rsTargets(RSTG.sim);
     RSTG.sim.participants.forEach(function (p) {
       var t2 = pos[p.id]; if (!t2) return;
@@ -2465,8 +2858,8 @@
   function rsView(rm) {
     var s = RSTG.sim, hw = '';
     if (RSTG.hoverPid) { var hp = byId(s.participants, RSTG.hoverPid); if (hp) hw = T()[STATE_KEY[hp.state]] || hp.state; }
-    return { w: RSTG.w, h: RSTG.h, scale: RSTG.sc, lang: L, rm: !!rm,
-      night: s.mode === 'minute' && (s.clockMin < 330 || s.clockMin >= 1110),
+    return { w: RSTG.w, h: RSTG.h, scale: RSTG.sc, lang: L, rm: !!rm, mapProfile: RSTG.mapProfile || RSTG.seg,
+      night: s.mode === 'minute' && isNightMinute(s.clockMin),
       speedMult: 1, guestsVisible: false, hoverPid: RSTG.hoverPid, hoverWord: hw,
       spotlightPid: null, tintMap: null, gapState: null,
       fig: RSTG.fig, guest: {}, boat: RSTG.boat, wakes: [],
@@ -2476,8 +2869,49 @@
       // (numeric sev 0..1, amber→hanko) and the hanko stamp; the DOM side (below) owns
       // only the hotspots + aria + the person-minute chips.
       dusk: 1,
-      stallMarkers: RSTG.markers.map(function (m) { return { stationId: m.stationId, sev: m.sevN }; }),
+      stallMarkers: RSTG.markers.map(function (m) { return { stationId: m.stationId, sceneId: m.sceneId, sev: m.sevN }; }),
       stamp: RSTG.stamp };
+  }
+  // Choose a minute INSIDE the marker's actual loss interval. Idle begins at
+  // the authored start; rework begins at effective end minus the extension.
+  // Picking e.start (the old behavior) showed the first productive minute and
+  // could put a delayed ferry wait on a ship that had only just departed.
+  function rsReplayMinute(task, entry, simForClock) {
+    if (!task) return entry && typeof entry.start === 'number' ? entry.start : null;
+    var idle = entry && entry.idleMin || 0, ext = entry && entry.extension || 0;
+    var raw = (entry && ext > idle && typeof entry.end === 'number') ? entry.end - ext : task.startMin;
+    if (typeof raw !== 'number') raw = entry && entry.start;
+    if (typeof raw !== 'number') return null;
+    // Rework boundaries can carry a one-minute channel offset. Snap forward to
+    // the first real engine frame in that interval; authored task starts are
+    // already aligned to the segment snap and remain exact.
+    if (entry && ext > idle) {
+      var dt = P.MIN_DT || 5, base = simForClock && simForClock.winStart || 0;
+      raw = base + Math.ceil((raw - base) / dt) * dt;
+      if (raw >= entry.end) raw = Math.max(base, entry.end - dt);
+    }
+    return raw;
+  }
+  function rsReplayWithInterventions(source, targetMin) {
+    var hist = P.createSim(source.cfg, 'return', { animate: true });
+    // Runtime hand-feeds are sim-local, not cfg overrides. Reapply their exact
+    // arrival minutes before seeking so the historical pawn states and the
+    // completed/intervened schedule describe the same run.
+    hist.injections = (source.injections || []).map(function (inj) {
+      return { cardId: inj.cardId, toRoleId: inj.toRoleId, min: inj.min };
+    });
+    hist.handFed = source.handFed || hist.injections.length;
+    hist.sched = P.daySchedule(hist.plan, 'return', hist.injections);
+    var dt = P.MIN_DT || 5, guard = 0;
+    targetMin = Math.max(hist.winStart, Math.min(hist.winEnd, targetMin));
+    // createSim's initial winStart frame has not been evaluated yet. Back up a
+    // single deterministic tick when the stall begins exactly at that edge.
+    if (targetMin === hist.winStart) hist.clockMin = hist.winStart - dt;
+    while (hist.clockMin < targetMin && !hist.finished && guard++ < 500) {
+      if (hist.paused) { hist.paused = false; hist.checkpoint = null; }
+      P.tick(hist);
+    }
+    return hist;
   }
   function bootReportStage(res, trip) {
     killReportStage();
@@ -2490,18 +2924,50 @@
     // which day stands on the stage: the run's own minute-modeled day. A whole-trip ('all')
     // run has no minute sim — show the fishday (THE minute-modeled day) rebuilt headlessly
     // from the current plan and ticked to its end; a per-day picker is deferred (spec §4).
-    var wholeTrip = false;
-    if (sim && sim.mode === 'minute' && sim.sched) { RSTG.sim = sim; RSTG.seg = sim.segment; }
+    var wholeTrip = !!res.wholeTrip;
+    RSTG.resultSims = []; RSTG.overview = false;
+    if (wholeTrip) {
+      RSTG.seg = 'all'; RSTG.overview = true;
+      WHOLE_SEGMENTS.forEach(function (seg) { if (res.segmentSims && res.segmentSims[seg]) RSTG.resultSims.push(res.segmentSims[seg]); });
+      RSTG.sim = RSTG.resultSims[RSTG.resultSims.length - 1] || makeMinuteSim('return', 1);
+      RSTG.resultSim = RSTG.sim;
+    } else if (sim && sim.mode === 'minute' && sim.sched) { RSTG.sim = sim; RSTG.seg = sim.segment; }
     else {
       wholeTrip = true; RSTG.seg = 'fishday';
       var s = P.createSim({ seed: 1, overrides: buildCfg().overrides }, 'fishday'), g = 0;
       while (!s.finished && g++ < 600) { if (s.paused) { s.paused = false; s.checkpoint = null; } P.tick(s); }
       RSTG.sim = s;
     }
-    cv.setAttribute('aria-label', t.rsChip);
+    if (!RSTG.resultSim) RSTG.resultSim = RSTG.sim;   // completed run: report facts/inspection always read this object
+    if (!RSTG.resultSims.length) RSTG.resultSims = [RSTG.resultSim];
     RSTG.ctx = PRS_STAGE.initStage(cv, { w: d.w, h: d.h });
-    RSTG.fig = {}; rsSyncFigs();
     RSTG.markers = rsStalls();
+    RSTG.mapProfile = RSTG.overview ? 'route-overview' : RSTG.seg;
+    if (RSTG.seg === 'return') {
+      var physical = {};
+      RSTG.markers.forEach(function (mk) { physical[mk.sceneId] = 1; });
+      if (Object.keys(physical).length > 1) { RSTG.overview = true; RSTG.mapProfile = 'route-overview'; }
+      // A completed return sim's clock is in Tokyo, but an island pack-out
+      // stall should not be plotted on a Tokyo report map. Pick the scene at
+      // the most costly marker's primary task; a clean report stays at the
+      // actual finished location.
+      var rep = null;
+      for (var ri = 0; ri < RSTG.markers.length; ri++) if (!rep || RSTG.markers[ri].min > rep.min) rep = RSTG.markers[ri];
+      if (!RSTG.overview && rep && rep.primary && rep.primary.taskId) {
+        var rt = byId(RSTG.sim.tasks, rep.primary.taskId);
+        var re = RSTG.sim.sched && RSTG.sim.sched.byTask[rep.primary.taskId];
+        var rmin = rsReplayMinute(rt, re, RSTG.sim);
+        if (typeof rmin === 'number') {
+          RSTG.mapProfile = mapProfileFor({ segment: 'return', mode: 'minute', clockMin: rmin, sched: RSTG.sim.sched }, 'return').id;
+          // Keep actors and map on the same historical frame. Rebuild a
+          // read-only deterministic replay at the representative stall minute;
+          // the report/score and marker aggregation still use the completed run.
+          RSTG.sim = rsReplayWithInterventions(RSTG.resultSim, rmin);
+        }
+      } else if (!RSTG.overview) RSTG.mapProfile = mapProfileFor(RSTG.sim, 'return').id;
+    }
+    RSTG.fig = {}; rsSyncFigs();
+    cv.setAttribute('aria-label', t.rsChip + ' · ' + mapProfileLabel(mapProfileFor(RSTG.sim, RSTG.mapProfile)));
     // a clean day lost no time — the chip must not claim it did (deep-check finding)
     $('rs-chip').textContent = RSTG.markers.length ? t.rsChip : t.rsClean;
     var note = $('rs-note');
@@ -2531,9 +2997,9 @@
   }
   function killReportStage() {
     if (RSTG.raf) cancelAnimationFrame(RSTG.raf);
-    RSTG.raf = null; RSTG.sim = null; RSTG.ctx = null; RSTG.cv = null; RSTG.host = null;
+    RSTG.raf = null; RSTG.sim = null; RSTG.resultSim = null; RSTG.resultSims = []; RSTG.ctx = null; RSTG.cv = null; RSTG.host = null;
     RSTG.fig = {}; RSTG.boat = null; RSTG.hoverPid = null; RSTG.last = 0;
-    RSTG.markers = []; RSTG.stamp = null;
+    RSTG.markers = []; RSTG.mapProfile = 'fishday'; RSTG.overview = false; RSTG.stamp = null;
     var mk = $('rs-markers'); if (mk) mk.innerHTML = '';
     var ro = $('rs-roster'); if (ro) ro.innerHTML = '';
     var w = $('report-stage-wrap'); if (w) w.classList.remove('pawn-hover');
@@ -2560,39 +3026,55 @@
     var box = $('rs-markers'), t = T(); if (!box) return;
     var html = '';
     for (var i = 0; i < RSTG.markers.length; i++) {
-      var mk = RSTG.markers[i], st = P.station(mk.stationId);
-      var aria = t.rsMarkerAria(nm(st.name), mk.min, rsGapText(mk.primary)).replace(/"/g, '&quot;');
+      var mk = RSTG.markers[i], st = rsMarkerPoint(mk);
+      var place = st.name ? nm(st.name) : mk.sceneId;
+      var aria = t.rsMarkerAria(place, mk.min, rsGapText(mk.primary)).replace(/"/g, '&quot;');
       html += '<button type="button" class="rs-marker sev-' + mk.sev + '" data-idx="' + i + '" data-station="' + mk.stationId + '"' +
+        ' data-scene="' + mk.sceneId + '"' +
         ' aria-label="' + aria + '" title="' + aria + '">' +
         '<span class="rs-mk-min">' + t.rsMin(mk.min) + '</span></button>';
     }
     box.innerHTML = html;
     rsPositionOverlays();
   }
+  function rsMarkerPoint(mk) {
+    if (RSTG.overview && window.PRS_STAGE && typeof PRS_STAGE.routePoint === 'function') {
+      var rp = PRS_STAGE.routePoint(mk.sceneId, mk.stationId, { w: RSTG.w, h: RSTG.h, lang: L });
+      if (rp) return rp;
+    }
+    if (RSTG.overview) {
+      var order = ['tokyo-hotel', 'takeshiba-terminal', 'ogasawara-maru', 'chichijima-transfer', 'interisland-ferry', 'hahajima-hinata'];
+      var idx = order.indexOf(mk.sceneId); if (idx < 0) idx = 0;
+      var logical = P.station(mk.stationId), jitter = logical ? (logical.y - 0.5) * 0.08 : 0;
+      return { x: 0.08 + idx * 0.165, y: 0.54 + jitter, name: { en: mk.sceneId, jp: mk.sceneId } };
+    }
+    return mapStationFor(mk.stationId, RSTG.sim, mk.sceneId || RSTG.mapProfile);
+  }
   function rsPositionOverlays() {
     var box = $('rs-markers'); if (!box) return;
     var els = box.querySelectorAll('.rs-marker');
     for (var i = 0; i < els.length; i++) {
       var mk = RSTG.markers[parseInt(els[i].getAttribute('data-idx'), 10)]; if (!mk) continue;
-      var st = P.station(mk.stationId);
+      var st = rsMarkerPoint(mk);
       els[i].style.left = Math.round(st.x * RSTG.w) + 'px';
       els[i].style.top = Math.round(st.y * RSTG.h) + 'px';
     }
     if (pawnCardOpen() && pawnCardPid && RSTG.fig[pawnCardPid] && !$('report').classList.contains('hidden')) positionReportPawnCard(pawnCardPid);
   }
-  // the offscreen a11y roster (keyboard path to end-of-day pawn inspection)
+  // The report canvas has a separate visible stage; this hidden roster is a
+  // read-only live summary and deliberately contains no focusable controls.
   function rsBuildRoster() {
-    var el = $('rs-roster'); if (!el || !RSTG.sim) return;
+    var el = $('rs-roster'), facts = RSTG.resultSim || RSTG.sim; if (!el || !facts) return;
     var t = T();
-    el.innerHTML = '<h2>' + t.rosterHeading + '</h2><ul>' + RSTG.sim.participants.map(function (p) {
-      return '<li><button type="button" class="sr-pawn" data-pid="' + p.id + '">' +
-        P.role(p.roleId).icon + ' ' + nm(p.name) + ' — ' + (t[STATE_KEY[p.state]] || p.state) + '</button></li>';
+    el.innerHTML = '<h2>' + t.rosterHeading + '</h2><ul>' + facts.participants.map(function (p) {
+      return '<li><span class="sr-pawn-state">' + P.role(p.roleId).icon + ' ' + nm(p.name) + ' — ' +
+        (t[STATE_KEY[p.state]] || p.state) + '</span></li>';
     }).join('') + '</ul>';
   }
   // ---- marker click-through: reuse the rail jump machinery (frame → receipt row; day → drawer socket) ----
   function reportMarkerJump(idx) {
     var mk = RSTG.markers[idx]; if (!mk || !mk.primary) return;
-    var it = mk.primary, seg = RSTG.seg;
+    var it = mk.primary, seg = it.segment || RSTG.seg;
     closePawnCard();
     if (appMode === 'live') enterMode('morning'); else toSetup();   // the report's own btn-tweak routing
     if (it.kind === 'frame') {
@@ -2633,7 +3115,7 @@
   }
   // the day's account for one duty-holder: idle/rework person-minutes + the cards they waited on
   function rsPidSummary(pid) {
-    var s = RSTG.sim, idle = 0, rework = 0, cards = {}, i, j;
+    var s = RSTG.resultSim || RSTG.sim, idle = 0, rework = 0, cards = {}, i, j;
     if (!s || !s.sched) return null;
     for (i = 0; i < s.tasks.length; i++) {
       var t = s.tasks[i];
@@ -2662,7 +3144,7 @@
       (chips || '<span class="ins-none">' + t.rsPawnClean + '</span>') + '</div></div>';
     var waited = (sum && sum.cards.length) ? '<div class="pc-sec"><span class="pc-h">' + t.rsPawnWaited + '</span><div class="ins-cards">' +
       sum.cards.map(function (cid) { return '<span class="ins-card wait">' + rsShortCard(cid) + '</span>'; }).join('') + '</div></div>' : '';
-    var mi = P.memberInfo(RSTG.sim, p.id);   // at the final minute: what they ended the day holding
+    var mi = P.memberInfo(RSTG.resultSim || RSTG.sim, p.id);   // completed run: what they ended the day holding
     var held = mi ? mi.held.map(function (hc) {
       return '<span class="ins-card ok">' + rsShortCard(hc.cardId) + ' <i>' + (hc.own ? '◉' : hhmm(hc.atMin)) + '</i></span>';
     }).join('') : '';
@@ -2684,8 +3166,8 @@
     card.style.left = Math.round(left) + 'px'; card.style.top = Math.round(top) + 'px';
   }
   function openReportPawnCard(pid) {
-    if (!RSTG.sim) return;
-    var p = byId(RSTG.sim.participants, pid); if (!p) return;
+    var facts = RSTG.resultSim || RSTG.sim; if (!facts) return;
+    var p = byId(facts.participants, pid); if (!p) return;
     var card = $('pawn-card'); if (!card) return;
     var fresh = card.classList.contains('hidden');
     if (fresh) { var a = document.activeElement; pawnCardInvoker = (a && a !== document.body) ? a : null; }
@@ -2711,7 +3193,7 @@
   function toSetup() {
     if (timer) { clearInterval(timer); timer = null; }
     clearFinishTimer();
-    stopAnim(); sim = null; paused = false; livePausedForFix = false;
+    stopAnim(); sim = null; wholeRun = null; paused = false; livePausedForFix = false;
     closeModals();
     enterScreen('setup');
     paintSetup();
@@ -2801,6 +3283,33 @@
     if (inv && inv.dataset && inv.dataset.day) target = document.querySelector('.day-btn[data-day="' + inv.dataset.day + '"]');
     if (!target && inv && document.body.contains(inv)) target = inv;
     if (target) { try { target.focus(); } catch (e) { } }
+  }
+
+  function reducedMotionChanged() {
+    camReleaseSafe(0);
+    if (RM.matches) {
+      stopAnim();
+      if (sim && !$('run').classList.contains('hidden')) drawRunOnce();
+      if (PSTG.raf) cancelAnimationFrame(PSTG.raf);
+      PSTG.raf = null;
+      if (PSTG.ctx && PSTG.sim && !$('setup').classList.contains('hidden')) {
+        PRS_STAGE.scene(PSTG.ctx, PSTG.sim, 1, psView(true)); psPositionOverlays();
+      }
+      if (RSTG.raf) cancelAnimationFrame(RSTG.raf);
+      RSTG.raf = null;
+      if (RSTG.ctx && RSTG.sim && !$('report').classList.contains('hidden')) {
+        PRS_STAGE.scene(RSTG.ctx, RSTG.sim, 1, rsView(true)); rsPositionOverlays();
+      }
+    } else {
+      if (sim && !$('run').classList.contains('hidden')) startAnim();
+      if (PSTG.ctx && PSTG.sim && !$('setup').classList.contains('hidden') && !PSTG.raf) {
+        PSTG.last = 0; PSTG.raf = requestAnimationFrame(psFrame);
+      }
+      if (RSTG.ctx && RSTG.sim && !$('report').classList.contains('hidden') && !RSTG.raf) {
+        RSTG.last = 0; RSTG.raf = requestAnimationFrame(rsFrame);
+      }
+    }
+    if (!$('intro').classList.contains('hidden')) bootVignette(vigLastAuto);
   }
 
   function bind() {
@@ -2975,6 +3484,12 @@
       $('plan-tokens').addEventListener('click', function (e) {
         var tk = e.target.closest('.plan-token'); if (tk) undoToken(tk.getAttribute('data-det'));
       });
+      var roster = $('plan-roster');
+      if (roster) roster.addEventListener('click', function (e) {
+        var b = e.target.closest('.plan-roster-person'); if (!b) return;
+        var pid = b.getAttribute('data-pid');
+        if (traySel) trayResolve(traySel, pid, true); else openPlanPawnCard(pid);
+      });
     })();
     // keyboard: token chips undo; picker rows resolve
     document.addEventListener('keydown', function (e) {
@@ -3028,9 +3543,9 @@
 
     $('btn-pause').addEventListener('click', function () { paused = !paused; updateRunButtons(); });
     $('btn-guests').addEventListener('click', function () {
-      guestsVisible = !guestsVisible; updateRunButtons();   // view.guestsVisible is read fresh every rAF frame — no rebuild needed
+      guestsVisible = !guestsVisible; syncDomGuestVisibility(); updateRunButtons();
+      if (RM.matches) drawRunOnce();
     });
-    if (!USE_CANVAS) $('btn-guests').style.display = 'none';   // the guests toggle only gates the canvas layer; it's a no-op in the ?dom fallback
     $('btn-drawer').addEventListener('click', function () {
       dashboardOpen = !dashboardOpen;
       $('runwrap').classList.toggle('drawer-closed', !dashboardOpen);
@@ -3041,7 +3556,18 @@
       if (!sim || sim.finished) return;
       sim.finished = 'incomplete';
       if (appMode === 'live' && liveState) { livePausedForFix = false; clearGapFocus(); camReleaseSafe(0); liveFinish(); }   // stay in the live flow
-      else finish();
+      else {
+        if (wholeRun) {
+          wholeRun.clean = false;
+          if (!wholeRun.sims[sim.segment]) { var cur = wholeSegmentResult(sim); cur.clean = false; wholeRun.results.push(cur); wholeRun.sims[sim.segment] = sim; }
+          for (var qi = wholeRun.index + 1; qi < wholeRun.segments.length; qi++) {
+            var qseg = wholeRun.segments[qi], qplan = currentPlan(), qtasks = P.tasksForSeg(qplan, qseg).filter(function (t) { return t.required !== false; });
+            wholeRun.results.push({ segment: qseg, clean: false, tasksDone: 0, tasksTotal: qtasks.length,
+              readiness: P.dayReadiness(qplan, qseg), sim: null });
+          }
+        }
+        finish();
+      }
     });
     $('stations').addEventListener('click', function (e) {
       // the shown affordance wins: a pointer click while a pawn is visibly hovered (cursor +
@@ -3049,7 +3575,8 @@
       // e.detail > 0 = real pointer click; keyboard activation (detail 0) keeps station priority.
       if (hoverPid && e.detail > 0 && !$('run').classList.contains('hidden')) { openPawnCard(hoverPid); return; }
       var sec = e.target.closest('.sec-hot'); if (sec) { openSectionPanel(sec.getAttribute('data-sec')); return; }
-      var st = e.target.closest('.station'); if (st) openProblemPanel(st.id.replace('st-', ''));
+      var st = e.target.closest('.station');
+      if (st) openProblemPanel(st.getAttribute('data-detail-st') || st.getAttribute('data-st'), st.getAttribute('data-st'));
     });
     // W3 inspectable cast — hover feeds the canvas name chip; click/tap opens the popover.
     // .station / .sec-hot sit above and keep first claim: only background/pawn targets are ours.
@@ -3162,7 +3689,7 @@
       if (!el || !el.classList) return;
       if (e.key === 'Enter' || e.key === ' ') {
         if (el.classList.contains('sec-hot')) { e.preventDefault(); openSectionPanel(el.getAttribute('data-sec')); }
-        else if (el.classList.contains('station')) { e.preventDefault(); openProblemPanel(el.id.replace('st-', '')); }
+        else if (el.classList.contains('station')) { e.preventDefault(); openProblemPanel(el.getAttribute('data-detail-st') || el.getAttribute('data-st'), el.getAttribute('data-st')); }
         else if (el.classList.contains('warn') && el.dataset.station) { e.preventDefault(); openProblemPanel(el.dataset.station); }
         else if (el.classList.contains('fd-socket')) { e.preventDefault(); fdSocketTap(el); }
         else if (el.classList.contains('fd-chip')) { e.preventDefault(); toggleChipPlacing(el.dataset.task); }
@@ -3201,6 +3728,8 @@
         if (RM.matches && RSTG.ctx && !$('report').classList.contains('hidden')) rsResize();
       }, 130);
     });
+    if (RM && typeof RM.addEventListener === 'function') RM.addEventListener('change', reducedMotionChanged);
+    else if (RM && typeof RM.addListener === 'function') RM.addListener(reducedMotionChanged);
   }
 
   // =========================================================================
@@ -3211,7 +3740,17 @@
   // =========================================================================
   var LIVE_CH = ['board', 'chat', 'radio', 'faceToFace'];
   function ldPanel(id) { ['ld-brief', 'ld-prompt', 'ld-spot', 'ld-result'].forEach(function (p) { var e = $(p); if (e) e.classList.toggle('on', p === id); }); }
-  function closeModals() { ['detail-modal', 'inspect-modal', 'arrow-modal', 'rules-modal', 'pick-modal'].forEach(function (m) { var e = $(m); if (e) e.classList.remove('show'); }); closePawnCard(); lastFocus = null; }
+  function closeModals() {
+    var active = document.activeElement;
+    var activeModal = active && active.closest ? active.closest('#detail-modal.show,#inspect-modal.show,#arrow-modal.show,#rules-modal.show,#pick-modal.show') : null;
+    var restore = lastFocus && document.body.contains(lastFocus) ? lastFocus : null;
+    ['detail-modal', 'inspect-modal', 'arrow-modal', 'rules-modal', 'pick-modal'].forEach(function (m) { var e = $(m); if (e) e.classList.remove('show'); });
+    closePawnCard(); clearDetailState(); lastFocus = null;
+    if (activeModal) {
+      if (!restore || restore.closest('.hidden')) restore = !$('run').classList.contains('hidden') ? $('btn-pause') : document.querySelector('.daytab.on') || $('launch');
+      if (restore) { try { restore.focus({ preventScroll: true }); } catch (e2) { restore.focus(); } }
+    }
+  }
   function clearStationTints() { var ns = document.querySelectorAll('#stations .station'); for (var ci = 0; ci < ns.length; ci++) ns[ci].classList.remove('terr-green', 'terr-amber', 'terr-red'); stageTint = null; }
   function chIcon(ch) { return { board: '📋', chat: '💬', radio: '📻', phone: '📞', faceToFace: '🤝' }[ch] || '•'; }
   function personName(task) { var pid = task.assignedIds[0], p = pid && byId(currentPlan().participants, pid); return p ? nm(p.name) : nm(P.role(task.ownerRoleId).name); }
@@ -3661,7 +4200,7 @@
   // picker). Pawns are never draggable; you only ever hand things to people.
   // =========================================================================
   var PSTG = { raf: null, sim: null, cv: null, ctx: null, host: null, fig: {}, boat: null,
-    w: 0, h: 0, sc: 1, last: 0, hoverPid: null };
+    w: 0, h: 0, sc: 1, last: 0, hoverPid: null, sceneKey: '' };
   // Hand-tuned per-role podium positions (normalized) so the 11 pawns spread into
   // distinct, targetable spots — command/finance/clinic are hidden stations folded
   // onto Hinata's single coord, so a station-home map would pile 8 pawns on one point,
@@ -3672,6 +4211,13 @@
     budgetLead: { x: 0.13, y: 0.52 }, safetyLead:{ x: 0.19, y: 0.68 }, chef:       { x: 0.42, y: 0.34 },
     logi:       { x: 0.50, y: 0.50 }, specialist:{ x: 0.495, y: 0.70 }, siteLead:  { x: 0.80, y: 0.66 }
     // specialist casts from the waterline (was 0.60/0.62 — open water); siteLead stands at his boat
+  };
+  // The Voyage preview uses the same role-podium interaction model, but every
+  // target must sit inside the ferry deck (whose fixtures span x=.60..88).
+  var PS_SHIP_POS = {
+    comms:      { x: 0.62, y: 0.36 }, owner:     { x: 0.71, y: 0.33 }, pm:         { x: 0.80, y: 0.36 },
+    budgetLead: { x: 0.64, y: 0.50 }, safetyLead:{ x: 0.73, y: 0.49 }, chef:       { x: 0.82, y: 0.53 },
+    logi:       { x: 0.63, y: 0.66 }, specialist:{ x: 0.74, y: 0.67 }, siteLead:  { x: 0.85, y: 0.65 }
   };
   var SEAT_ROLES = ['owner', 'pm', 'siteLead', 'budgetLead', 'safetyLead', 'logi', 'comms', 'specialist'];
   // the tray catalog (spec §2 order). drag:false objects dock but open a panel/drawer instead.
@@ -3724,10 +4270,12 @@
   // 3 chefs fanned horizontally around theirs. Halos/tokens map role -> pawn the same way.
   function psTargets(s) {
     var pos = {}, byRole = {};
+    if (daySel === 'all') return pos;
     s.participants.forEach(function (p) { (byRole[p.roleId] = byRole[p.roleId] || []).push(p); });
     var colGap = 27 * FIGK * PSTG.sc, feet = 30 * PSTG.sc;   // fan tracks sprite-era pawn size
+    var podiums = mapProfileFor(s, daySel === 'all' ? 'route-overview' : daySel).family === 'ship' ? PS_SHIP_POS : PS_POS;
     for (var rid in byRole) {
-      var a = PS_POS[rid] || { x: 0.5, y: 0.5 }, arr = byRole[rid], n = arr.length;
+      var a = podiums[rid] || { x: 0.72, y: 0.5 }, arr = byRole[rid], n = arr.length;
       arr.forEach(function (p, i) { pos[p.id] = { x: a.x * PSTG.w + (i - (n - 1) / 2) * colGap, y: a.y * PSTG.h + feet }; });
     }
     return pos;
@@ -3735,6 +4283,7 @@
   function psSyncFigs(snap) {
     if (!PSTG.sim) return;
     var pos = psTargets(PSTG.sim);
+    if (daySel === 'all') { PSTG.fig = {}; PSTG.hoverPid = null; return; }
     PSTG.sim.participants.forEach(function (p) {
       var t2 = pos[p.id]; if (!t2) return;
       var f = PSTG.fig[p.id];
@@ -3754,8 +4303,8 @@
     }
   }
   function psView(rm) {
-    return { w: PSTG.w, h: PSTG.h, scale: PSTG.sc, lang: L, rm: !!rm,
-      night: true, speedMult: 1, guestsVisible: false, hoverPid: PSTG.hoverPid,
+    return { w: PSTG.w, h: PSTG.h, scale: PSTG.sc, lang: L, rm: !!rm, mapProfile: daySel === 'all' ? 'route-overview' : daySel,
+      night: PSTG.sim ? isNightMinute(PSTG.sim.clockMin) : false, speedMult: 1, guestsVisible: PSTG.sim ? sceneShowsGuests(PSTG.sim, daySel) : false, hoverPid: PSTG.hoverPid,
       spotlightPid: null, tintMap: null, gapState: null,
       fig: PSTG.fig, guest: {}, boat: PSTG.boat, wakes: [],
       motes: [], cascade: { hops: [], has: false },
@@ -3768,9 +4317,21 @@
     return { w: w, h: h };
   }
   function psBuildSim() {
-    // a fresh fishday sim sits at 04:00 (never ticked): indigo pre-dawn sky, all tasks
-    // pending (no gap tints), everyone idle. Positions come from psTargets (role podiums).
-    PSTG.sim = P.createSim({ seed: 1, overrides: buildCfg().overrides }, 'fishday');
+    // Preview the selected authored day at its own start. Whole Trip is a
+    // route overview; it uses a representative sim only for crew/plan data.
+    PSTG.sim = makeMinuteSim(daySel === 'all' ? 'arrival' : daySel, 1);
+  }
+  function renderPlanRoster() {
+    var box = $('plan-roster'); if (!box || !PSTG.sim) return;
+    box.setAttribute('aria-label', T().rosterHeading);
+    box.innerHTML = PSTG.sim.participants.map(function (p) {
+      var held = '';
+      TRAY_OBJ.forEach(function (o) {
+        if (o.drag && fixed[DET_FIX[o.det]] && tokenPidFor(o.det) === p.id) held += '<span class="plan-roster-token" aria-hidden="true">' + o.ic + '</span>';
+      });
+      return '<button type="button" class="plan-roster-person" data-pid="' + p.id + '" aria-label="' +
+        nm(p.name) + ' · ' + nm(P.role(p.roleId).name) + '">' + P.role(p.roleId).icon + '<span>' + nm(p.name) + '</span>' + held + '</button>';
+    }).join('');
   }
   function bootPlanStage() {
     killPlanStage();
@@ -3780,11 +4341,14 @@
     PSTG.host = host; PSTG.cv = cv; PSTG.w = d.w; PSTG.h = d.h;
     PSTG.sc = clamp(Math.min(d.w / 1000, d.h / 520), 0.6, 1.25);
     PSTG.boat = { cx: DOCK.x * d.w, cy: DOCK.y * d.h };
-    cv.setAttribute('aria-label', T().planStageAria);
     PSTG.ctx = PRS_STAGE.initStage(cv, { w: d.w, h: d.h });
     psBuildSim();
+    var planProfile = daySel === 'all' ? 'route-overview' : daySel;
+    PSTG.sceneKey = mapProfileFor(PSTG.sim, planProfile).id;
+    cv.setAttribute('aria-label', T().planStageAria + ' · ' + mapProfileLabel(mapProfileFor(PSTG.sim, planProfile)));
     PSTG.fig = {}; psSyncFigs(true);
     $('plan-chip').textContent = T().planChip;
+    renderPlanRoster();
     renderTray();
     if (RM.matches) { PRS_STAGE.scene(PSTG.ctx, PSTG.sim, 1, psView(true)); psPositionOverlays(); return; }
     PSTG.last = 0; PSTG.raf = requestAnimationFrame(psFrame);
@@ -3792,10 +4356,11 @@
   function killPlanStage() {
     if (PSTG.raf) cancelAnimationFrame(PSTG.raf);
     PSTG.raf = null; PSTG.sim = null; PSTG.ctx = null; PSTG.fig = {}; PSTG.boat = null;
-    PSTG.host = null; PSTG.cv = null; PSTG.hoverPid = null; PSTG.last = 0;
+    PSTG.host = null; PSTG.cv = null; PSTG.hoverPid = null; PSTG.last = 0; PSTG.sceneKey = '';
     trayDeselect();
     var pt = $('plan-tokens'); if (pt) pt.innerHTML = '';
     var ph = $('plan-halos'); if (ph) ph.innerHTML = '';
+    var pr = $('plan-roster'); if (pr) pr.innerHTML = '';
     var w = $('plan-stage-wrap'); if (w) w.classList.remove('pawn-hover');
   }
   function psFrame(ts) {
@@ -3823,7 +4388,13 @@
   // fig positions so non-seat edits don't jump; a swap glides the moved pawns to new stations.
   function syncPlanStage() {
     if (!PSTG.ctx || $('setup').classList.contains('hidden')) return;
-    psBuildSim(); psSyncFigs(false);
+    var priorScene = PSTG.sceneKey;
+    psBuildSim();
+    var nextProfile = mapProfileFor(PSTG.sim, daySel === 'all' ? 'route-overview' : daySel);
+    PSTG.sceneKey = nextProfile.id;
+    psSyncFigs(RM.matches || (!!priorScene && priorScene !== PSTG.sceneKey));
+    renderPlanRoster();
+    if (PSTG.cv) PSTG.cv.setAttribute('aria-label', T().planStageAria + ' · ' + mapProfileLabel(nextProfile));
     if (RM.matches) { PRS_STAGE.scene(PSTG.ctx, PSTG.sim, 1, psView(true)); psPositionOverlays(); }
   }
 
@@ -3855,7 +4426,13 @@
     return head + duty + note + holds;
   }
   function positionPlanPawnCard(pid) {
-    var card = $('pawn-card'), f = PSTG.fig[pid], wrap = $('plan-stage-wrap'); if (!f || !wrap) return;
+    var card = $('pawn-card'), f = PSTG.fig[pid], wrap = $('plan-stage-wrap'); if (!wrap) return;
+    if (!f) {
+      var inv = pawnCardInvoker && pawnCardInvoker.getBoundingClientRect ? pawnCardInvoker.getBoundingClientRect() : wrap.getBoundingClientRect();
+      card.style.left = Math.max(8, Math.min(window.innerWidth - card.offsetWidth - 8, inv.left)) + 'px';
+      card.style.top = Math.max(8, Math.min(window.innerHeight - card.offsetHeight - 8, inv.bottom + 8)) + 'px';
+      return;
+    }
     var r = wrap.getBoundingClientRect();
     var sx = r.left + f.cx * (r.width / (PSTG.w || r.width));
     var sy = r.top + f.cy * (r.height / (PSTG.h || r.height));
@@ -3947,6 +4524,7 @@
   function psPositionOverlays() {
     var halos = $('plan-halos'), tokens = $('plan-tokens'), t = T();
     if (!halos || !tokens || !PSTG.sim) return;
+    if (daySel === 'all') { halos.innerHTML = ''; tokens.innerHTML = ''; return; }
     // halos
     var want = {};
     if (traySel) ((traySel.kind === 'duty' || traySel.kind === 'care') ? PSTG.sim.participants.filter(function (p) { return SEAT_ROLES.indexOf(p.roleId) >= 0; }).map(function (p) { return p.id; }) : targetPidsFor(traySel.det)).forEach(function (pid) { want[pid] = 1; });
@@ -4176,7 +4754,7 @@
       if (was === 'morning' || !morningSnap) snapshotMorning();
       startLive();                              // -> launchLive -> enterScreen('run')
     } else {
-      sim = null; paused = false; livePausedForFix = false;
+      sim = null; wholeRun = null; paused = false; livePausedForFix = false;
       if (was === 'live') restoreMorning();     // only a Live detour wiped the plan — same-mode re-entry keeps it
       enterScreen('setup');
       paintSetup();
@@ -4184,6 +4762,7 @@
   }
 
   function startLive() {
+    wholeRun = null;
     for (var k in fixed) fixed[k] = true; fixed.fixHandoffs = false;   // classic decisions sound; the arrows are the puzzle
     fdReset(); mcReset(); buddyReset(); daySel = 'fishday'; placingChip = null;
     // Live is carry-canonical: the Load day ships everything aboard so the fishday puzzle is purely
@@ -4201,7 +4780,7 @@
   function launchLive() {
     stopAnim(); clearFinishTimer();                       // never stack a second rAF loop across re-runs
     sim = P.createSim({ seed: (Math.floor(Math.random() * 1e9) >>> 0) || 1, overrides: buildCfg().overrides }, 'fishday');
-    if (window.PRS_SOUND) window.PRS_SOUND.ambient('fishday', sim.clockMin);   // ambient bed start, run-enter (sound.js §W3)
+    if (window.PRS_SOUND) window.PRS_SOUND.ambient('fishday', sim.clockMin, mapProfileFor(sim).id);   // ambient bed start, run-enter
     paused = false; livePausedForFix = false; document.body.classList.add('running');
     closeModals(); speedMult = 2; document.querySelectorAll('.spd').forEach(function (x) { x.classList.toggle('on', x.getAttribute('data-spd') === '2'); });
     enterScreen('run');
@@ -4210,7 +4789,7 @@
     animReset(); updateRunButtons(); buildSitemap();
     anim.cascade = P.cascadeTrace(sim.plan); anim.cascade.has = anim.cascade.hasFault;
     buildMotes(sim);
-    renderSim(sim); startAnim();
+    renderSim(sim); if (RM.matches) drawRunOnce(); else startAnim();
     liveState.phase = 'brief'; renderLivePanel();
     runFn = liveStep; if (timer) clearInterval(timer); timer = setInterval(liveStep, tickMs());
   }
@@ -4218,7 +4797,7 @@
   function liveStep() {
     if (!sim || paused || livePausedForFix) return;
     if (sim.paused && sim.checkpoint) { P.resume(sim); }         // Live ignores the fixed checkpoints
-    P.tick(sim); renderSim(sim);
+    P.tick(sim); renderSim(sim); if (RM.matches) drawRunOnce();
     var cl = nextLiveGap();
     if (cl && (sim.clockMin || 0) >= cl.startMin - 0.001) { livePausedForFix = true; openGap(cl); return; }
     if (sim.finished) liveFinish();
@@ -4262,7 +4841,7 @@
   function paintGapFocus(gap) {
     var plan = currentPlan(), to = byId(plan.tasks, gap.taskId); if (!to) return;
     if (window.PRS_SOUND) window.PRS_SOUND.cue('freeze');   // Live freeze point (sound.js §W3)
-    clearStationTints(); var stn = $('st-' + to.station); if (stn) stn.classList.add('terr-red');
+    clearStationTints(); var stn = $('st-' + mapAnchorIdFor(to.station, sim)); if (stn) stn.classList.add('terr-red');
     stageTint = {}; stageTint[to.station] = 'red';                // canvas: the gap-focus station goes red
     clearGapFocus();
     var pid = to.assignedIds[0], f = pid && anim.fig[pid];
@@ -4395,7 +4974,7 @@
     fd2.late.forEach(function (x) { var t = byId(plan2.tasks, x.taskId); if (t) set(t.station, 'amber'); });
     fd2.missing.forEach(function (x) { var t = byId(plan2.tasks, x.taskId); if (t) set(t.station, 'amber'); });
     fd2.wrongFish.forEach(function (id) { var t = byId(plan2.tasks, id); if (t) set(t.station, 'red'); });
-    for (var st in m) { var n = $('st-' + st); if (n) n.classList.add('terr-' + m[st]); }
+    for (var st in m) { var n = $('st-' + mapAnchorIdFor(st, sim)); if (n) n.classList.add('terr-' + m[st]); }
     stageTint = m;   // canvas: blast-radius preview tints
   }
 
@@ -4430,6 +5009,7 @@
       }
     }
     renderSim(sim);
+    if (RM.matches) drawRunOnce();
     // §5: stay frozen and step to the next card in this convergence cluster; only when the whole
     // cluster is committed does advanceCluster() release the freeze + camera and resume the run.
     advanceCluster();

@@ -27,14 +27,17 @@
  *                          //   'drawer'  — short swish (day-drawer open/close)
  *                          // Never throws, even before toggle() has ever run —
  *                          // a no-op while sound is off / uninitialized.
- *     ambient(seg, dayK)  // (re)start the looping ambient bed for a run
+ *     ambient(seg, dayK, scene) // (re)start/update the looping ambient bed
  *                          // segment: 'load'|'voyage'|'arrival'|'ops'|
  *                          // 'fishday'|'return'|other. Call ambient(null) on
  *                          // run-exit to tear the bed down. dayK is the sim
- *                          // clock-minute (roughly 0-1440) AT THE MOMENT OF
- *                          // THIS CALL — it picks day-vs-dusk wildlife ONCE;
- *                          // this is called only at run-enter/exit (never per
- *                          // animation tick), so it is not re-sampled live.
+ *                          // clock-minute (roughly 0-1440). `scene` is an
+ *                          // optional physical scene id or profile object.
+ *                          // Existing two-argument calls remain valid. Calls
+ *                          // with the same scene are cheap: only the wildlife
+ *                          // scheduler is refreshed when day/night changes.
+ *     scene(scene, dayK, seg) // scene-first alias for renderers that already
+ *                          // have a physical scene profile at a transition.
  *   }
  *
  * AUTOPLAY POLICY: `enabled` starts false and no AudioContext is constructed
@@ -71,7 +74,8 @@
   var ambientG = null;          // this run's ambient bus gain (torn down/rebuilt per segment)
   var ambientTimers = [];       // pending setTimeout ids for the wildlife scheduler
   var curNodes = [];            // oscillator/bufferSource nodes needing an explicit .stop()
-  var curSeg = null, curDayK = null;   // last-requested segment/clock, remembered even while muted
+  var curSeg = null, curDayK = null, curScene = null; // last request, remembered while muted
+  var curBedKey = null, curWildlifeKey = null;
 
   function loadPref() { try { return localStorage.getItem(PREF_KEY) === '1'; } catch (e) { return false; } }
   function savePref(v) { try { localStorage.setItem(PREF_KEY, v ? '1' : '0'); } catch (e) { } }
@@ -99,15 +103,57 @@
   }
 
   // =========================================================================
-  // AMBIENT BED — one bus per running segment: surf + wind always; an engine
-  // hum layer added only on the voyage day; a sparse gull-chirp (day) or
-  // cricket-tick (dusk/night) scheduler layered on top, RM-gated off.
+  // AMBIENT BED — keyed to the PHYSICAL scene rather than only the itinerary
+  // segment. This matters during Arrival/Return, where one segment crosses
+  // land, two different ferries, and another island. Sparse wildlife follows
+  // both location and the current clock; reduced motion gates transients.
   // =========================================================================
-  function stopAmbientNodes() {
+  function lower(v) { return String(v == null ? '' : v).toLowerCase(); }
+  function sceneInfo(seg, scene) {
+    var id = typeof scene === 'string' ? scene : (scene && scene.id) || '';
+    var family = scene && typeof scene === 'object' ? lower(scene.family) : '';
+    var s = lower(seg), k = lower(id || s);
+    var longShip = family === 'ship' || /ogasawara[-_ ]?maru|ship-outbound|ship-transit|return-ship|homebound|long[-_ ]?haul/.test(k);
+    var interShip = /inter[-_ ]?island|interisland|island[-_ ]?ferry/.test(k);
+    var island = family === 'island' || /hahajima|hinata|ogasawara|return-island|fishday|(^|[-_ ])ops($|[-_ ])/.test(k);
+    var coast = /takeshiba|chichijima|terminal|harbou?r|port|arrival/.test(k);
+    var urban = family === 'tokyo' || /tokyo|hotel/.test(k);
+
+    // Backward-compatible inference when an older caller supplies only seg.
+    if (!id) {
+      if (s === 'voyage') longShip = true;
+      else if (s === 'fishday' || s === 'ops') island = true;
+      else if (s === 'arrival') coast = true;
+      else if (s === 'load') urban = true;
+    }
+    var kind = interShip ? 'interisland-ship' : longShip ? 'long-ship' :
+      island ? 'island' : coast ? 'coast' : urban ? 'urban' : 'coast';
+    return { id: id || s || 'coast', family: family, kind: kind };
+  }
+  function timeBand(dayK) {
+    if (dayK == null || !isFinite(dayK)) return 'day';
+    var m = ((Number(dayK) % 1440) + 1440) % 1440;
+    if (m < 300 || m >= 1140) return 'night';
+    if (m < 390) return 'dawn';
+    if (m >= 1050) return 'dusk';
+    return 'day';
+  }
+  function wildlifeFor(info, band) {
+    if (info.kind === 'island') return band === 'night' || band === 'dusk' ? 'cricket' : 'gull';
+    if (info.kind === 'coast') return band === 'day' || band === 'dawn' ? 'gull' : 'none';
+    if (info.kind === 'long-ship' || info.kind === 'interisland-ship') return band === 'day' ? 'gull' : 'none';
+    return 'none';
+  }
+  function stopWildlife() {
     ambientTimers.forEach(function (id) { clearTimeout(id); });
     ambientTimers = [];
+    curWildlifeKey = null;
+  }
+  function stopAmbientNodes() {
+    stopWildlife();
     var nodes = curNodes; curNodes = [];
     var bus = ambientG; ambientG = null;
+    curBedKey = null;
     if (!ctx) return;
     if (bus) { try { bus.gain.cancelScheduledValues(now()); bus.gain.linearRampToValueAtTime(0.0001, now() + 0.3); } catch (e) { } }
     setTimeout(function () {
@@ -139,13 +185,14 @@
     g.gain.exponentialRampToValueAtTime(0.0008, t + 0.05);
     o.start(t); o.stop(t + 0.06);
   }
-  function scheduleWildlife(dayK, bus) {
-    if (RM.matches) return;   // reduced motion: keep the bed steady, skip the sparse transients
-    var day = (dayK == null) || (dayK >= 300 && dayK < 1080);   // ~05:00-18:00 = day; else dusk/night
+  function scheduleWildlife(kind, bus) {
+    stopWildlife();
+    curWildlifeKey = kind;
+    if (RM.matches || kind === 'none') return;
     function loop() {
       if (ambientG !== bus) return;   // torn down / replaced — stop the chain
-      if (day) gullChirp(bus); else cricketTick(bus);
-      var next = day ? (6000 + Math.random() * 9000) : (900 + Math.random() * 1800);
+      if (kind === 'gull') gullChirp(bus); else cricketTick(bus);
+      var next = kind === 'gull' ? (6000 + Math.random() * 9000) : (900 + Math.random() * 1800);
       var id = setTimeout(loop, next);
       ambientTimers.push(id);
     }
@@ -153,36 +200,51 @@
     ambientTimers.push(id0);
   }
 
-  function startAmbient(seg, dayK) {
+  function startAmbient(seg, dayK, scene) {
     if (!ctx || !enabled) return;
+    var info = sceneInfo(seg, scene), band = timeBand(dayK);
+    var bedKey = info.kind, wildlife = wildlifeFor(info, band);
+
+    // Renderers may safely call ambient() every simulated tick. Keep the
+    // steady bed intact unless the physical location changed; only swap the
+    // sparse wildlife scheduler when the time band changes.
+    if (ambientG && curBedKey === bedKey) {
+      if (curWildlifeKey !== wildlife) scheduleWildlife(wildlife, ambientG);
+      return;
+    }
     stopAmbientNodes();
     var bus = ctx.createGain(); bus.gain.value = 0.0001; bus.connect(master);
     bus.gain.linearRampToValueAtTime(1, now() + 1.2);
     ambientG = bus;
+    curBedKey = bedKey;
 
-    // surf: bandpass-filtered noise, a slow swell LFO breathing its gain
-    var surf = noiseSource();
-    var surfF = ctx.createBiquadFilter(); surfF.type = 'bandpass'; surfF.frequency.value = 480; surfF.Q.value = 0.6;
-    var surfG = ctx.createGain(); surfG.gain.value = 0.16;
-    surf.connect(surfF); surfF.connect(surfG); surfG.connect(bus);
-    var swell = ctx.createOscillator(); swell.type = 'sine'; swell.frequency.value = 0.08;
-    var swellG = ctx.createGain(); swellG.gain.value = 0.05;
-    swell.connect(swellG); swellG.connect(surfG.gain);
-    surf.start(); swell.start();
-    curNodes.push(surf, swell);
+    // Surf belongs at coasts/islands/ships, not inside the Tokyo hotel.
+    if (info.kind !== 'urban') {
+      var surf = noiseSource();
+      var surfF = ctx.createBiquadFilter(); surfF.type = 'bandpass'; surfF.frequency.value = info.kind.indexOf('ship') >= 0 ? 390 : 480; surfF.Q.value = 0.6;
+      var surfG = ctx.createGain(); surfG.gain.value = info.kind.indexOf('ship') >= 0 ? 0.13 : 0.16;
+      surf.connect(surfF); surfF.connect(surfG); surfG.connect(bus);
+      var swell = ctx.createOscillator(); swell.type = 'sine'; swell.frequency.value = 0.08;
+      var swellG = ctx.createGain(); swellG.gain.value = 0.05;
+      swell.connect(swellG); swellG.connect(surfG.gain);
+      surf.start(); swell.start();
+      curNodes.push(surf, swell);
+    }
 
     // wind: lowpass-filtered noise, quieter and slower still
     var wind = noiseSource();
     var windF = ctx.createBiquadFilter(); windF.type = 'lowpass'; windF.frequency.value = 900;
-    var windG = ctx.createGain(); windG.gain.value = 0.09;
+    var windG = ctx.createGain(); windG.gain.value = info.kind === 'urban' ? 0.035 : 0.09;
     wind.connect(windF); windF.connect(windG); windG.connect(bus);
     wind.start();
     curNodes.push(wind);
 
-    // the voyage day alone adds a low engine-hum drone (two lightly detuned saws)
-    if (seg === 'voyage') {
-      var hum1 = ctx.createOscillator(); hum1.type = 'sawtooth'; hum1.frequency.value = 54;
-      var hum2 = ctx.createOscillator(); hum2.type = 'sawtooth'; hum2.frequency.value = 54.6;
+    // Any ferry scene gets machinery. The long-haul Ogasawara-maru and the
+    // smaller inter-island ferry deliberately have different fundamentals.
+    if (info.kind === 'long-ship' || info.kind === 'interisland-ship') {
+      var baseHz = info.kind === 'long-ship' ? 54 : 68;
+      var hum1 = ctx.createOscillator(); hum1.type = 'sawtooth'; hum1.frequency.value = baseHz;
+      var hum2 = ctx.createOscillator(); hum2.type = 'sawtooth'; hum2.frequency.value = baseHz + 0.6;
       var humF = ctx.createBiquadFilter(); humF.type = 'lowpass'; humF.frequency.value = 220;
       var humG = ctx.createGain(); humG.gain.value = 0.07;
       hum1.connect(humF); hum2.connect(humF); humF.connect(humG); humG.connect(bus);
@@ -190,14 +252,18 @@
       curNodes.push(hum1, hum2);
     }
 
-    scheduleWildlife(dayK, bus);
+    scheduleWildlife(wildlife, bus);
   }
 
-  function ambient(seg, dayK) {
-    if (!seg) { curSeg = null; curDayK = null; stopAmbientNodes(); return; }
-    curSeg = seg; curDayK = dayK;
+  function ambient(seg, dayK, scene) {
+    if (!seg) { curSeg = null; curDayK = null; curScene = null; stopAmbientNodes(); return; }
+    curSeg = seg; curDayK = dayK; curScene = scene || null;
     if (!enabled || !ctx) return;   // remembered; the bed starts the moment sound is turned on
-    startAmbient(seg, dayK);
+    startAmbient(seg, dayK, scene);
+  }
+
+  function sceneAmbient(scene, dayK, seg) {
+    ambient(seg || curSeg || 'scene', dayK == null ? curDayK : dayK, scene);
   }
 
   // =========================================================================
@@ -298,7 +364,7 @@
       try { ctx.resume(); } catch (e) { }
       try { master.gain.cancelScheduledValues(now()); master.gain.linearRampToValueAtTime(MASTER_ON, now() + 0.5); } catch (e) { }
       enabled = true; savePref(true);
-      if (curSeg) startAmbient(curSeg, curDayK);
+      if (curSeg) startAmbient(curSeg, curDayK, curScene);
     } else {
       enabled = false; savePref(false);
       try { master.gain.cancelScheduledValues(now()); master.gain.linearRampToValueAtTime(0, now() + 0.4); } catch (e) { }
@@ -308,7 +374,20 @@
     return enabled;
   }
 
-  var API = { enabled: false, toggle: toggle, cue: cue, ambient: ambient };
+  var API = { enabled: false, toggle: toggle, cue: cue, ambient: ambient, scene: sceneAmbient };
+
+  // Live preference changes also update the transient scheduler. The steady
+  // bed remains stable; switching to reduce stops chirps immediately.
+  function reducedMotionChanged() {
+    if (!ambientG || !curSeg) return;
+    if (RM.matches) stopWildlife();
+    else {
+      var info = sceneInfo(curSeg, curScene);
+      scheduleWildlife(wildlifeFor(info, timeBand(curDayK)), ambientG);
+    }
+  }
+  if (RM.addEventListener) RM.addEventListener('change', reducedMotionChanged);
+  else if (RM.addListener) RM.addListener(reducedMotionChanged);
 
   // Optimistic restore, NEVER a forced resume: some browsers grant an origin autoplay
   // after enough past engagement, so a brand-new AudioContext can come up already

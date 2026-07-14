@@ -68,11 +68,12 @@
   var _dusk = 0;   // view.dusk resolved 0..1 (report-on-stage evening grade)
   function lightFrame(sim, view) {
     var minute = sim && sim.mode === 'minute' && typeof sim.clockMin === 'number';
+    var dayMin = minute ? clockOfDay(sim.clockMin) : null;
     _dusk = (view.dusk === true) ? 1 : (typeof view.dusk === 'number' ? clamp(view.dusk, 0, 1) : 0);
-    var n = minute ? nightAmount(sim.clockMin) : (view.night ? 1 : 0);
+    var n = minute ? nightAmount(dayMin) : (view.night ? 1 : 0);
     if (_dusk > 0) n = Math.max(n, 0.82 * _dusk);          // dusk floor: lanterns bloom, water moonlights
     LIGHT.night = n;
-    var dayK = minute ? clamp((sim.clockMin - SKY_MIN) / (SKY_MAX - SKY_MIN), 0, 1) : 0.5;
+    var dayK = minute ? clamp((dayMin - SKY_MIN) / (SKY_MAX - SKY_MIN), 0, 1) : 0.5;
     if (_dusk > 0) dayK = lerp(dayK, 0.94, _dusk);         // pull the sun low over the ocean for the dusk grade
     LIGHT.dayK = dayK;
     var cosA = Math.cos(dayK * Math.PI);                   // +1 dawn → 0 noon → -1 dusk
@@ -227,6 +228,370 @@
   };
 
   // =========================================================================
+  // ROUTE-AWARE PHYSICAL SCENES — presentation-only, schedule-driven.
+  //
+  // These are places and vessels, not day names. A segment may cross several
+  // profiles; sceneProfile follows the solved schedule (or explicit scene
+  // metadata supplied by newer engine builds) without mutating simulation data.
+  // The return direction is intentionally marked inferred until the user
+  // confirms that it is the exact reverse of the outbound route.
+  // =========================================================================
+  function profile(id, family, stationSet, en, jp, kind, vesselId, flags) {
+    return { id: id, family: family, stationSet: stationSet, en: en, jp: jp,
+      kind: kind, stopId: id === 'route-overview' ? null : id,
+      vesselId: vesselId || null, flags: flags || {} };
+  }
+  var SCENE_PROFILES = {
+    'tokyo-hotel': profile('tokyo-hotel', 'tokyo', 'land', 'TOKYO HOTEL', '東京・ホテル', 'hotel', null,
+      { water: false, seaLife: false, localBoat: false, guests: true, guestsRequired: true, showCrew: true }),
+    'takeshiba-terminal': profile('takeshiba-terminal', 'tokyo', 'land', 'TAKESHIBA TERMINAL', '竹芝客船ターミナル', 'terminal', 'ogasawara-maru',
+      { water: true, seaLife: false, localBoat: false, guests: true, guestsRequired: true, showCrew: true }),
+    'ogasawara-maru': profile('ogasawara-maru', 'ship', 'voyage', 'OGASAWARA-MARU', 'おがさわら丸', 'longhaul', 'ogasawara-maru',
+      { water: true, seaLife: false, localBoat: false, guests: true, guestsRequired: true, showCrew: true }),
+    'chichijima-transfer': profile('chichijima-transfer', 'island', 'land', 'CHICHIJIMA · TRANSFER', '父島・乗り継ぎ', 'transfer', null,
+      { water: true, seaLife: false, localBoat: false, guests: true, guestsRequired: true, showCrew: true }),
+    'interisland-ferry': profile('interisland-ferry', 'ship', 'interisland', 'INTER-ISLAND VESSEL · NAME/TIMES UNCONFIRMED', '島間船・船名／時刻未確認', 'interisland', 'interisland-vessel',
+      { water: true, seaLife: false, localBoat: false, guests: true, guestsRequired: true, showCrew: true }),
+    'hahajima-hinata': profile('hahajima-hinata', 'island', 'land', 'HAHAJIMA · HINATA', '母島・ひなた', 'hahajima', null,
+      { water: true, seaLife: true, localBoat: true, guests: true, guestsRequired: false, showCrew: true }),
+    'route-overview': profile('route-overview', 'overview', 'overview', 'TOKYO → HAHAJIMA · ROUTE', '東京 → 母島・行程', 'overview', null,
+      { water: false, seaLife: false, localBoat: false, guests: false, guestsRequired: false, showCrew: false })
+  };
+  var _scene = SCENE_PROFILES['hahajima-hinata'];
+
+  var PHYSICAL_IDS = {
+    'tokyo-hotel': 1, 'takeshiba-terminal': 1, 'ogasawara-maru': 1,
+    'chichijima-transfer': 1, 'interisland-ferry': 1,
+    'hahajima-hinata': 1, 'route-overview': 1
+  };
+  var LEGACY_SCENE_ALIASES = {
+    'tokyo-load': 'tokyo-hotel',
+    'ship-outbound': 'ogasawara-maru',
+    'ship-transit': 'ogasawara-maru',
+    'return-ship': 'ogasawara-maru',
+    'tokyo-return': 'takeshiba-terminal',
+    'return-island': 'hahajima-hinata',
+    'ogasawara': 'hahajima-hinata'
+  };
+
+  function copyObj(o) { var x = {}, k; for (k in o) x[k] = o[k]; return x; }
+  function directedProfile(p, direction) {
+    if (!p || !direction || p.routeDirection === direction) return p;
+    var out = copyObj(p); out.flags = copyObj(p.flags || {}); out.routeDirection = direction;
+    if (direction === 'return') {
+      out.inferred = true;
+      out.en = p.en + ' · RETURN (INFERRED)';
+      out.jp = p.jp + '・帰路（推定）';
+    }
+    return out;
+  }
+  function sceneIdValue(v) {
+    if (!v) return null;
+    if (typeof v === 'object') v = v.id || v.sceneId || v.locationId;
+    if (typeof v !== 'string') return null;
+    var s = v.toLowerCase().replace(/_/g, '-');
+    if (PHYSICAL_IDS[s]) return s;
+    if (LEGACY_SCENE_ALIASES[s]) return LEGACY_SCENE_ALIASES[s];
+    if (s === 'tokyo' || s === 'takeshiba' || s === 'tokyo-terminal') return 'takeshiba-terminal';
+    if (s === 'hotel' || s === 'tokyo-load') return 'tokyo-hotel';
+    if (s === 'chichijima' || s === 'futami' || s === 'transfer') return 'chichijima-transfer';
+    if (s === 'interisland' || s === 'inter-island' || s === 'interisland-vessel' || s === 'local-ferry') return 'interisland-ferry';
+    if (s === 'hahajima' || s === 'hinata' || s === 'ogasawara') return 'hahajima-hinata';
+    return null;
+  }
+  function simClock(sim) {
+    return sim && sim.mode === 'minute' && typeof sim.clockMin === 'number' ? sim.clockMin : null;
+  }
+  var _routeResolveCache = { plan: null, seg: '', minute: null, sceneId: null };
+  function engineRouteScene(sim, seg, now) {
+    if (!sim || now == null || !P || typeof P.routeSceneId !== 'function' || !sim.plan) return null;
+    if (_routeResolveCache.plan === sim.plan && _routeResolveCache.seg === seg && _routeResolveCache.minute === now) return _routeResolveCache.sceneId;
+    try {
+      var id = sceneIdValue(P.routeSceneId(sim.plan, seg, now));
+      _routeResolveCache = { plan: sim.plan, seg: seg, minute: now, sceneId: id };
+      return id;
+    }
+    catch (e) { return null; }
+  }
+  function taskNameText(t) {
+    var n = t && t.name;
+    return (((t && t.id) || '') + ' ' + (typeof n === 'string' ? n : ((n && n.en) || '')) + ' ' + ((n && n.jp) || '')).replace(/_/g, '-');
+  }
+  function scheduleRows(sim) {
+    var out = [], bt = sim && sim.sched && sim.sched.byTask, tasks = sim && sim.tasks || [], by = {}, i, k, t, e;
+    for (i = 0; i < tasks.length; i++) by[tasks[i].id] = tasks[i];
+    if (!bt) return out;
+    for (k in bt) {
+      e = bt[k]; if (!e || typeof e.start !== 'number') continue;
+      t = by[k] || { id: k, name: { en: k, jp: k } };
+      out.push({ id: k, task: t, start: e.start, end: typeof e.end === 'number' ? e.end : e.start, text: taskNameText(t).toLowerCase() });
+    }
+    out.sort(function (a, b) { return a.start - b.start || a.end - b.end || (a.id < b.id ? -1 : 1); });
+    return out;
+  }
+  function rowMatch(rows, tests, last) {
+    var hit = null, i, j;
+    for (i = 0; i < rows.length; i++) {
+      for (j = 0; j < tests.length; j++) {
+        if (tests[j].test(rows[i].text)) { hit = rows[i]; break; }
+      }
+      if (hit && !last) return hit;
+    }
+    return hit;
+  }
+  function explicitScene(sim, rows, now) {
+    var direct = sceneIdValue(sim && (sim.sceneId || sim.routeScene || sim.locationId || (sim.routeState && sim.routeState.sceneId)));
+    if (direct) return direct;
+    if (now == null) return null;
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i]; if (now < r.start || now >= r.end) continue;
+      direct = sceneIdValue(r.task && (r.task.sceneId || r.task.routeScene || r.task.locationId || r.task.location));
+      if (direct) return direct;
+    }
+    return null;
+  }
+  function arrivalScene(sim) {
+    var now = simClock(sim), rows = scheduleRows(sim), primary = engineRouteScene(sim, 'arrival', now), direct = explicitScene(sim, rows, now);
+    if (primary) return SCENE_PROFILES[primary];
+    if (direct) return SCENE_PROFILES[direct];
+    if (now == null) return SCENE_PROFILES['chichijima-transfer'];
+    var cross = rowMatch(rows, [/^hd-a-cross\b/, /^hd-a-.*inter.*(cross|voyage|sail)/, /inter.?island crossing/, /島間航海/]);
+    var disembark = rowMatch(rows, [/^hd-a-(disembark|ferrycheck|transfer|board)\b/, /disembark.*chichijima/, /父島.*(下船|乗り換|乗換)/]);
+    var hahajima = rowMatch(rows, [/^hd-a-(checkin|intake|safety|gearstow|headcount|dinnerprep|dinnerserve|foodsource)\b/, /arrive on hahajima/, /hinata.*(check|intake|brief|meal|food)/, /母島到着/]);
+    if (cross) {
+      if (now >= cross.end) return SCENE_PROFILES['hahajima-hinata'];
+      if (now >= cross.start) return SCENE_PROFILES['interisland-ferry'];
+    }
+    if (hahajima && now >= hahajima.start) return SCENE_PROFILES['hahajima-hinata'];
+    if (disembark && now >= disembark.start) return SCENE_PROFILES['chichijima-transfer'];
+    // Before the Chichijima transfer starts, the party is still aboard the
+    // Ogasawara-maru. No made-up connection time is used.
+    return SCENE_PROFILES['ogasawara-maru'];
+  }
+  function returnScene(sim) {
+    var now = simClock(sim), rows = scheduleRows(sim), primary = engineRouteScene(sim, 'return', now), direct = explicitScene(sim, rows, now), p;
+    if (primary) { p = SCENE_PROFILES[primary]; return directedProfile(p, 'return'); }
+    if (direct) { p = SCENE_PROFILES[direct]; return directedProfile(p, 'return'); }
+    if (now == null) return directedProfile(SCENE_PROFILES['hahajima-hinata'], 'return');
+    var inter = rowMatch(rows, [/^hd-r-(interisland|local-cross|cross)\b/, /inter.?island crossing from hahajima/, /母島.*父島.*島間航海/]);
+    var transfer = rowMatch(rows, [/^hd-r-(chichi-transfer|chichijima-transfer|transfer)\b/, /change ships.*chichijima/, /父島.*(乗り継|乗換|船の乗)/]);
+    var longhaul = rowMatch(rows, [/^hd-r-(sail|longhaul|ogasawara-sail)\b/, /ogasawara.?maru voyage.*takeshiba/, /おがさわら丸.*竹芝/]);
+    var tokyo = rowMatch(rows, [/^hd-r-(tokyocount|takeshiba-arrival)\b/, /takeshiba arrival headcount/, /東京.*(帰着|点呼)/, /竹芝到着/]);
+    if (tokyo && now >= tokyo.start) return directedProfile(SCENE_PROFILES['takeshiba-terminal'], 'return');
+    if (longhaul) {
+      if (now >= longhaul.end && !tokyo) return directedProfile(SCENE_PROFILES['takeshiba-terminal'], 'return');
+      if (now >= longhaul.start) return directedProfile(SCENE_PROFILES['ogasawara-maru'], 'return');
+    }
+    if (transfer && now >= transfer.start) {
+      if (now < transfer.end || !longhaul) return directedProfile(SCENE_PROFILES['chichijima-transfer'], 'return');
+    }
+    if (inter) {
+      if (now >= inter.end) return directedProfile(SCENE_PROFILES['chichijima-transfer'], 'return');
+      if (now >= inter.start) return directedProfile(SCENE_PROFILES['interisland-ferry'], 'return');
+    }
+    return directedProfile(SCENE_PROFILES['hahajima-hinata'], 'return');
+  }
+  function loadScene(sim) {
+    var now = simClock(sim), rows = scheduleRows(sim), primary = engineRouteScene(sim, 'load', now), direct = explicitScene(sim, rows, now);
+    if (primary) return SCENE_PROFILES[primary];
+    if (direct) return SCENE_PROFILES[direct];
+    if (now == null) return SCENE_PROFILES['tokyo-hotel'];
+    var leave = rowMatch(rows, [/^hd-l-(truck|hotel-transfer|depart-hotel)\b/, /leave.*hotel.*takeshiba/, /ホテル出発.*竹芝/]);
+    // 10:00 is user-supplied; it is the only fallback boundary here. Breakfast
+    // timing and terminal travel duration remain deliberately unspecified.
+    var terminalAt = leave ? leave.start : 600;
+    return now >= terminalAt ? SCENE_PROFILES['takeshiba-terminal'] : SCENE_PROFILES['tokyo-hotel'];
+  }
+  function sceneForSegment(seg, sim) {
+    if (seg === 'load') return loadScene(sim);
+    if (seg === 'voyage') return SCENE_PROFILES['ogasawara-maru'];
+    if (seg === 'arrival') return arrivalScene(sim);
+    if (seg === 'return') return returnScene(sim);
+    if (seg === 'ops' || seg === 'fishday') return SCENE_PROFILES['hahajima-hinata'];
+    return SCENE_PROFILES['route-overview'];
+  }
+  function sceneProfile(sim, view) {
+    var requested = view && typeof view.mapProfile === 'string' ? view.mapProfile :
+      (sim && sim.segment ? sim.segment : 'fishday');
+    var req = requested.toLowerCase().replace(/_/g, '-');
+    if (PHYSICAL_IDS[req]) return directedProfile(SCENE_PROFILES[req],
+      (req !== 'route-overview' && sim && sim.segment === 'return') ? 'return' : null);
+    if (req === 'all') {
+      // A real Whole Trip orchestrator passes its current segment sim; the
+      // static planning/report surfaces pass the legacy all-day sim.
+      return sim && sim.segment && sim.segment !== 'all' ? sceneForSegment(sim.segment, sim) : SCENE_PROFILES['route-overview'];
+    }
+    if (req === 'tokyo-load') return loadScene(sim);
+    if (req === 'ship-transit') return sim && sim.segment === 'return' ? returnScene(sim) :
+      (sim && sim.segment === 'arrival' ? arrivalScene(sim) : SCENE_PROFILES['ogasawara-maru']);
+    if (req === 'return-ship') return returnScene(sim);
+    if (req === 'ogasawara') return sceneForSegment(sim && sim.segment || 'fishday', sim);
+    if (LEGACY_SCENE_ALIASES[req]) return directedProfile(SCENE_PROFILES[LEGACY_SCENE_ALIASES[req]],
+      req.indexOf('return') >= 0 ? 'return' : null);
+    return sceneForSegment(req, sim);
+  }
+
+  // Location-specific visual station maps. Logical task ids never change;
+  // stationForScene maps them onto a visible fixture in the current place.
+  var SCENE_STATION_OVERRIDES = {
+    'tokyo-hotel': {
+      command: { name: { en: 'Hotel lobby', jp: 'ホテルロビー' }, icon: '📋', x: 0.28, y: 0.44, hidden: false, hub: false },
+      lodging: { name: { en: 'Guest rooms', jp: '客室' }, icon: '🏨', x: 0.16, y: 0.72, hidden: false, hub: false },
+      mess: { name: { en: 'Breakfast room', jp: '朝食会場' }, icon: '🍳', x: 0.43, y: 0.64, hidden: false, hub: false },
+      port: { x: 0.28, y: 0.44, hidden: true }, vessel: { x: 0.28, y: 0.44, hidden: true },
+      finance: { x: 0.28, y: 0.44, hidden: true }, clinic: { x: 0.16, y: 0.72, hidden: true }
+    },
+    'takeshiba-terminal': {
+      command: { name: { en: 'Group assembly', jp: '集合・本部' }, icon: '📋', x: 0.30, y: 0.44, hidden: false, hub: false },
+      mess: { name: { en: 'Terminal concourse', jp: 'ターミナルコンコース' }, icon: '🧳', x: 0.38, y: 0.68, hidden: false, hub: false },
+      port: { name: { en: 'Takeshiba berth', jp: '竹芝・乗船口' }, icon: '⚓', x: 0.55, y: 0.55, hidden: false },
+      vessel: { name: { en: 'Ogasawara-maru boarding', jp: 'おがさわら丸・乗船' }, icon: '🚢', x: 0.78, y: 0.62, hidden: false },
+      lodging: { x: 0.30, y: 0.44, hidden: true }, finance: { x: 0.30, y: 0.44, hidden: true }, clinic: { x: 0.30, y: 0.44, hidden: true }
+    },
+    'chichijima-transfer': {
+      command: { name: { en: 'Transfer desk', jp: '乗継ぎ受付' }, icon: '📋', x: 0.30, y: 0.44, hidden: false, hub: false },
+      lodging: { name: { en: 'Waiting area', jp: '待合所' }, icon: '🪑', x: 0.17, y: 0.72, hidden: false, hub: false },
+      mess: { name: { en: 'Transfer provisions', jp: '乗継ぎ物資' }, icon: '📦', x: 0.30, y: 0.44, hidden: true, hub: false },
+      port: { name: { en: 'Chichijima arrival berth', jp: '父島・到着岸壁' }, icon: '⚓', x: 0.53, y: 0.56, hidden: false },
+      vessel: { name: { en: 'Inter-island boarding', jp: '島間航路・乗船' }, icon: '⛴', x: 0.78, y: 0.66, hidden: false },
+      finance: { x: 0.30, y: 0.44, hidden: true }, clinic: { x: 0.30, y: 0.44, hidden: true }
+    },
+    'interisland-ferry': {
+      command: { x: 0.72, y: 0.31, hidden: true, hub: false },
+      lodging: { name: { en: 'Passenger cabin', jp: '客室' }, icon: '💺', x: 0.66, y: 0.50, hidden: false, hub: false },
+      mess: { name: { en: 'Passenger saloon', jp: '客室サロン' }, icon: '🍵', x: 0.78, y: 0.62, hidden: false, hub: false },
+      port: { name: { en: 'Baggage deck', jp: '手荷物甲板' }, icon: '📦', x: 0.60, y: 0.72, hidden: false },
+      vessel: { name: { en: 'Wheelhouse', jp: '操舵室' }, icon: '🧭', x: 0.88, y: 0.42, hidden: false },
+      finance: { x: 0.78, y: 0.62, hidden: true }, clinic: { x: 0.66, y: 0.50, hidden: true }
+    },
+    'hahajima-hinata': {
+      command: { x: 0.30, y: 0.44, hidden: true },
+      mess: { name: { en: 'Hinata · Hahajima', jp: 'ひなた・母島' }, icon: '🍽️', x: 0.30, y: 0.44, hidden: false, hub: true },
+      lodging: { name: { en: 'Hahajima lodging', jp: '母島・宿' }, icon: '🏨', x: 0.13, y: 0.78, hidden: false },
+      port: { name: { en: 'Hahajima port', jp: '母島・港' }, icon: '⚓', x: 0.52, y: 0.56, hidden: false },
+      vessel: { name: { en: 'Fishing ground', jp: '釣り場' }, icon: '🪨', x: 0.82, y: 0.72, hidden: false },
+      finance: { x: 0.30, y: 0.44, hidden: true }, clinic: { x: 0.30, y: 0.44, hidden: true }
+    }
+  };
+  var PROFILE_ANCHORS = {
+    'tokyo-hotel': { port: 'command', vessel: 'command', finance: 'command', clinic: 'lodging' },
+    'takeshiba-terminal': { lodging: 'command', finance: 'command', clinic: 'command' },
+    'ogasawara-maru': { command: 'purser', finance: 'purser', clinic: 'deck', port: 'hold', vessel: 'deck', lodging: 'cabins', mess: 'dining' },
+    'chichijima-transfer': { mess: 'command', finance: 'command', clinic: 'command' },
+    'interisland-ferry': { command: 'vessel', finance: 'mess', clinic: 'lodging' },
+    'hahajima-hinata': { command: 'mess', finance: 'mess', clinic: 'mess' }
+  };
+  var PROFILE_LINKS = {
+    'tokyo-hotel': [['lodging', 'command'], ['command', 'mess']],
+    'takeshiba-terminal': [['command', 'mess'], ['command', 'port'], ['mess', 'port'], ['port', 'vessel']],
+    'ogasawara-maru': [['hold', 'cabins'], ['cabins', 'purser'], ['cabins', 'dining'], ['dining', 'deck'], ['purser', 'deck']],
+    'chichijima-transfer': [['lodging', 'command'], ['command', 'port'], ['port', 'vessel']],
+    'interisland-ferry': [['port', 'lodging'], ['lodging', 'mess'], ['mess', 'vessel']],
+    'hahajima-hinata': [['mess', 'port'], ['mess', 'lodging'], ['port', 'vessel']],
+    'route-overview': []
+  };
+  var SCENE_STATION_CACHE = {};
+
+  function visualStation(st, profile0) {
+    if (!st) return null;
+    profile0 = profile0 || _scene;
+    var out = {}, k, ov = (SCENE_STATION_OVERRIDES[profile0.id] || {})[st.id] || null;
+    for (k in st) out[k] = st[k];
+    if (ov) for (k in ov) out[k] = ov[k];
+    return out;
+  }
+  function stationsForProfile(profile0) {
+    profile0 = profile0 || _scene;
+    if (SCENE_STATION_CACHE[profile0.id]) return SCENE_STATION_CACHE[profile0.id];
+    if (profile0.stationSet === 'overview') return (SCENE_STATION_CACHE[profile0.id] = []);
+    var base = profile0.stationSet === 'voyage' && P.VOYAGE_STATIONS ? P.VOYAGE_STATIONS : P.STATIONS;
+    var out = [], i;
+    for (i = 0; i < base.length; i++) out.push(visualStation(base[i], profile0));
+    SCENE_STATION_CACHE[profile0.id] = out;
+    return out;
+  }
+  function anchorIdForProfile(profile0, id) {
+    var a = PROFILE_ANCHORS[profile0.id] || {};
+    return a[id] || id;
+  }
+  function stationsForScene(sim, view) { return stationsForProfile(sceneProfile(sim, view)); }
+  function stationForScene(id, sim, view) {
+    var p0 = sceneProfile(sim, view), anchorId = anchorIdForProfile(p0, id), list = stationsForProfile(p0), i;
+    for (i = 0; i < list.length; i++) if (list[i].id === anchorId) return list[i];
+    return visualStation(P.station(anchorId), p0);
+  }
+  function linksForScene(sim, view) {
+    var p0 = sceneProfile(sim, view), src = PROFILE_LINKS[p0.id] || [], out = [], i;
+    for (i = 0; i < src.length; i++) out.push(src[i].slice());
+    return out;
+  }
+  function topologyForScene(sim, view) {
+    var p0 = sceneProfile(sim, view), ss = stationsForProfile(p0), nodes = [], i;
+    for (i = 0; i < ss.length; i++) if (!ss[i].hidden) nodes.push(ss[i].id);
+    return { profileId: p0.id, nodes: nodes, links: linksForScene(sim, view),
+      routeDirection: p0.routeDirection || 'outbound', inferred: !!p0.inferred, vesselId: p0.vesselId || null };
+  }
+  function domFlagsForScene(sim, view) {
+    var p0 = sceneProfile(sim, view), f = copyObj(p0.flags || {});
+    // The ambient fishing boats belong to Hahajima operations, never to the
+    // return transfer even though its first frame is at the same island.
+    if (p0.id === 'hahajima-hinata' && sim && sim.segment === 'return') f.localBoat = false;
+    if (p0.id === 'hahajima-hinata' && sim && (sim.segment === 'arrival' || sim.segment === 'return')) f.guestsRequired = true;
+    f.profileId = p0.id; f.family = p0.family; f.vesselId = p0.vesselId || null;
+    f.routeDirection = p0.routeDirection || (sim && sim.segment === 'return' ? 'return' : 'outbound');
+    f.inferred = !!p0.inferred || !!(sim && sim.segment === 'return');
+    return f;
+  }
+
+  var ROUTE_POINTS = {
+    'tokyo-hotel': { x: 0.11, y: 0.31, en: 'Tokyo hotel', jp: '東京・ホテル' },
+    'takeshiba-terminal': { x: 0.23, y: 0.45, en: 'Takeshiba', jp: '竹芝' },
+    'ogasawara-maru': { x: 0.47, y: 0.42, en: 'Ogasawara-maru', jp: 'おがさわら丸' },
+    'chichijima-transfer': { x: 0.67, y: 0.50, en: 'Chichijima', jp: '父島' },
+    'interisland-ferry': { x: 0.79, y: 0.59, en: 'Inter-island vessel', jp: '島間船' },
+    'hahajima-hinata': { x: 0.90, y: 0.71, en: 'Hahajima · Hinata', jp: '母島・ひなた' }
+  };
+  function routePoint(sceneId, stationId, view) {
+    var sid = sceneIdValue(sceneId) || 'hahajima-hinata', q = ROUTE_POINTS[sid];
+    if (!q) return null;
+    var ids = ['command','port','vessel','lodging','mess','finance','clinic','hold','cabins','dining','deck','purser'];
+    var idx = ids.indexOf(stationId), ring = idx < 0 ? 0 : idx % 6;
+    var ang = ring * Math.PI / 3, rad = idx < 0 ? 0 : 0.012 + Math.floor(idx / 6) * 0.007;
+    return { x: q.x + Math.cos(ang) * rad, y: q.y + Math.sin(ang) * rad,
+      name: ((view && view.lang) || _lang) === 'ja' ? q.jp : q.en, profileId: sid, stationId: stationId || null };
+  }
+  function routePoints(view) {
+    var order = ['tokyo-hotel','takeshiba-terminal','ogasawara-maru','chichijima-transfer','interisland-ferry','hahajima-hinata'];
+    var out = [], i; for (i = 0; i < order.length; i++) out.push(routePoint(order[i], null, view)); return out;
+  }
+
+  // Aggregate logical simulation stations into their visible physical fixture.
+  function stationStateForScene(st, sim, view, tintMap) {
+    var p0 = sceneProfile(sim, view);
+    if (typeof st === 'string') st = stationForScene(st, sim, view);
+    var out = { crewCount: 0, dominantProblem: null, problemStationId: st ? st.id : null, readiness: 'none' };
+    if (!st || !sim || !sim.stations) return out;
+    var terr = tintMap || (P.stationReadiness ? P.stationReadiness(sim) : {});
+    var tr = { none: 0, green: 1, amber: 2, red: 3 };
+    var pr = { low: 1, med: 2, high: 3 }, bestProblem = -1;
+    for (var i = 0; i < sim.stations.length; i++) {
+      var ss = sim.stations[i];
+      if (anchorIdForProfile(p0, ss.id) !== st.id) continue;
+      var ssCrew = (ss.crewIds || []).length;
+      out.crewCount += ssCrew;
+      var tv = terr[ss.id] || 'none';
+      if ((tr[tv] || 0) > (tr[out.readiness] || 0)) out.readiness = tv;
+      if (ss.dominantProblem && ssCrew > 0) {
+        var rank = pr[ss.dominantProblem.severity] || 0;
+        if (rank > bestProblem) {
+          bestProblem = rank; out.dominantProblem = ss.dominantProblem; out.problemStationId = ss.id;
+        }
+      }
+    }
+    return out;
+  }
+
+  // =========================================================================
   // SHARED HELPERS — every draw layer uses these; do not re-implement locally.
   // =========================================================================
 
@@ -239,6 +604,7 @@
 
   function lerp(a, b, k) { return a + (b - a) * k; }
   function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
+  function clockOfDay(v) { var m = v % 1440; return m < 0 ? m + 1440 : m; }
   function smoothstep(k) { k = clamp(k, 0, 1); return k * k * (3 - 2 * k); }   // the app's e = k*k*(3-2*k)
   function rgba(rgb, a) { return 'rgba(' + rgb + ',' + a + ')'; }              // rgb = 'r,g,b' string
   function mixRGB(a, b, k) {                                                   // a,b = [r,g,b] arrays → 'r,g,b'
@@ -253,10 +619,10 @@
   function py(ny, view) { return ny * view.h; }
   function stationPx(st, view) { return { x: st.x * view.w, y: st.y * view.h }; }
   // night check on the minute clock (app.js:1205)
-  function isNight(clockMin) { return clockMin < NIGHT_END_MIN || clockMin >= NIGHT_START_MIN; }
+  function isNight(clockMin) { var m = clockOfDay(clockMin); return m < NIGHT_END_MIN || m >= NIGHT_START_MIN; }
   // interpolated sky stop for a clock minute → { top:'r,g,b', hor:'r,g,b', alpha:Number }
   function skyAt(clockMin) {
-    var m = clamp(clockMin, SKY_MIN, SKY_MAX), i = 0;
+    var m = clamp(clockOfDay(clockMin), SKY_MIN, SKY_MAX), i = 0;
     while (i < SKY.length - 2 && SKY[i + 1][0] <= m) i++;
     var a = SKY[i], b = SKY[i + 1], k = clamp((m - a[0]) / Math.max(1, b[0] - a[0]), 0, 1);
     return { top: mixRGB(a[1], b[1], k), hor: mixRGB(a[2], b[2], k), alpha: a[3] + (b[3] - a[3]) * k };
@@ -559,7 +925,7 @@
   // in minute mode, fall back to (view.night ? 1 : 0) yourself.
   function nightAmount(clockMin) {
     if (typeof clockMin !== 'number') return 0;
-    var m = clamp(clockMin, SKY_MIN, SKY_MAX);
+    var m = clamp(clockOfDay(clockMin), SKY_MIN, SKY_MAX);
     var dawn = 1 - smoothstep((m - 270) / 120);   // 1 before 04:30 → 0 by 06:30
     var dusk = smoothstep((m - 1050) / 120);      // 0 before 17:30 → 1 by 19:30
     return dawn > dusk ? dawn : dusk;
@@ -612,6 +978,7 @@
   // =========================================================================
   function scene(ctx, sim, t, view) {
     _lang = view.lang || 'en';
+    _scene = sceneProfile(sim, view);
     scale = (typeof view.scale === 'number' && view.scale > 0)
       ? view.scale
       : clamp(Math.min(view.w / 1000, view.h / 560), 1, 1.7);
@@ -645,9 +1012,9 @@
     drawRoads(ctx, sim, t, view);        // 4  dashed ADJ segments, marching dashes
     drawCloudShadows(ctx, sim, t, view); // 4b drifting cloud shade over land+sea (day only)
     drawSky(ctx, sim, t, view);          // 5  day-phase light grade UNDER actors
-    drawGuests(ctx, sim, t, view);       // 6  13 yukata pawns (gated by view.guestsVisible)
-    drawBoat(ctx, sim, t, view);         // 7  skiff on the bay arc + pooled wakes
-    drawDeck(ctx, sim, t, view);         // 7b voyage-only: one ship-deck plane under the station cluster (§3 ship-map)
+    drawDeck(ctx, sim, t, view);         // 6  route vessel under passengers/crew
+    drawGuests(ctx, sim, t, view);       // 7  travelling party / island ambience
+    drawBoat(ctx, sim, t, view);         // 7b Hahajima-only local fishing skiff
     drawStations(ctx, sim, t, view);     // 8  landmarks: halo tint, bevel disc, name, rings, lanterns
     drawStallMarkers(ctx, sim, t, view); // 8b report-on-stage: glow pulses where idle/rework accrued
     drawParticles(ctx, sim, t, view);    // 8c seasoning: chimney smoke, cook-steam, dusk fireflies
@@ -658,6 +1025,7 @@
 
     drawDusk(ctx, view);               // HUD 1: full-canvas evening unifier (view.dusk, outside cam)
     drawStamp(ctx, t, view);           // HUD 2: hanko grade stamp in the stage corner (view.stamp)
+    drawSceneLabel(ctx, view);         // HUD 3: short, explicit location/status chip
   }
 
   
@@ -946,7 +1314,170 @@ function drawGround_grass(ctx, t, view) {
 // so any resize or DPR change rebuilds it. The LIVE pieces (grass wind,
 // horizon glow, vignette, banner ring) stay per-frame on top.
 var _groundCache = null, _groundKey = '';
-function drawGround_static(gctx, w, h) {
+function groundCacheKey(profile, w, h, dpr, sc) {
+  return profile.id + (profile.id === 'route-overview' ? '|' + _lang : '') + '|' + w + 'x' + h + '@' + dpr + '/' + sc.toFixed(4);
+}
+function drawGround_tokyoStatic(gctx, w, h) {
+  drawGround_ellipseBase(gctx, w, h);
+  gctx.save();
+  drawGround_landPath(gctx, w, h);
+  gctx.clip();
+
+  // Cool paved loading yard instead of moss/contours. The diagonal grid reads
+  // as warehouse apron markings while retaining the washi/lacquer palette.
+  var yard = gctx.createLinearGradient(0, 0, w * 0.6, h);
+  yard.addColorStop(0, 'rgb(72,82,91)');
+  yard.addColorStop(0.55, 'rgb(51,61,70)');
+  yard.addColorStop(1, 'rgb(31,39,47)');
+  gctx.fillStyle = yard; gctx.fillRect(0, 0, w, h);
+  gctx.strokeStyle = rgba(PAL.washiWarm, 0.09); gctx.lineWidth = 1 * scale;
+  gctx.beginPath();
+  var gx, gy;
+  for (gx = -h; gx < w * 0.7; gx += 42 * scale) { gctx.moveTo(gx, h); gctx.lineTo(gx + h, 0); }
+  for (gy = 0; gy < h; gy += 54 * scale) { gctx.moveTo(0, gy); gctx.lineTo(w * 0.56, gy); }
+  gctx.stroke();
+
+  // Tokyo waterfront silhouette — deliberately graphic rather than literal,
+  // so it belongs to the established procedural map style.
+  var buildings = [
+    [0.025,0.17,0.065,0.19], [0.095,0.11,0.052,0.25], [0.153,0.20,0.075,0.16],
+    [0.234,0.08,0.058,0.28], [0.298,0.15,0.086,0.21], [0.390,0.12,0.052,0.24],
+    [0.448,0.19,0.070,0.17]
+  ];
+  var i, b, bx, by, bw, bh;
+  for (i = 0; i < buildings.length; i++) {
+    b = buildings[i]; bx = b[0] * w; by = b[1] * h; bw = b[2] * w; bh = b[3] * h;
+    var bg = gctx.createLinearGradient(0, by, 0, by + bh);
+    bg.addColorStop(0, rgba(liftRGB(PAL.indigo, 20), 0.96));
+    bg.addColorStop(1, rgba(PAL.indigoDeep, 0.98));
+    gctx.fillStyle = bg; gctx.fillRect(bx, by, bw, bh);
+    gctx.fillStyle = rgba(PAL.goldPale, 0.22);
+    var wx, wy;
+    for (wy = by + 8 * scale; wy < by + bh - 4 * scale; wy += 10 * scale) {
+      for (wx = bx + 7 * scale; wx < bx + bw - 4 * scale; wx += 11 * scale) gctx.fillRect(wx, wy, 2 * scale, 2 * scale);
+    }
+  }
+  // A restrained red lattice tower makes Tokyo legible even at thumbnail size.
+  var tx = w * 0.19, tBase = h * 0.34, tTop = h * 0.045;
+  gctx.strokeStyle = rgba(PAL.hanko, 0.88); gctx.lineWidth = 2.2 * scale;
+  gctx.beginPath(); gctx.moveTo(tx - 18 * scale, tBase); gctx.lineTo(tx, tTop); gctx.lineTo(tx + 18 * scale, tBase); gctx.stroke();
+  gctx.lineWidth = 1 * scale;
+  for (i = 1; i <= 5; i++) { var ty = tTop + (tBase - tTop) * i / 6; var tw = 3 + 15 * i / 6; gctx.beginPath(); gctx.moveTo(tx - tw * scale, ty); gctx.lineTo(tx + tw * scale, ty); gctx.stroke(); }
+  gctx.restore();
+
+  paperTexture(gctx, w, h, 0.045);
+}
+
+function drawGround_hotelStatic(gctx, w, h) {
+  drawGround_ellipseBase(gctx, w, h);
+  var floor = gctx.createLinearGradient(0, 0, w, h);
+  floor.addColorStop(0, 'rgb(72,76,82)'); floor.addColorStop(1, 'rgb(30,37,44)');
+  gctx.fillStyle = floor; gctx.fillRect(0, 0, w, h);
+  // A contained hotel floor plan: carpeted circulation, lobby, dining room,
+  // and room wing. It intentionally has no shoreline or pier geometry.
+  gctx.save();
+  gctx.strokeStyle = rgba(PAL.goldLeaf, 0.28); gctx.lineWidth = 18 * scale;
+  gctx.lineCap = 'round';
+  gctx.beginPath();
+  gctx.moveTo(w * 0.16, h * 0.72); gctx.lineTo(w * 0.28, h * 0.44); gctx.lineTo(w * 0.43, h * 0.64);
+  gctx.stroke();
+  gctx.lineWidth = 1.5 * scale; gctx.strokeStyle = rgba(PAL.goldPale, 0.42);
+  gctx.strokeRect(w * 0.055, h * 0.46, w * 0.22, h * 0.42);
+  gctx.strokeRect(w * 0.31, h * 0.48, w * 0.25, h * 0.34);
+  gctx.fillStyle = rgba(PAL.hanko, 0.65);
+  for (var i = 0; i < 6; i++) gctx.fillRect(w * (0.075 + (i % 3) * 0.062), h * (0.53 + Math.floor(i / 3) * 0.16), w * 0.042, h * 0.07);
+  // Tokyo skyline through a broad lobby window.
+  gctx.fillStyle = rgba(PAL.indigoDeep, 0.92); gctx.fillRect(w * 0.61, h * 0.10, w * 0.32, h * 0.58);
+  var bh = [0.23,0.34,0.18,0.40,0.29,0.20];
+  for (i = 0; i < bh.length; i++) {
+    gctx.fillStyle = rgba(liftRGB(PAL.indigo, 8 + i * 2), 0.96);
+    gctx.fillRect(w * (0.63 + i * 0.047), h * (0.64 - bh[i]), w * 0.036, h * bh[i]);
+  }
+  gctx.strokeStyle = rgba(PAL.goldPale, 0.32); gctx.lineWidth = 2 * scale;
+  gctx.strokeRect(w * 0.61, h * 0.10, w * 0.32, h * 0.58);
+  gctx.restore();
+  paperTexture(gctx, w, h, 0.045);
+}
+
+function drawGround_transferStatic(gctx, w, h) {
+  drawGround_ellipseBase(gctx, w, h);
+  drawGround_landFill(gctx, w, h);
+  // Chichijima's transfer surface is a compact terminal apron, not Hinata's
+  // garden/command-centre terrain.
+  gctx.save();
+  drawGround_landPath(gctx, w, h); gctx.clip();
+  gctx.fillStyle = 'rgba(63,72,76,.62)'; gctx.fillRect(0, h * 0.30, w * 0.58, h * 0.62);
+  gctx.strokeStyle = rgba(PAL.washiWarm, 0.18); gctx.lineWidth = 1 * scale;
+  gctx.setLineDash([8 * scale, 9 * scale]);
+  gctx.beginPath(); gctx.moveTo(w * 0.12, h * 0.72); gctx.lineTo(w * 0.53, h * 0.56); gctx.stroke();
+  gctx.setLineDash([]);
+  gctx.fillStyle = rgba(PAL.indigo, 0.96); gctx.fillRect(w * 0.20, h * 0.30, w * 0.23, h * 0.18);
+  gctx.fillStyle = rgba(PAL.goldPale, 0.34);
+  for (var i = 0; i < 4; i++) gctx.fillRect(w * (0.225 + i * 0.047), h * 0.35, w * 0.026, h * 0.045);
+  gctx.restore();
+  drawGround_landStrand(gctx, w, h);
+  paperTexture(gctx, w, h, 0.05);
+}
+
+function drawGround_overviewStatic(gctx, w, h) {
+  var g = gctx.createLinearGradient(0, 0, w, h);
+  g.addColorStop(0, rgba(PAL.indigo, 1)); g.addColorStop(0.55, rgba(PAL.seaDeep, 1)); g.addColorStop(1, rgba(PAL.indigoDeep, 1));
+  gctx.fillStyle = g; gctx.fillRect(0, 0, w, h);
+  var pts = routePoints({ lang: _lang }), i, a, b;
+  gctx.save(); gctx.lineCap = 'round'; gctx.lineJoin = 'round';
+  // Outbound chain is solid; the inferred reverse is a parallel dashed trace.
+  gctx.strokeStyle = rgba(PAL.goldLeaf, 0.68); gctx.lineWidth = 3 * scale;
+  gctx.beginPath();
+  for (i = 0; i < pts.length; i++) { if (!i) gctx.moveTo(pts[i].x * w, pts[i].y * h); else gctx.lineTo(pts[i].x * w, pts[i].y * h); }
+  gctx.stroke();
+  gctx.setLineDash([6 * scale, 8 * scale]); gctx.strokeStyle = rgba(PAL.seaGlint, 0.34); gctx.lineWidth = 1.5 * scale;
+  gctx.beginPath();
+  for (i = pts.length - 1; i >= 0; i--) {
+    var ox = -6 * scale, oy = 7 * scale;
+    if (i === pts.length - 1) gctx.moveTo(pts[i].x * w + ox, pts[i].y * h + oy); else gctx.lineTo(pts[i].x * w + ox, pts[i].y * h + oy);
+  }
+  gctx.stroke(); gctx.setLineDash([]);
+  for (i = 0; i < pts.length; i++) {
+    a = pts[i];
+    radialGlow(gctx, a.x * w, a.y * h, 18 * scale, i === 0 || i === pts.length - 1 ? PAL.hanko : PAL.gold, 0.24);
+    gctx.beginPath(); gctx.arc(a.x * w, a.y * h, 5 * scale, 0, 6.2832);
+    gctx.fillStyle = rgba(i === 0 || i === pts.length - 1 ? PAL.hanko : PAL.goldPale, 0.95); gctx.fill();
+    gctx.font = '700 ' + Math.round(10 * scale) + 'px system-ui,sans-serif';
+    gctx.textAlign = i > 3 ? 'right' : 'left'; gctx.textBaseline = 'bottom';
+    gctx.fillStyle = rgba(PAL.washi, 0.92);
+    gctx.fillText(a.name, a.x * w + (i > 3 ? -9 : 9) * scale, a.y * h - 7 * scale);
+    if (i < pts.length - 1) {
+      b = pts[i + 1];
+      var k = 0.58, ax = lerp(a.x, b.x, k) * w, ay = lerp(a.y, b.y, k) * h;
+      gctx.save(); gctx.translate(ax, ay); gctx.rotate(Math.atan2((b.y - a.y) * h, (b.x - a.x) * w));
+      gctx.fillStyle = rgba(PAL.goldPale, 0.82); gctx.beginPath(); gctx.moveTo(5 * scale, 0); gctx.lineTo(-4 * scale, -3 * scale); gctx.lineTo(-4 * scale, 3 * scale); gctx.closePath(); gctx.fill(); gctx.restore();
+    }
+  }
+  gctx.font = '600 ' + Math.round(10 * scale) + 'px system-ui,sans-serif';
+  gctx.textAlign = 'center'; gctx.textBaseline = 'bottom';
+  gctx.fillStyle = rgba(PAL.seaGlint, 0.78);
+  gctx.fillText(_lang === 'ja' ? '破線の帰路は逆順ルートの推定（時刻未確認）' : 'Dashed return is inferred as the reverse route · timetable unconfirmed', w * 0.52, h * 0.92);
+  gctx.restore();
+  paperTexture(gctx, w, h, 0.04);
+}
+
+function drawGround_shipStatic(gctx, w, h) {
+  var g = gctx.createLinearGradient(0, 0, w, h);
+  // This is the ship scene's actual ocean base. drawSea_open adds only the
+  // moving current/light layer, so the cached washi texture remains visible.
+  g.addColorStop(0, rgba(liftRGB(PAL.seaMid, 18), 1));
+  g.addColorStop(0.48, rgba(PAL.seaDeep, 1));
+  g.addColorStop(1, rgba(liftRGB(PAL.seaDeep, -26), 1));
+  gctx.fillStyle = g; gctx.fillRect(0, 0, w, h);
+  paperTexture(gctx, w, h, 0.04);
+}
+
+function drawGround_static(gctx, w, h, profile) {
+  if (profile.id === 'tokyo-hotel') { drawGround_hotelStatic(gctx, w, h); return; }
+  if (profile.id === 'route-overview') { drawGround_overviewStatic(gctx, w, h); return; }
+  if (profile.id === 'chichijima-transfer') { drawGround_transferStatic(gctx, w, h); return; }
+  if (profile.family === 'tokyo') { drawGround_tokyoStatic(gctx, w, h); return; }
+  if (profile.family === 'ship') { drawGround_shipStatic(gctx, w, h); return; }
   drawGround_ellipseBase(gctx, w, h);
   drawGround_landFill(gctx, w, h);
   drawGround_elevation(gctx, w, h);
@@ -958,12 +1489,30 @@ function drawGround_static(gctx, w, h) {
   paperTexture(gctx, w, h, 0.05);
 }
 
+function drawGround_liveOverlays(ctx, sim, view) {
+  var w = view.w, h = view.h;
+  // A quiet sunset/sunrise held-core warmth that peaks mid transition.
+  var duskDawn = Math.sin(clamp(LIGHT.night, 0, 1) * Math.PI);
+  lightPool(ctx, w * 0.56, h * 1.03, 250 * scale, PAL.gold, 0.035 + 0.07 * duskDawn);
+  drawGround_vignette(ctx, w, h);
+  if (sim && sim.bannerOn) {
+    var lw = 3 * scale, inset = lw / 2;
+    ctx.save();
+    ctx.lineWidth = lw;
+    ctx.strokeStyle = rgba(PAL.hanko, 0.55);
+    ctx.strokeRect(inset, inset, w - lw, h - lw);
+    ctx.restore();
+  }
+}
+
 function drawGround(ctx, sim, t, view) {
   if (!view || !(view.w > 0) || !(view.h > 0)) return;
   var w = view.w, h = view.h;
 
   // 1. the static terrain stack — offscreen-cached (rebuilt on resize/DPR/scale change)
-  var key = w + 'x' + h + '@' + _dpr + '/' + scale.toFixed(4);
+  // Profile MUST be part of the key: all stages commonly share identical
+  // dimensions, and otherwise Tokyo could reuse the just-cached island bitmap.
+  var key = groundCacheKey(_scene, w, h, _dpr, scale);
   if (typeof document !== 'undefined') {
     if (!_groundCache || _groundKey !== key) {
       var oc = _groundCache || document.createElement('canvas');
@@ -973,37 +1522,22 @@ function drawGround(ctx, sim, t, view) {
       if (gctx) {
         gctx.setTransform(_dpr, 0, 0, _dpr, 0, 0);
         gctx.clearRect(0, 0, w, h);
-        drawGround_static(gctx, w, h);
+        drawGround_static(gctx, w, h, _scene);
         _groundCache = oc; _groundKey = key;
       }
     }
     if (_groundCache) ctx.drawImage(_groundCache, 0, 0, w, h);
-    else drawGround_static(ctx, w, h);
+    else drawGround_static(ctx, w, h, _scene);
   } else {
-    drawGround_static(ctx, w, h);
+    drawGround_static(ctx, w, h, _scene);
   }
 
   // 2. wind-bent grass tufts (live: the wind moves; RM holds a bent pose)
-  drawGround_grass(ctx, t, view);
+  if (_scene.id === 'hahajima-hinata') drawGround_grass(ctx, t, view);
 
-  // 3. subtle warm horizon glow, low on the map — an ambient light suggestion (not a lantern), centred
-  // just below the visible frame so only its upper arc grazes the shoreline. Graded by the LIGHT rig: a
-  // quiet sunset/sunrise held-core warmth that peaks mid dawn/dusk transition, recedes at full day/night.
-  var duskDawn = Math.sin(clamp(LIGHT.night, 0, 1) * Math.PI); // 0 at full day/full night, peaks mid-transition
-  lightPool(ctx, w * 0.56, h * 1.03, 250 * scale, PAL.gold, 0.035 + 0.07 * duskDawn);
-
-  // 4. inner vignette, strengthened (style.css .sitemap::after)
-  drawGround_vignette(ctx, w, h);
-
-  // 5. blocked-state inset ring (style.css .sitemap.blocked), gated on sim.bannerOn
-  if (sim && sim.bannerOn) {
-    var lw = 3 * scale, inset = lw / 2;
-    ctx.save();
-    ctx.lineWidth = lw;
-    ctx.strokeStyle = rgba(PAL.hanko, 0.55);
-    ctx.strokeRect(inset, inset, w - lw, h - lw);
-    ctx.restore();
-  }
+  // Ship water fills the complete stage in the next layer, so its finishing
+  // overlays are deliberately applied at the end of drawSea_open instead.
+  if (_scene.family !== 'ship') drawGround_liveOverlays(ctx, sim, view);
 }
 
 
@@ -1055,6 +1589,18 @@ function drawSea_oceanPath(ctx, w, h) {
   ctx.lineTo(w * 1.05, 1.02 * h);
   ctx.lineTo(w * 1.05, -0.02 * h);
   ctx.closePath();
+}
+
+// Tokyo replaces the island's sand/foam with a concrete quay. It must be
+// drawn AFTER the clipped harbor water, otherwise that water and the generic
+// foam pass paint over the seaward half of the pier.
+function drawSea_tokyoQuay(ctx, w, h) {
+  ctx.save(); ctx.beginPath(); drawSea_traceShore(ctx, w, h);
+  ctx.strokeStyle = 'rgba(190,198,202,0.78)'; ctx.lineWidth = 18 * scale; ctx.stroke();
+  ctx.beginPath(); drawSea_traceShore(ctx, w, h);
+  ctx.strokeStyle = rgba(PAL.gold, 0.72); ctx.lineWidth = 2 * scale;
+  ctx.setLineDash([10 * scale, 8 * scale]); ctx.stroke();
+  ctx.restore();
 }
 
 function drawSea_gradLine(x0, y0, w, h, deg) {
@@ -1144,8 +1690,48 @@ function drawSea_spray(ctx, t, view) {
   }
 }
 
+// Open-ocean field for the outbound and homebound ship scenes. Unlike the
+// island sea, it fills the whole stage and has no shoreline, iso rock, or
+// Ogasawara-only decorative boats beneath the ferry deck.
+function drawSea_open(ctx, sim, t, view) {
+  var w = view.w, h = view.h, nightK = LIGHT.night;
+  ctx.save();
+  // The full-ocean base + paper grain live in drawGround_shipStatic's cache.
+  // Keep this pass transparent apart from light/current motion so it cannot
+  // erase the cache or the profile's finishing overlays.
+  if (nightK > 0) { ctx.fillStyle = rgba(PAL.indigoDeep, 0.34 * nightK); ctx.fillRect(0, 0, w, h); }
+
+  // Broad current bands and sparse whitecaps give the deck a moving ocean
+  // context without competing with station/task information.
+  var rows = [0.14, 0.28, 0.47, 0.68, 0.86], i;
+  for (i = 0; i < rows.length; i++) {
+    var yy = h * rows[i], amp = (2.2 + (i % 3)) * scale;
+    drawSea_waveLine(ctx, -0.03 * w, 1.06 * w, yy, amp, 0.38 + i * 0.07, i * 1.3, t,
+      nightK > 0.5 ? PAL.seaGlint : PAL.gold, 0.07 + (i % 2) * 0.025, 1.1 * scale);
+    if (!view.rm && i % 2) drawSea_crests(ctx, -0.03 * w, 1.06 * w, yy, amp,
+      0.38 + i * 0.07, i * 1.3, t, 0.22);
+  }
+  // Moon/sun path through the water, using the shared light rig.
+  drawSea_lightColumn(ctx, LIGHT.sunX * w, h * 0.08, h * 0.72,
+    nightK > 0.45 ? PAL.seaGlint : PAL.gold, 0.12 + 0.10 * LIGHT.shadowLen, t, 4.7, view.rm);
+
+  if (!view.rm) {
+    var drift = (t * 13 * scale) % (70 * scale);
+    ctx.save(); ctx.strokeStyle = rgba(PAL.seaGlint, 0.055); ctx.lineWidth = 1 * scale;
+    for (i = -2; i < 18; i++) {
+      var x = i * 70 * scale + drift;
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x - h * 0.42, h); ctx.stroke();
+    }
+    ctx.restore();
+  }
+  ctx.restore();
+  drawGround_liveOverlays(ctx, sim, view);
+}
+
 function drawSea(ctx, sim, t, view) {
   if (!view || !view.w || !view.h) return;
+  if (!_scene.flags || !_scene.flags.water) return;
+  if (_scene.family === 'ship') { drawSea_open(ctx, sim, t, view); return; }
   var w = view.w, h = view.h;
   // NEW GEOGRAPHY ocean layout box: from just left of the shoreline (x=0.50) out past the
   // right edge, full height — layout box, NOT scaled
@@ -1291,27 +1877,33 @@ function drawSea(ctx, sim, t, view) {
 
   ctx.restore(); // drop the ocean-shape clip
 
-  // ---- gold foam hugging the curved shoreline: a soft glow band + the crisp dashed line on
-  // top (the shore/foam is now the LEFT edge of the water, near x=0.55) ----
-  ctx.save();
-  ctx.lineCap = 'round';
-  ctx.beginPath();
-  drawSea_traceShore(ctx, w, h);
-  ctx.strokeStyle = rgba(PAL.gold, 0.1);
-  ctx.lineWidth = 14 * scale;
-  ctx.stroke();
-  ctx.beginPath();
-  drawSea_traceShore(ctx, w, h);
-  ctx.strokeStyle = rgba(PAL.gold, 0.4);
-  ctx.lineWidth = 2.5 * scale;
-  ctx.setLineDash([9 * scale, 10 * scale]);
-  ctx.stroke();
-  ctx.restore();
+  if (_scene.family === 'tokyo') {
+    drawSea_tokyoQuay(ctx, w, h);
+  } else {
+    // Gold foam hugging the curved island shoreline: a soft glow band + crisp dashes.
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    drawSea_traceShore(ctx, w, h);
+    ctx.strokeStyle = rgba(PAL.gold, 0.1);
+    ctx.lineWidth = 14 * scale;
+    ctx.stroke();
+    ctx.beginPath();
+    drawSea_traceShore(ctx, w, h);
+    ctx.strokeStyle = rgba(PAL.gold, 0.4);
+    ctx.lineWidth = 2.5 * scale;
+    ctx.setLineDash([9 * scale, 10 * scale]);
+    ctx.stroke();
+    ctx.restore();
+  }
 
-  // ---- NEW GEOGRAPHY ocean scenery: the iso rock islet + Kimura-san's jigging boat ----
-  drawSea_isoRock(ctx, t, view, nightK);
-  if (!view.rm) drawSea_spray(ctx, t, view);   // sea spray licking off the rock (pure motion — RM skips)
-  drawSea_kimura(ctx, t, view, nightK);
+  // Ogasawara-only scenery. Tokyo uses the same stable water coordinates but
+  // no iso rock / local fishing boats, and return pack-out keeps the route clear.
+  if (domFlagsForScene(sim, view).localBoat) {
+    drawSea_isoRock(ctx, t, view, nightK);
+    if (!view.rm) drawSea_spray(ctx, t, view);   // sea spray licking off the rock (pure motion — RM skips)
+    drawSea_kimura(ctx, t, view, nightK);
+  }
 }
 
 // NEW GEOGRAPHY: small rocky islet under the iso/vessel station (0.82,0.72) — a dark lacquer
@@ -1467,7 +2059,7 @@ function drawSeaLife_splash(ctx, x, y, rx, ry, alpha) {
 }
 
 function drawSeaLife(ctx, sim, t, view) {
-  if (!view || view.rm) return;
+  if (!view || view.rm || !_scene.flags || !_scene.flags.seaLife) return;
   ctx.save();                                        // isolate lineWidth/lineCap/stroke so they can't bleed into drawRoads
   var w = view.w, h = view.h;
   var gi, period, delay, local, k, xPct, gx, topPct, yOff, gy, altK, span;
@@ -1551,6 +2143,9 @@ function drawSeaLife(ctx, sim, t, view) {
   // ---- drawRoads ----
 function drawRoads(ctx, sim, t, view) {
   if (!view || !P) return;
+  if (_scene.family === 'ship' || _scene.family === 'overview') return;   // vessels/overview paint their own topology
+  var links = linksForScene(sim, view);
+  if (!links.length) return;
   var i, a, b, ap, bp, speed = 42 / 9, offset;
   var dashLen = 7 * scale;
   offset = view.rm ? 0 : -(t * speed * scale);
@@ -1569,9 +2164,10 @@ function drawRoads(ctx, sim, t, view) {
   ctx.shadowBlur = (3 + 4 * nightAmt) * scale;
   if (view.night) ctx.globalAlpha *= 0.85;   // preserved: existing night dim
   ctx.beginPath();
-  for (i = 0; i < ADJ.length; i++) {
-    a = P.station(ADJ[i][0]);
-    b = P.station(ADJ[i][1]);
+  for (i = 0; i < links.length; i++) {
+    a = stationForScene(links[i][0], sim, view);
+    b = stationForScene(links[i][1], sim, view);
+    if (!a || !b) continue;
     ap = stationPx(a, view);
     bp = stationPx(b, view);
     ctx.moveTo(ap.x, ap.y);
@@ -1583,12 +2179,12 @@ function drawRoads(ctx, sim, t, view) {
   // ---- subtle lantern-lit nodes where roads meet (deduped station endpoints; shadow state already
   // cleared by the restore above, so these read as clean warm washes, not stacked blur) ----
   var seen = {}, ids = [], sid;
-  for (i = 0; i < ADJ.length; i++) {
-    sid = ADJ[i][0]; if (!seen[sid]) { seen[sid] = 1; ids.push(sid); }
-    sid = ADJ[i][1]; if (!seen[sid]) { seen[sid] = 1; ids.push(sid); }
+  for (i = 0; i < links.length; i++) {
+    sid = links[i][0]; if (!seen[sid]) { seen[sid] = 1; ids.push(sid); }
+    sid = links[i][1]; if (!seen[sid]) { seen[sid] = 1; ids.push(sid); }
   }
   for (i = 0; i < ids.length; i++) {
-    var sp = stationPx(P.station(ids[i]), view);
+    var sp = stationPx(stationForScene(ids[i], sim, view), view);
     // faint gold gather-point by day; blooms into a warm lantern pool by night — mostly veiled by the
     // station disc drawn on top later, this is the wash that peeks softly around its rim.
     // The pool BREATHES at night (spec §2 "lantern pools that bloom") — RM holds the base radius.
@@ -1606,7 +2202,7 @@ function drawRoads(ctx, sim, t, view) {
     var ph = (cyc % slot) / slot;
     var glintA = Math.sin(ph * Math.PI);   // 0 -> 1 -> 0 across its slot in the cycle
     if (glintA > 0.06) {
-      var gs = stationPx(P.station(ids[idx]), view);
+      var gs = stationPx(stationForScene(ids[idx], sim, view), view);
       sparkle(ctx, gs.x, gs.y, 7 * scale, 0.45 * glintA);
     }
   }
@@ -1766,8 +2362,10 @@ function drawGuests_rod(ctx, px0, py0, gscale, rm) {
 }
 
 function drawGuests(ctx, sim, t, view) {
-  if (!view || !view.guestsVisible) return;
-  var vg = view.guest; if (!vg) return;
+  if (!view) return;
+  var sceneFlags = domFlagsForScene(sim, view);
+  if (!sceneFlags.guests || (!view.guestsVisible && !sceneFlags.guestsRequired)) return;
+  var vg = view.guest || {};
   var w = view.w, h = view.h;
   var hot = view.hotPts || [];
   var n = (typeof P !== 'undefined' && P.GUESTS) ? P.GUESTS : 13;
@@ -1780,14 +2378,28 @@ function drawGuests(ctx, sim, t, view) {
 
   for (var i = 0; i < n; i++) {
     var id = 'g' + i;
-    var gs = vg[id];
-    if (!gs || typeof gs.cx !== 'number' || typeof gs.cy !== 'number') continue;
-    var cx = gs.cx, cy = gs.cy;
-    // land clamp: the ambientActors wander field predates the land/sea map split —
-    // hold every guest west of the shoreline (≈0.51w) with a per-guest margin so
-    // nobody strolls on open water (deterministic, no engine change)
-    var shoreMax = (0.47 + (i % 5) * 0.006) * w;
-    if (cx > shoreMax) cx = shoreMax;
+    var gs = vg[id] || { cx: w * 0.25, cy: h * 0.6, act: 'chat', cast: false, hushed: false };
+    var cx = typeof gs.cx === 'number' ? gs.cx : w * 0.25;
+    var cy = typeof gs.cy === 'number' ? gs.cy : h * 0.6;
+    if (_scene.family === 'ship') {
+      // Passenger positions are fixtures on the vessel, not reused island
+      // wander coordinates. Both directions therefore keep the same interior.
+      cx = w * (0.61 + (i % 5) * 0.062);
+      cy = h * (0.40 + Math.floor(i / 5) * 0.145);
+    } else if (_scene.id === 'tokyo-hotel') {
+      cx = w * (0.13 + (i % 5) * 0.073);
+      cy = h * (0.50 + Math.floor(i / 5) * 0.12);
+    } else if (_scene.id === 'takeshiba-terminal') {
+      cx = w * (0.24 + (i % 5) * 0.066);
+      cy = h * (0.43 + Math.floor(i / 5) * 0.13);
+    } else if (_scene.id === 'chichijima-transfer') {
+      cx = w * (0.16 + (i % 5) * 0.074);
+      cy = h * (0.42 + Math.floor(i / 5) * 0.14);
+    } else {
+      // Hahajima ambient wander stays on land.
+      var shoreMax = (0.47 + (i % 5) * 0.006) * w;
+      if (cx > shoreMax) cx = shoreMax;
+    }
 
     // hush: prefer frame()'s precomputed flag, else derive it the same way (HUSH_R2 around a stalled holder)
     var hushed = gs.hushed;
@@ -1818,7 +2430,7 @@ function drawGuests(ctx, sim, t, view) {
 
     // a fixed shore caster leans very slightly toward the water — a nicer, more purposeful stance
     // than standing bolt upright; the whole pawn (body/head/rod) rotates as one group about its feet.
-    var leaning = !!gs.cast;
+    var leaning = _scene.id === 'hahajima-hinata' && !!gs.cast;
     if (leaning) {
       ctx.save();
       ctx.translate(cx, fy);
@@ -1919,6 +2531,7 @@ function drawBoat_reflection(ctx, cx, cy, w, h, tintRgb, alpha, wob) {
 
 function drawBoat(ctx, sim, t, view) {
   if (!view || !view.boat) return;
+  if (!domFlagsForScene(sim, view).localBoat) return;  // Nobu-san's skiff belongs only to Hahajima operations
   var b = view.boat, bs = P.boatState(sim);
   var cx = b.cx, cy = b.cy;                 // engine-driven position — NOT scaled
   var faceL = (bs.phase === 'outbound' || bs.phase === 'ground');
@@ -2048,49 +2661,22 @@ function drawBoat(ctx, sim, t, view) {
   ctx.lineTo(11 * scale, -0.5 * scale);
   ctx.stroke();
 
-  // ---- mast (.mast: 1.5x14 #4a3a22) ----
-  ctx.strokeStyle = '#4a3a22';
-  ctx.lineWidth = 1.5 * scale;
-  ctx.beginPath();
-  ctx.moveTo(-0.25 * scale, -15 * scale);
-  ctx.lineTo(-0.25 * scale, -1 * scale);
-  ctx.stroke();
-
-  // ---- sail: crisp cream washi triangle (paper-gradient fill + ink outline + a mast-edge light lick) ----
-  ctx.beginPath();
-  ctx.moveTo(-10 * scale, -3 * scale);
-  ctx.lineTo(-10 * scale, 8 * scale);
-  ctx.lineTo(-19 * scale, 8 * scale);
-  ctx.closePath();
-  var sailGrad = ctx.createLinearGradient(-19 * scale, -3 * scale, -10 * scale, 8 * scale);
-  sailGrad.addColorStop(0, 'rgba(244,236,214,0.95)');
-  sailGrad.addColorStop(1, 'rgba(224,212,180,0.92)');
-  ctx.fillStyle = sailGrad;
-  ctx.fill();
-  ctx.lineWidth = 0.75 * scale;
-  ctx.strokeStyle = rgba(PAL.ink, 0.18);
-  ctx.stroke();
-
-  ctx.save();
-  ctx.strokeStyle = rgba(PAL.rimWhite, 0.3);
-  ctx.lineWidth = 1 * scale;
-  ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.moveTo(-10 * scale, -2 * scale);
-  ctx.lineTo(-10 * scale, 5 * scale);
-  ctx.stroke();
-  ctx.restore();
-
-  // ---- hinomaru dot (.sail::after: 4x4 circle, background var(--wait) == PAL.hanko) ----
-  // crisped with a thin ink ring + a tiny lacquer glint
-  ctx.beginPath();
-  ctx.arc(-15 * scale, 1 * scale, 2 * scale, 0, Math.PI * 2);
-  ctx.fillStyle = rgba(PAL.hanko, 1);
-  ctx.fill();
-  ctx.lineWidth = 0.6 * scale;
-  ctx.strokeStyle = rgba(PAL.ink, 0.35);
-  ctx.stroke();
-  rimLightArc(ctx, -15 * scale, 1 * scale, 2 * scale, 0.35);
+  // A compact motor skiff: centre console + windscreen + outboard. Removing
+  // the old sail/mast silhouette keeps it unmistakably separate from both
+  // ferries and from Kimura-san's stationary jigging boat.
+  roundRect(ctx, -2.5 * scale, -7.5 * scale, 8 * scale, 6 * scale, 1.5 * scale);
+  var cab = ctx.createLinearGradient(0, -7.5 * scale, 0, -1.5 * scale);
+  cab.addColorStop(0, rgba(PAL.washi, 0.95)); cab.addColorStop(1, rgba(PAL.washiWarm, 0.82));
+  ctx.fillStyle = cab; ctx.fill();
+  ctx.strokeStyle = rgba(PAL.indigoDeep, 0.55); ctx.lineWidth = 0.8 * scale; ctx.stroke();
+  ctx.fillStyle = rgba(PAL.seaGlint, 0.72);
+  ctx.fillRect(-1.2 * scale, -6.4 * scale, 5 * scale, 2.2 * scale);
+  // outboard on the stern (right before the optional scene flip)
+  roundRect(ctx, 10.5 * scale, 0, 4 * scale, 5 * scale, 1 * scale);
+  ctx.fillStyle = rgba(PAL.hanko, 0.9); ctx.fill();
+  ctx.strokeStyle = rgba(PAL.ink, 0.45); ctx.lineWidth = 0.7 * scale; ctx.stroke();
+  ctx.beginPath(); ctx.arc(-7 * scale, -4.2 * scale, 2.1 * scale, 0, 6.2832);
+  ctx.fillStyle = rgba(PAL.skin, 1); ctx.fill();
 
   ctx.restore();
 
@@ -2306,8 +2892,10 @@ function hubSectionRects(hubCx, hubCy, footR) {
 // exactly what drawStations_hub drew. Returns null when there is no hub.
 function hubGeom(view) {
   if (!P || !P.STATIONS) return null;
+  if (_scene.id !== 'hahajima-hinata') return null;
   var hubSt = null, i;
-  for (i = 0; i < P.STATIONS.length; i++) if (P.STATIONS[i].hub) { hubSt = P.STATIONS[i]; break; }
+  var list = stationsForProfile(_scene);
+  for (i = 0; i < list.length; i++) if (list[i].hub) { hubSt = list[i]; break; }
   if (!hubSt || hubSt.hidden) return null;
   var p = stationPx(hubSt, view);
   var discCy = p.y - 11 * scale;
@@ -2485,68 +3073,99 @@ function drawStations_hub(ctx, cx, cy, r, rimRgb, na, ic, t, rm) {
 }
 
 // ---- drawDeck ----
-// §voyage ship-deck backdrop (spec §3 ship-map note; §21.12 deferred deck polish, now built).
-// On the voyage day the 5 stations sit over the water; rather than let the cast read as five
-// separate dinghies (the per-station group-hulls are suppressed in drawFigures for this segment),
-// paint ONE large hull/deck plane spanning the whole station cluster so the day reads as ABOARD
-// a single vessel. Reuses the group-hull visual language (lacquer-wood plane, gold-leaf gunwale
-// rail, planking strokes, mast + hanko-red pennant) at ship scale. No-op off the voyage segment,
-// so land/fishday frames are byte-identical. Deterministic; RM holds the bob still (light stays).
+// Stable vessel interiors. The long-haul ferry is a large modern passenger ship
+// (white superstructure/navy hull/red funnel); the unnamed inter-island vessel
+// is a visibly smaller blue-white ferry. Neither borrows the local skiff art.
+function ferryHullPath(ctx, x0, y0, x1, y1, bowTop) {
+  var cx = (x0 + x1) / 2, shoulder = (x1 - x0) * 0.16, r = 22 * scale;
+  ctx.beginPath();
+  if (bowTop) {
+    ctx.moveTo(cx, y0); ctx.lineTo(x1 - shoulder, y0 + r); ctx.quadraticCurveTo(x1, y0 + r, x1, y0 + r * 2);
+    ctx.lineTo(x1, y1 - r); ctx.quadraticCurveTo(x1, y1, x1 - r, y1); ctx.lineTo(x0 + r, y1);
+    ctx.quadraticCurveTo(x0, y1, x0, y1 - r); ctx.lineTo(x0, y0 + r * 2); ctx.quadraticCurveTo(x0, y0 + r, x0 + shoulder, y0 + r); ctx.closePath();
+  } else {
+    ctx.moveTo(x0 + r, y0); ctx.lineTo(x1 - r, y0); ctx.quadraticCurveTo(x1, y0, x1, y0 + r);
+    ctx.lineTo(x1, y1 - r * 2); ctx.quadraticCurveTo(x1, y1 - r, x1 - shoulder, y1 - r);
+    ctx.lineTo(cx, y1); ctx.lineTo(x0 + shoulder, y1 - r); ctx.quadraticCurveTo(x0, y1 - r, x0, y1 - r * 2);
+    ctx.lineTo(x0, y0 + r); ctx.quadraticCurveTo(x0, y0, x0 + r, y0); ctx.closePath();
+  }
+}
 function drawDeck(ctx, sim, t, view) {
-  if (!sim || sim.segment !== 'voyage' || !sim.stations || !sim.stations.length) return;
+  if (_scene.family !== 'ship') return;
   if (!view || !(view.w > 0) || !(view.h > 0)) return;
-  var rm = !!view.rm, i;
+  var deckStations = stationsForProfile(_scene).filter(function (s) { return !s.hidden; });
+  if (!deckStations.length) return;
+  var i;
   // bounding box of the station cluster (px), padded so crews fanned around each station stay on deck
   var minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9;
-  for (i = 0; i < sim.stations.length; i++) {
-    var s = sim.stations[i], sx = s.x * view.w, sy = s.y * view.h;
+  for (i = 0; i < deckStations.length; i++) {
+    var s = deckStations[i], sx = s.x * view.w, sy = s.y * view.h;
     if (sx < minX) minX = sx; if (sx > maxX) maxX = sx;
     if (sy < minY) minY = sy; if (sy > maxY) maxY = sy;
   }
-  var padX = 74 * scale, padTop = 50 * scale, padBot = 66 * scale;
+  var isLocal = _scene.id === 'interisland-ferry';
+  var padX = (isLocal ? 60 : 78) * scale, padTop = (isLocal ? 42 : 55) * scale, padBot = (isLocal ? 52 : 68) * scale;
   var x0 = minX - padX, x1 = maxX + padX, y0 = minY - padTop, y1 = maxY + padBot;
   var w = x1 - x0, h = y1 - y0, cx = (x0 + x1) / 2;
   if (!(w > 0) || !(h > 0)) return;
-  var bob = rm ? 0 : Math.sin(t * 0.5) * 3 * scale;      // slow, deterministic ship bob
-  var r = 34 * scale, rBow = r * 1.7;                    // rounded stern, longer sweep at the bow (bottom)
+  var bowTop = _scene.routeDirection === 'return';
   ctx.save();
-  ctx.translate(0, bob);
-  // (1) hull shadow spread on the water beneath the deck
-  contactShadow(ctx, cx, y1 - 4 * scale, w * 0.98, 22 * scale, 0.3);
-  // (2) deck plane / hull body — lacquer-wood gradient, matching the group-hull palette
-  drawBoat_hullPath(ctx, x0, y0, w, h, r, r, rBow, rBow);
-  var g = ctx.createLinearGradient(0, y0, 0, y1);
-  g.addColorStop(0, '#4a382a'); g.addColorStop(1, '#2e2118');
+  if (isLocal) {
+    // Twin water shadows make the smaller ferry read as a compact catamaran.
+    contactShadow(ctx, x0 + w * 0.27, y1 - 2 * scale, w * 0.34, 17 * scale, 0.28);
+    contactShadow(ctx, x0 + w * 0.73, y1 - 2 * scale, w * 0.34, 17 * scale, 0.28);
+  } else contactShadow(ctx, cx, y1 - 4 * scale, w * 0.96, 24 * scale, 0.34);
+  ferryHullPath(ctx, x0, y0, x1, y1, bowTop);
+  var g = ctx.createLinearGradient(x0, y0, x1, y1);
+  if (isLocal) { g.addColorStop(0, '#f1eadb'); g.addColorStop(0.68, '#c8d2d0'); g.addColorStop(1, '#2e6f82'); }
+  else { g.addColorStop(0, '#f5f0e4'); g.addColorStop(0.58, '#cfd5d1'); g.addColorStop(0.59, '#27445b'); g.addColorStop(1, '#12293b'); }
   ctx.fillStyle = g; ctx.fill();
-  // (3) planking + a soft top sheen, clipped to the hull
+  ctx.strokeStyle = isLocal ? rgba(PAL.seaGlint, 0.8) : rgba(PAL.goldLeaf, 0.7);
+  ctx.lineWidth = Math.max(1.5, 2 * scale); ctx.stroke();
+
+  // Clip fixtures/details to the hull so the interior remains one stable plane.
   ctx.save();
-  drawBoat_hullPath(ctx, x0, y0, w, h, r, r, rBow, rBow);
-  ctx.clip();
-  ctx.strokeStyle = rgba(PAL.ink, 0.16); ctx.lineWidth = 1 * scale;
-  ctx.beginPath();
-  var plank = 27 * scale, py;
-  for (py = y0 + plank; py < y1; py += plank) { ctx.moveTo(x0, py); ctx.lineTo(x1, py); }
-  ctx.stroke();
-  // upper-left key-light sheen along the deck top (rim light on the wood)
-  var sh = ctx.createLinearGradient(0, y0, 0, y0 + 26 * scale);
-  sh.addColorStop(0, rgba(PAL.rimWhite, 0.10)); sh.addColorStop(1, rgba(PAL.rimWhite, 0));
-  ctx.fillStyle = sh; ctx.fillRect(x0, y0, w, 26 * scale);
+  ferryHullPath(ctx, x0, y0, x1, y1, bowTop); ctx.clip();
+  ctx.strokeStyle = rgba(isLocal ? PAL.seaInk : PAL.indigoDeep, 0.13); ctx.lineWidth = 1 * scale;
+  for (var yy = y0 + 34 * scale; yy < y1; yy += 32 * scale) { ctx.beginPath(); ctx.moveTo(x0, yy); ctx.lineTo(x1, yy); ctx.stroke(); }
+  // Superstructure and wheelhouse.
+  var sx = x0 + w * (isLocal ? 0.24 : 0.16), sw = w * (isLocal ? 0.52 : 0.68);
+  var sy = y0 + h * 0.14, sh = h * (isLocal ? 0.20 : 0.24);
+  roundRect(ctx, sx, sy, sw, sh, 9 * scale);
+  ctx.fillStyle = rgba(PAL.washi, 0.94); ctx.fill();
+  ctx.strokeStyle = rgba(PAL.seaInk, 0.48); ctx.lineWidth = 1.2 * scale; ctx.stroke();
+  var windows = isLocal ? 5 : 8;
+  ctx.fillStyle = rgba(PAL.seaDeep, 0.78);
+  for (i = 0; i < windows; i++) {
+    roundRect(ctx, sx + sw * (0.07 + i * 0.11), sy + sh * 0.28, sw * 0.065, sh * 0.32, 1.5 * scale); ctx.fill();
+  }
+  if (!isLocal) {
+    // Ogasawara-maru's red funnel and orange lifeboats are categorical
+    // passenger-ferry cues, not decorative sailing-ship rigging.
+    roundRect(ctx, cx - 14 * scale, sy - 30 * scale, 28 * scale, 35 * scale, 5 * scale);
+    ctx.fillStyle = rgba(PAL.hanko, 0.96); ctx.fill();
+    ctx.fillStyle = rgba(PAL.indigoDeep, 0.9); ctx.fillRect(cx - 14 * scale, sy - 30 * scale, 28 * scale, 9 * scale);
+    for (i = 0; i < 2; i++) {
+      roundRect(ctx, x0 + w * (i ? 0.70 : 0.18), y0 + h * 0.48, w * 0.12, 10 * scale, 5 * scale);
+      ctx.fillStyle = 'rgba(222,112,45,.92)'; ctx.fill();
+    }
+  } else {
+    // Blue wheelhouse brow and twin-hull centre gap distinguish the smaller vessel.
+    ctx.fillStyle = rgba(PAL.seaInk, 0.84); ctx.fillRect(sx, sy, sw, 5 * scale);
+    ctx.fillStyle = rgba(PAL.seaDeep, 0.38); ctx.fillRect(cx - 9 * scale, y0 + h * 0.62, 18 * scale, h * 0.34);
+  }
+  // Railings: clean parallel lines, no mast or sail.
+  ctx.strokeStyle = rgba(PAL.rimWhite, 0.55); ctx.lineWidth = 1 * scale;
+  ctx.beginPath(); ctx.moveTo(x0 + 20 * scale, y0 + h * 0.42); ctx.lineTo(x1 - 20 * scale, y0 + h * 0.42); ctx.stroke();
   ctx.restore();
-  // (4) gold-leaf gunwale rail around the deck edge
-  drawBoat_hullPath(ctx, x0, y0, w, h, r, r, rBow, rBow);
-  ctx.strokeStyle = rgba(PAL.goldLeaf, 0.6); ctx.lineWidth = Math.max(1.4, 1.8 * scale); ctx.stroke();
-  // (5) mast + hanko-red pennant rising from the deck (a NAMED ship, not a dinghy)
-  var mastX = cx, mastBaseY = y0 + 14 * scale, mastTopY = y0 - 42 * scale;
-  ctx.strokeStyle = 'rgba(43,36,28,0.9)'; ctx.lineWidth = Math.max(1.4, 2 * scale);
-  ctx.beginPath(); ctx.moveTo(mastX, mastBaseY); ctx.lineTo(mastX, mastTopY); ctx.stroke();
-  var pw = 22 * scale, ph = 12 * scale;
-  var pWave = rm ? 0 : Math.sin(t * 1.6) * 2 * scale;    // gentle luff, RM holds it flat
-  ctx.fillStyle = rgba(PAL.hanko, 0.92);
-  ctx.beginPath();
-  ctx.moveTo(mastX, mastTopY);
-  ctx.lineTo(mastX + pw, mastTopY + ph * 0.45 + pWave);
-  ctx.lineTo(mastX, mastTopY + ph);
-  ctx.closePath(); ctx.fill();
+  // Direction arrow follows the physical route; return is explicitly inferred.
+  var arrowY = bowTop ? y0 + 12 * scale : y1 - 12 * scale, dir = bowTop ? -1 : 1;
+  ctx.fillStyle = rgba(PAL.goldPale, 0.72); ctx.beginPath();
+  ctx.moveTo(cx, arrowY + dir * 7 * scale); ctx.lineTo(cx - 5 * scale, arrowY - dir * 3 * scale); ctx.lineTo(cx + 5 * scale, arrowY - dir * 3 * scale); ctx.closePath(); ctx.fill();
+  chip(ctx, cx, y0 + 7 * scale, _scene.id === 'ogasawara-maru' ? (_lang === 'ja' ? 'おがさわら丸' : 'OGASAWARA-MARU') : (_lang === 'ja' ? '島間船（船名・時刻未確認）' : 'INTER-ISLAND VESSEL · UNCONFIRMED'), {
+    font: '800 ' + Math.round(9 * scale) + 'px system-ui,sans-serif', pad: 4 * scale, h: 14 * scale, r: 7 * scale,
+    bg: rgba(PAL.indigoDeep, 0.78), border: rgba(PAL.gold, 0.45), ink: rgba(PAL.washi, 0.96)
+  });
   ctx.restore();
 }
 
@@ -2556,25 +3175,19 @@ function drawStations(ctx, sim, t, view) {
   // the shared LIGHT rig grades the lantern glow smoothly (and carries the report dusk floor)
   var na = LIGHT.night;
   var discR = 21 * scale;
-  var simStations = (sim && sim.stations) ? sim.stations : null;
-  // §voyage (spec §3 ship-map): a voyage sim carries its OWN station set (Hold/Cabins/Dining
-  // saloon/Deck/Purser, positioned over the water) on sim.stations — render THOSE as ship
-  // fixtures, not the static land landmarks. Every other segment (including the land-legit
-  // Load day, whose sim.stations IS the land set) keeps P.STATIONS, so the DOM hotspot contract
-  // (app.js buildSitemap iterates P.STATIONS for #st-<id>) and land-day rendering stay byte-identical.
-  var isVoyage = !!(sim && sim.segment === 'voyage' && simStations && simStations.length);
-  var stList = isVoyage ? simStations : P.STATIONS;
-  var i, j;
+  // Scene profiles choose the visible station vocabulary. The underlying sim
+  // station ids remain unchanged and are joined below for live crew/readiness.
+  var stList = stationsForProfile(_scene);
+  var i;
   for (i = 0; i < stList.length; i++) {
     var st = stList[i];
     if (st.hidden) continue;   // §map v2: command folded into Hinata, finance hidden (voyage stations carry no such flag)
     var p = stationPx(st, view);
     var cx = p.x, cy = p.y;
-    var simSt = null;
-    if (simStations) { for (j = 0; j < simStations.length; j++) { if (simStations[j].id === st.id) { simSt = simStations[j]; break; } } }
-    var crewCount = simSt ? simSt.crewIds.length : 0;
-    var hot = !!(simSt && simSt.dominantProblem && crewCount > 0);
-    var tv = terr[st.id] || 'none';
+    var live = stationStateForScene(st, sim, view, terr);
+    var crewCount = live.crewCount;
+    var hot = !!(live.dominantProblem && crewCount > 0);
+    var tv = live.readiness;
     var terrDef = TERR[tv];
     // DOM centres the whole disc+name block on station.y (translate(-50%,-50%)) so the disc sits ~11px above cy.
     // Keep the halo + night lantern + contact shadow at cy (roads/tint/ground meet the station point); raise
@@ -2632,7 +3245,7 @@ function drawStations(ctx, sim, t, view) {
       ctx.fillText(st.icon, cx, discCy + 1 * scale);
       ctx.restore();
       // (a) per-id landmark glyph, drawn resting against the disc
-      drawStations_glyph(ctx, st.id, cx, discCy, discR, na, t, !!view.rm);
+      if (_scene.family === 'island') drawStations_glyph(ctx, st.id, cx, discCy, discR, na, t, !!view.rm);
     }
     // (e) pulsing red stalled ring — only when the station has a live problem AND crew
     if (hot) {
@@ -2686,11 +3299,14 @@ function drawStations(ctx, sim, t, view) {
 // drawStations_hub calls, so the drawn art and the returned geometry can never drift apart.
 // Returns [] if there is no hub station, it is hidden, or view is missing/degenerate. Safe to call
 // every frame: no ctx writes, no state mutation, reads only P.STATIONS + the module `scale`.
-function hubSections(view) {
+function hubSections(view, sim) {
   if (!view || !(view.w > 0) || !(view.h > 0) || !P || !P.STATIONS) return [];
+  var profile = sceneProfile(sim, view);
+  if (profile.id !== 'hahajima-hinata') return [];
   var hubSt = null, i;
-  for (i = 0; i < P.STATIONS.length; i++) {
-    if (P.STATIONS[i].hub) { hubSt = P.STATIONS[i]; break; }
+  var list = stationsForProfile(profile);
+  for (i = 0; i < list.length; i++) {
+    if (list[i].hub) { hubSt = list[i]; break; }
   }
   if (!hubSt || hubSt.hidden) return [];
   var p = stationPx(hubSt, view);
@@ -2717,15 +3333,19 @@ function hubSections(view) {
 function drawStallMarkers(ctx, sim, t, view) {
   var ms = view && view.stallMarkers;
   if (!ms || !ms.length || !P) return;
-  var i, m, st, p, footR, discCy, sev, rgb, pulse, k2, hg;
+  var i, m, st, p, footR, discCy, sev, rgb, pulse, k2, markerScene, rp;
   for (i = 0; i < ms.length; i++) {
     m = ms[i]; if (!m) continue;
-    st = P.station(m.stationId || m.station);
-    if (!st) continue;
-    if (st.hidden) {
-      hg = hubGeom(view); if (!hg) continue;
-      p = { x: hg.cx, y: hg.cy }; footR = hg.footR; discCy = hg.discCy;
+    markerScene = sceneIdValue(m.sceneId || m.profileId || m.scene);
+    if (_scene.id === 'route-overview') {
+      rp = routePoint(markerScene, m.stationId || m.station, view);
+      if (!rp) continue;
+      p = { x: rp.x * view.w, y: rp.y * view.h };
+      footR = 8 * scale; discCy = p.y;
     } else {
+      if (markerScene && markerScene !== _scene.id) continue;
+      st = stationForScene(m.stationId || m.station, sim, view);
+      if (!st) continue;
       p = stationPx(st, view);
       footR = st.hub ? 21 * scale * HUB_FOOT_MULT : 21 * scale;
       discCy = p.y - 11 * scale;
@@ -2767,6 +3387,7 @@ function drawStallMarkers(ctx, sim, t, view) {
 // glints (the light) and drops every drift (the motion).
 function drawParticles(ctx, sim, t, view) {
   if (!view) return;
+  if (_scene.id !== 'hahajima-hinata') return;
   var rm = !!view.rm;
   var hg = hubGeom(view);
   var i, ph, sx, sy, a;
@@ -2796,7 +3417,7 @@ function drawParticles(ctx, sim, t, view) {
     }
   }
   if (LIGHT.night > 0.22 && P && P.station) {
-    var homes = [P.station('mess'), P.station('lodging')], si, fi2, lx, ly, fx, fy, fa, pph;
+    var homes = [stationForScene('mess', sim, view), stationForScene('lodging', sim, view)], si, fi2, lx, ly, fx, fy, fa, pph;
     for (si = 0; si < homes.length; si++) {
       if (!homes[si]) continue;
       lx = px(homes[si].x, view); ly = py(homes[si].y, view) - 8 * scale;
@@ -2814,6 +3435,23 @@ function drawParticles(ctx, sim, t, view) {
       }
     }
   }
+}
+
+// ---- drawSceneLabel — explicit map status, independent of the task clock ----
+function drawSceneLabel(ctx, view) {
+  if (!view || !_scene) return;
+  var label = _lang === 'ja' ? _scene.jp : _scene.en;
+  var hs = Math.max(1, scale);   // HUD text keeps a readable CSS-pixel floor on compact stages
+  var font = '800 ' + Math.round(10 * hs) + 'px system-ui,sans-serif';
+  ctx.save(); ctx.font = font;
+  ctx.restore();
+  // Centre avoids the live dinner/status tag in the top-right and the clock in
+  // the top-left. The DOM map region carries the same label for AT.
+  chip(ctx, view.w / 2, 10 * scale, label, {
+    font: font, pad: 6 * hs, h: 18 * hs, r: 9 * hs,
+    bg: rgba(PAL.indigoDeep, 0.82), border: rgba(PAL.gold, 0.52),
+    ink: rgba(PAL.goldPale, 0.96)
+  });
 }
 
 // ---- drawDusk (spec §4, HUD side) — the full-canvas evening unifier ----
@@ -3077,6 +3715,7 @@ function drawFigures_pose(f, state) {
 
 function drawFigures(ctx, sim, t, view) {
   if (!sim || !sim.participants || !view || !view.fig) return;
+  if (_scene.flags && _scene.flags.showCrew === false) return;
   var ts = t * 1000;
   var rm = !!view.rm;
   figs = scale * FIG_SCALE;   // §2 pawn scale +30% — every pawn-body size below
@@ -3096,9 +3735,10 @@ function drawFigures(ctx, sim, t, view) {
   // that single hull under the station cluster, so suppress the per-station group-hulls here
   // (five over-water stations would otherwise read as five separate dinghies). Every crew still
   // renders `aboard` (legs cropped, no personal shadow) via the per-figure logic below.
-  var voyage = !!(sim && sim.segment === 'voyage');
+  var voyage = _scene.family === 'ship';
+  var localBoatWorld = !!domFlagsForScene(sim, view).localBoat;
   var boatGroups = {};
-  if (!voyage) {
+  if (!voyage && localBoatWorld) {
   for (var bg = 0; bg < sim.participants.length; bg++) {
     var bpp = sim.participants[bg], bff = view.fig[bpp.id];
     if (!bff) continue;
@@ -3123,15 +3763,13 @@ function drawFigures(ctx, sim, t, view) {
     ctx.fillStyle = bgr; ctx.fill();
     ctx.strokeStyle = 'rgba(212,180,124,0.55)'; ctx.lineWidth = Math.max(1, 0.8 * figs);
     ctx.beginPath(); ctx.moveTo(bcx - bw * 0.96, bhy + 0.5); ctx.lineTo(bcx + bw * 0.96, bhy + 0.5); ctx.stroke();
-    // stern mast + hanko-red pennant — this is a NAMED boat, not a dinghy
-    ctx.strokeStyle = 'rgba(43,36,28,0.85)'; ctx.lineWidth = Math.max(1, 0.7 * figs);
-    ctx.beginPath(); ctx.moveTo(bcx + bw * 0.9, bhy); ctx.lineTo(bcx + bw * 0.9, bhy - 8 * figs); ctx.stroke();
-    ctx.fillStyle = 'rgba(178,58,48,0.9)';
-    ctx.beginPath();
-    ctx.moveTo(bcx + bw * 0.9, bhy - 8 * figs);
-    ctx.lineTo(bcx + bw * 0.9 + 5 * figs, bhy - 6.6 * figs);
-    ctx.lineTo(bcx + bw * 0.9, bhy - 5.2 * figs);
-    ctx.closePath(); ctx.fill();
+    // Centre console + outboard: the local crew hull shares Nobu-san's motor-
+    // skiff language and cannot be mistaken for either route ferry.
+    roundRect(ctx, bcx - 4 * figs, bhy - 5 * figs, 8 * figs, 5 * figs, 1.5 * figs);
+    ctx.fillStyle = rgba(PAL.washiWarm, 0.9); ctx.fill();
+    ctx.fillStyle = rgba(PAL.seaGlint, 0.65); ctx.fillRect(bcx - 2.5 * figs, bhy - 4 * figs, 5 * figs, 1.5 * figs);
+    roundRect(ctx, bcx + bw * 0.87, bhy + 1 * figs, 4 * figs, 5 * figs, 1 * figs);
+    ctx.fillStyle = rgba(PAL.hanko, 0.88); ctx.fill();
     ctx.restore();
   }
   }   // end if(!voyage) group-hull pre-pass
@@ -3162,9 +3800,11 @@ function drawFigures(ctx, sim, t, view) {
     // over-water fiction: stationed at sea = aboard the group hull (legs cropped below);
     // walking over water = in transit BY BOAT — visible at the dockside, unseen mid-water,
     // fading back in on the deck. Nobody is ever drawn walking on the sea.
-    var afloat = isAfloat(cx, feetY);
+    // A ship profile is already one continuous deck even when its stable
+    // logical coordinates happen to sit west of the island shoreline.
+    var afloat = voyage || (localBoatWorld && isAfloat(cx, feetY));
     var aboard = afloat && !f.walking;
-    if (afloat && f.walking) {
+    if (!voyage && afloat && f.walking) {
       var overW = (cx / view.w) - shoreNX(feetY / view.h);
       var aShore = 1 - (overW - 0.004) / 0.05;
       if (aShore < 0) aShore = 0; if (aShore > 1) aShore = 1;
@@ -3524,7 +4164,7 @@ function drawMotes(ctx, sim, t, view) {
       if (!m._pingT0) m._pingT0 = ts;               // render-only scratch stamp, first frame seen done
       tst = ts - m._pingT0;
       if (tst >= 0 && tst < DUR.ping) {
-        st = P.station(m.toSt);
+        st = stationForScene(m.toSt, sim, view);
         sp = stationPx(st, view);
         drawMotes_ping(ctx, sp.x, sp.y, tst, DUR.ping, rgb, hi, view.rm, late);
       }
@@ -3592,6 +4232,7 @@ function drawCascade_strike(ctx, x, y, sk) {
 }
 
 function drawCascade(ctx, sim, t, view) {
+  if (_scene.family === 'overview') return;
   var c = view.cascade;
   if (!c || !c.has || !c.hops || !c.hops.length) return;
   var hops = c.hops;
@@ -3603,7 +4244,7 @@ function drawCascade(ctx, sim, t, view) {
       for (var ci = 0; ci < chainPts.length; ci++) drawCascade_marker(ctx, chainPts[ci].x, chainPts[ci].y);
     } else {
       for (var cj = 0; cj < hops.length; cj++) {
-        var csp = stationPx(P.station(hops[cj].station), view);
+        var csp = stationPx(stationForScene(hops[cj].station, sim, view), view);
         drawCascade_marker(ctx, csp.x, csp.y - 30 * scale);
       }
     }
@@ -3625,7 +4266,7 @@ function drawCascade(ctx, sim, t, view) {
   // fading strike shockwave at the last-struck station — independent of the comet's own moving/resting phase
   if (c._strikeAt && (ts - c._strikeAt) < DUR.strike) {
     var sk = (ts - c._strikeAt) / DUR.strike;
-    var sPt = stationPx(P.station(c._strikeStation), view);
+    var sPt = stationPx(stationForScene(c._strikeStation, sim, view), view);
     drawCascade_strike(ctx, sPt.x, sPt.y, sk);
   }
 
@@ -3640,8 +4281,8 @@ function drawCascade(ctx, sim, t, view) {
   var seg = Math.floor(tt / HOP);
   var f0 = (tt % HOP) / HOP;
   var frac = smoothstep(f0);
-  var A = P.station(hops[seg].station);
-  var B = P.station(hops[Math.min(hops.length - 1, seg + 1)].station);
+  var A = stationForScene(hops[seg].station, sim, view);
+  var B = stationForScene(hops[Math.min(hops.length - 1, seg + 1)].station, sim, view);
   var x = px(lerp(A.x, B.x, frac), view);
   var y = py(lerp(A.y, B.y, frac), view);
 
@@ -3697,5 +4338,10 @@ function drawCascade(ctx, sim, t, view) {
   // exported so the app layer plumbs the SAME +30% factor into its fan spacing
   // and pawn hit radius (app.js pawnAt: 26px → 26×FIG_SCALE ≈ 34px).
   window.PRS_STAGE = { initStage: initStage, resizeStage: resizeStage, scene: scene, hubSections: hubSections,
+                       sceneProfile: sceneProfile, stationsForScene: stationsForScene, stationForScene: stationForScene,
+                       stationStateForScene: stationStateForScene, linksForScene: linksForScene,
+                       topologyForScene: topologyForScene, domFlagsForScene: domFlagsForScene,
+                       sceneFlags: domFlagsForScene, routePoint: routePoint, routePoints: routePoints,
+                       groundCacheKey: groundCacheKey,
                        camTo: camTo, camReset: camReset, camState: camState, FIG_SCALE: FIG_SCALE };
 })();

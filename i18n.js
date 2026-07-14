@@ -84,7 +84,16 @@
 
       // --- §HarborComplete S3: report-on-stage (dusk harbor + stall markers + hanko stamp) ---
       rsChip: 'Dusk — where the day lost time',
-      rsWholeTrip: 'Whole-trip run — showing Day 3, the minute-modeled day (a per-day view is planned)',
+      rsWholeTrip: 'Whole-trip run — route overview across every authored segment',
+      routeOverview: 'Route overview',
+      routeTimeUnknown: 'Time not confirmed — block position is a rehearsal sequence, not a timetable',
+      routeTimeUnconfirmedShort: 'Time not confirmed',
+      routeClockAssumption: 'rehearsal time',
+      routeConfirmedDeparture: 'confirmed departure',
+      routeApprox: 'Approximate',
+      routeInferred: 'Inferred reverse route — confirm before use',
+      routeTimetableUnknown: 'Return timetable not confirmed',
+      routeVesselUnknown: 'Inter-island vessel name not confirmed',
       rsClean: 'No stalls — nobody waited today',
       rsMin: function (n) { return n + ' min'; },
       rsMarkerAria: function (st, n, gap) { return st + ' — ' + n + ' person-minutes lost: ' + gap + '. Opens the fix.'; },
@@ -132,8 +141,8 @@
       rhUnplaced: function (task) { return '○ “' + task + '” still needs a slot on the board'; },
       rhDecoy: function (task) { return '✗ “' + task + '” is a decoy — pull it back off the board'; },
       rhMisassigned: function (task) { return '⚠ “' + task + '” is staffed by the wrong role'; },
-      // Voyage §2: the load-day custody-chain hint (an item never reaches a truck run)
-      rhCarryGap: function (item) { return '📦 “' + item + '” never made the truck — it will miss the ship'; },
+      // Route custody-chain hint (load, Chichijima transfer, or inferred return handover)
+      rhCarryGap: function (item) { return '📦 “' + item + '” is missing from a required custody handover'; },
 
       // --- Voyage §3: the care shelf (VIP buddies on the ship day) ---
       gdShelfTitle: '🛎 VIP care shelf',
@@ -206,7 +215,7 @@
       inspTitle: 'Checkpoint',
       inspSub: 'Inspect each member: what they hold, what they wait on, what comes next. “Send now” hands a card over to unblock THIS run — the plan gap stays until you fix the plan.',
       inspNowDoing: 'now', inspNext: 'next', inspIdleFree: 'not waiting on anything', inspMissing: 'no arrow drawn',
-      inspNotAboard: 'never made the ship (fix the Load day)',
+      inspNotAboard: 'missing from the route custody chain (check Load / ship transfer)',
       sendNow: 'Send now', inspResume: 'Resume ▶',
       handFedNote: function (n) { return 'hand-fed ' + n + '× this run (plan unchanged)'; },
 
@@ -239,11 +248,11 @@
       p_budgetAuth_need: 'Budget Lead',
       e_budgetAuth_label: 'Meals budget approver', e_budgetAuth_off: '— none —', e_budgetAuth_on: 'Budget Lead (with daily cap)',
 
-      p_info_title: 'Ferry time known only to the PM',
-      p_info_cause: 'Team leads don’t know the departure time, so they hesitate and check phones at the port.',
-      p_info_fix: 'Share the ferry departure time with every team lead the night before at 20:00 and again that morning.',
+      p_info_title: 'The vessel route and connections are known only to the PM',
+      p_info_cause: 'Leads need the 11:00 Takeshiba sailing and the separately confirmed Chichijima ship change; otherwise people and baggage stall at either terminal.',
+      p_info_fix: 'Share the confirmed Ogasawara-maru departure before leaving the hotel, then re-confirm and share the inter-island connection at Chichijima.',
       p_info_need: 'PM (card owner)',
-      e_info_label: 'Ferry-time card sharing', e_info_off: 'PM only', e_info_on: 'Shared to all leads (night + morning)',
+      e_info_label: 'Vessel-route card sharing', e_info_off: 'PM only', e_info_on: 'Shared to all leads at both handovers',
 
       p_report_title: 'No illness report route',
       p_report_cause: 'When someone falls ill there is no agreed report path, so the problem grows unmanaged elsewhere.',
@@ -366,7 +375,7 @@
 
       // --- plan-on-the-harbor: the plan stage + command tray (WA) ---
       planChip: 'Planning',
-      planStageAria: 'The harbor before dawn — the eleven duty-holders at their stations. Drag a decision object from the tray onto the right person.',
+      planStageAria: 'The selected route scene with eleven duty-holders at their stations. Drag a decision object from the tray onto the right person.',
       planSeat: function (role) { return 'Currently the ' + role + '.'; },
       trayTitle: 'Command tray',
       trayCount: function (n) { return n === 0 ? 'All placed ✓' : n + ' to place'; },
@@ -466,7 +475,16 @@
 
       // --- §HarborComplete S3: report-on-stage（夕景の港＋停滞マーカー＋評価印） ---
       rsChip: '夕景 — 時間が失われた場所',
-      rsWholeTrip: '全行程の実行 — 表示は3日目（分刻みでモデル化した代表日）。日別表示は今後対応予定です。',
+      rsWholeTrip: '全行程の実行 — 作成した全セグメントを通した経路概要',
+      routeOverview: '経路概要',
+      routeTimeUnknown: '時刻未確認 — ブロック位置は時刻表ではなくリハーサル上の順序です',
+      routeTimeUnconfirmedShort: '時刻未確認',
+      routeClockAssumption: 'リハーサル時刻',
+      routeConfirmedDeparture: '出発時刻確認済み',
+      routeApprox: '概算',
+      routeInferred: '逆順ルートの推定 — 使用前に確認',
+      routeTimetableUnknown: '帰路時刻未確認',
+      routeVesselUnknown: '島間船の船名未確認',
       rsClean: '停滞なし — 本日は誰も待ちませんでした',
       rsMin: function (n) { return n + '分'; },
       rsMarkerAria: function (st, n, gap) { return st + ' — 損失 ' + n + ' 人・分：' + gap + '。修正箇所を開きます。'; },
@@ -516,8 +534,8 @@
       rhUnplaced: function (task) { return '○「' + task + '」がまだ配置されていません'; },
       rhDecoy: function (task) { return '✗「' + task + '」はダミー——デッキに戻す'; },
       rhMisassigned: function (task) { return '⚠「' + task + '」の担当役割が違います'; },
-      // Voyage §2：積込日の輸送チェーンの穴（品目がトラック輸送に積まれていない）
-      rhCarryGap: function (item) { return '📦「' + item + '」がトラックに積まれておらず——船に載りません'; },
+      // 経路の引き渡し工程（積込・父島乗換・推定帰路）の穴
+      rhCarryGap: function (item) { return '📦「' + item + '」が必要な引き渡し工程から抜けています'; },
 
       // --- Voyage §3：VIP対応棚（船上でのVIPバディ割り当て） ---
       gdShelfTitle: '🛎 VIP対応棚',
@@ -590,7 +608,7 @@
       inspTitle: 'チェックポイント',
       inspSub: '各メンバーの保有情報・待ち情報・次のタスクを確認。「今すぐ渡す」はこの実行だけを解除——計画のギャップは残ります。',
       inspNowDoing: '現在', inspNext: '次', inspIdleFree: '待ち情報なし', inspMissing: '矢印未設定',
-      inspNotAboard: '船に積まれていない（積込日を修正）',
+      inspNotAboard: '経路の引き渡し工程で未確認（積込／船の乗換を確認）',
       sendNow: '今すぐ渡す', inspResume: '再開 ▶',
       handFedNote: function (n) { return 'この実行で手渡し' + n + '回（計画は未修正）'; },
 
@@ -623,11 +641,11 @@
       p_budgetAuth_need: '予算責任者',
       e_budgetAuth_label: '食事の予算承認者', e_budgetAuth_off: '— なし —', e_budgetAuth_on: '予算責任者（上限つき）',
 
-      p_info_title: '出港時刻をPMだけが保有',
-      p_info_cause: 'チームリーダーが出港時刻を知らず、港で迷い・スマホ確認で止まる。',
-      p_info_fix: '出港時刻を前日20時と当日朝に、全チームリーダーへ共有する。',
+      p_info_title: '船の経路と乗換情報をPMだけが保有',
+      p_info_cause: '竹芝11:00発と、父島で別途確認する船の乗換を各リーダーが把握しないと、人員・荷物がどちらの港でも止まる。',
+      p_info_fix: 'ホテル出発前におがさわら丸の確定時刻を共有し、父島で島間船の接続を再確認して全リーダーへ共有する。',
       p_info_need: 'PM（カード所有者）',
-      e_info_label: '出港時刻カードの共有', e_info_off: 'PMのみ', e_info_on: '全リーダーへ共有（前日＋朝）',
+      e_info_label: '船の経路カード共有', e_info_off: 'PMのみ', e_info_on: '両方の引き渡しで全リーダーへ共有',
 
       p_report_title: '体調不良の報告先が未設定',
       p_report_cause: '体調不良時の報告経路がなく、別の場所で問題が放置・拡大する。',
@@ -750,7 +768,7 @@
 
       // --- 港上での計画：計画ステージ＋指示トレイ（WA） ---
       planChip: '計画中',
-      planStageAria: '夜明け前の港——11名の担当者が持ち場に。トレイの判断オブジェクトを正しい相手にドラッグしてください。',
+      planStageAria: '選択した経路シーンで11名の担当者が持ち場に。トレイの判断オブジェクトを正しい相手にドラッグしてください。',
       planSeat: function (role) { return '現在の担当：' + role + '。'; },
       trayTitle: '指示トレイ',
       trayCount: function (n) { return n === 0 ? 'すべて配置済 ✓' : '未配置 ' + n + ' 件'; },

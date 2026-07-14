@@ -48,7 +48,7 @@
     shrimp: ['shellfish'], crab: ['shellfish'], prawn: ['shellfish'], lobster: ['shellfish']
   };
 
-  // ---- coarse-day (arrival/ops/return) window bounds — feed DAY_WINDOWS below ----
+  // ---- default island-day bounds (Ops and other local days) — feed DAY_WINDOWS below ----
   var DAY_HOUR_START = 300;      // 05:00 — coarse-day authoring window opens
   var DAY_HOUR_END = 1140;       // 19:00 — coarse-day authoring window closes (14h window)
 
@@ -57,18 +57,94 @@
   // DAY_WINDOWS: the authoring window [openMin,closeMin] per segment (mirrors DAY_START_MIN/
   // DAY_END_MIN for fishday and DAY_HOUR_START/DAY_HOUR_END for the coarse days, unified).
   // AUTHORABLE: the segment ids the future deck→arrange→connect editor will cover.
-  var SNAP_MIN = { load: 60, voyage: 60, arrival: 60, ops: 60, return: 60, fishday: 15 };
-  // ---- Voyage-program (spec 2026-07-13 §1) Day-0 windows: Load & Board runs 06:00–11:00 in Tokyo
-  // against the FIXED 11:00 sailing (SAIL_MIN); the Ship Day runs 11:00–21:00 aboard.
-  var LOAD_START_MIN = 360, SAIL_MIN = 660, VOYAGE_END_MIN = 1260;
-  var DAY_WINDOWS = { fishday: [DAY_START_MIN, DAY_END_MIN], arrival: [DAY_HOUR_START, DAY_HOUR_END],
-    ops: [DAY_HOUR_START, DAY_HOUR_END], return: [DAY_HOUR_START, DAY_HOUR_END],
-    load: [LOAD_START_MIN, SAIL_MIN], voyage: [SAIL_MIN, VOYAGE_END_MIN] };
+  var SNAP_MIN = { load: 30, voyage: 60, arrival: 60, ops: 60, return: 60, fishday: 15 };
+  // Authoritative outbound anchors supplied by the trip owner. Breakfast has NO confirmed
+  // time; 08:00 below is only the left edge of the rehearsal canvas and is never exposed as
+  // a fact (the breakfast task carries timeStatus:'unknown'). Hotel departure and the
+  // Ogasawara-maru sailing are confirmed at 10:00 and 11:00. The long-haul close is an
+  // APPROXIMATE +24h boundary, not a claimed arrival timetable.
+  var LOAD_CANVAS_START_MIN = 480, HOTEL_DEPART_MIN = 600, SAIL_MIN = 660;
+  var VOYAGE_APPROX_MIN = 1440, VOYAGE_END_MIN = SAIL_MIN + VOYAGE_APPROX_MIN;
+  // Arrival uses sequence anchors after the approximate long-haul boundary. Every inter-island
+  // task is explicitly marked timeStatus:'unknown'; the numbers keep the rehearsal engine
+  // deterministic without inventing a published connection. Return is the inferred reverse
+  // sequence and therefore has no confirmed timetable either.
+  var ARRIVAL_END_MIN = VOYAGE_END_MIN + 600, RETURN_END_MIN = 2580;
+  var DAY_WINDOWS = { fishday: [DAY_START_MIN, DAY_END_MIN], arrival: [VOYAGE_END_MIN, ARRIVAL_END_MIN],
+    ops: [DAY_HOUR_START, DAY_HOUR_END], return: [DAY_HOUR_START, RETURN_END_MIN],
+    load: [LOAD_CANVAS_START_MIN, SAIL_MIN], voyage: [SAIL_MIN, VOYAGE_END_MIN] };
   var AUTHORABLE = ['load', 'voyage', 'arrival', 'ops', 'fishday', 'return'];
 
   function mulberry32(seed) { var a = seed >>> 0; return function () { a |= 0; a = (a + 0x6D2B79F5) | 0; var t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
   function clone(o) { return JSON.parse(JSON.stringify(o)); }
   function L(en, jp) { return { en: en, jp: jp }; }
+
+  // ---- physical route vocabulary -------------------------------------------------
+  // This is the factual route layer. It deliberately separates PHYSICAL places and
+  // vessels from logical work stations such as "finance" or "mess", so renderers and
+  // reports never have to guess that a generic `port` means Chichijima, Hahajima, or
+  // Takeshiba. Null minutes are intentional unknowns, never zeroes.
+  var PHYSICAL_STOPS = [
+    { id: 'tokyo-hotel', name: L('Nearby Tokyo hotel', '東京の近隣ホテル'), kind: 'hotel', area: 'tokyo', island: null },
+    { id: 'takeshiba-terminal', name: L('Takeshiba Passenger Ship Terminal', '竹芝客船ターミナル'), kind: 'terminal', area: 'tokyo', island: null },
+    { id: 'ogasawara-maru', name: L('Ogasawara-maru', 'おがさわら丸'), kind: 'vessel', area: 'at-sea', island: null, vesselId: 'ogasawara-maru' },
+    { id: 'chichijima-transfer', name: L('Chichijima ship transfer', '父島での船の乗り換え'), kind: 'transfer', area: 'ogasawara', island: 'chichijima' },
+    { id: 'interisland-ferry', name: L('Inter-island vessel (name not confirmed)', '島間船（船名未確認）'), kind: 'vessel', area: 'ogasawara', island: null, vesselId: 'interisland-vessel' },
+    { id: 'hahajima-hinata', name: L('Hahajima · Hinata', '母島・ひなた'), kind: 'base', area: 'ogasawara', island: 'hahajima' }
+  ];
+  var VESSELS = [
+    { id: 'ogasawara-maru', name: L('Ogasawara-maru', 'おがさわら丸'), kind: 'long-haul-ferry', knownName: true,
+      fromStopId: 'takeshiba-terminal', toStopId: 'chichijima-transfer', outboundDepartMin: SAIL_MIN,
+      outboundDurationMin: VOYAGE_APPROX_MIN, durationStatus: 'approximate' },
+    { id: 'interisland-vessel', name: L('Inter-island vessel (name not confirmed)', '島間船（船名未確認）'), kind: 'inter-island-vessel', knownName: false,
+      fromStopId: 'chichijima-transfer', toStopId: 'hahajima-hinata', outboundDepartMin: null,
+      outboundDurationMin: null, durationStatus: 'unknown' },
+    // Local fishing boats are separate identities; they are not either route ferry.
+    { id: 'nobu-fishing-boat', name: L("Nobu-san's fishing boat", 'ノブさんの釣り船'), kind: 'local-fishing-boat', knownName: true },
+    { id: 'kimura-fishing-boat', name: L("Kimura-san's fishing boat", '木村さんの釣り船'), kind: 'local-fishing-boat', knownName: true }
+  ];
+  function physicalStop(id) { for (var i = 0; i < PHYSICAL_STOPS.length; i++) if (PHYSICAL_STOPS[i].id === id) return PHYSICAL_STOPS[i]; return null; }
+  function vessel(id) { for (var i = 0; i < VESSELS.length; i++) if (VESSELS[i].id === id) return VESSELS[i]; return null; }
+
+  // Confirmed outbound facts followed by an explicitly inferred reverse route. `departMin`
+  // is present only for confirmed clocks; `durationMin` is present only for the supplied
+  // "about one day" long-haul duration. Inter-island and return timetable fields stay null.
+  var ITINERARY = [
+    { id: 'out-breakfast', direction: 'outbound', order: 0, kind: 'meal', fromStopId: 'tokyo-hotel', toStopId: 'tokyo-hotel', sceneId: 'tokyo-hotel', vesselId: null,
+      departMin: null, arriveMin: null, durationMin: null, timeStatus: 'unknown', confirmed: true, inferred: false,
+      name: L('Breakfast at the nearby Tokyo hotel (time not confirmed)', '東京の近隣ホテルで朝食（時刻未確認）') },
+    { id: 'out-hotel-takeshiba', direction: 'outbound', order: 1, kind: 'ground-transfer', fromStopId: 'tokyo-hotel', toStopId: 'takeshiba-terminal', sceneId: 'takeshiba-terminal', vesselId: null,
+      departMin: HOTEL_DEPART_MIN, arriveMin: null, durationMin: null, timeStatus: 'confirmed-departure-only', confirmed: true, inferred: false,
+      name: L('Leave the hotel at 10:00 and transfer to Takeshiba', '10:00にホテルを出発し竹芝へ移動') },
+    { id: 'out-ogasawara-maru', direction: 'outbound', order: 2, kind: 'long-haul-voyage', fromStopId: 'takeshiba-terminal', toStopId: 'chichijima-transfer', sceneId: 'ogasawara-maru', vesselId: 'ogasawara-maru',
+      departMin: SAIL_MIN, arriveMin: null, durationMin: VOYAGE_APPROX_MIN, timeStatus: 'confirmed-departure-approx-duration', confirmed: true, inferred: false,
+      name: L('Ogasawara-maru: Takeshiba 11:00 → Chichijima (about one day)', 'おがさわら丸：竹芝11:00発→父島（約1日）') },
+    { id: 'out-chichijima-transfer', direction: 'outbound', order: 3, kind: 'ship-transfer', fromStopId: 'chichijima-transfer', toStopId: 'chichijima-transfer', sceneId: 'chichijima-transfer', vesselId: null,
+      departMin: null, arriveMin: null, durationMin: null, timeStatus: 'unknown', confirmed: true, inferred: false,
+      name: L('Disembark and change ships at Chichijima (connection time not confirmed)', '父島で下船・船を乗り換え（接続時刻未確認）') },
+    { id: 'out-interisland', direction: 'outbound', order: 4, kind: 'inter-island-voyage', fromStopId: 'chichijima-transfer', toStopId: 'hahajima-hinata', sceneId: 'interisland-ferry', vesselId: 'interisland-vessel',
+      departMin: null, arriveMin: null, durationMin: null, timeStatus: 'unknown', confirmed: true, inferred: false,
+      name: L('Separate inter-island vessel: Chichijima → Hahajima (name/times not confirmed)', '別の島間船：父島→母島（船名・時刻未確認）') },
+    { id: 'out-hinata', direction: 'outbound', order: 5, kind: 'arrival', fromStopId: 'hahajima-hinata', toStopId: 'hahajima-hinata', sceneId: 'hahajima-hinata', vesselId: null,
+      departMin: null, arriveMin: null, durationMin: null, timeStatus: 'unknown', confirmed: true, inferred: false,
+      name: L('Arrive on Hahajima and continue to Hinata', '母島に到着し、ひなたへ') },
+    { id: 'return-hinata', direction: 'return', order: 0, kind: 'departure', fromStopId: 'hahajima-hinata', toStopId: 'hahajima-hinata', sceneId: 'hahajima-hinata', vesselId: null,
+      departMin: null, arriveMin: null, durationMin: null, timeStatus: 'unknown', confirmed: false, inferred: true,
+      name: L('Leave Hinata on Hahajima (reverse route inferred; timetable not confirmed)', '母島のひなたを出発（逆順ルートの推定・時刻未確認）') },
+    { id: 'return-interisland', direction: 'return', order: 1, kind: 'inter-island-voyage', fromStopId: 'hahajima-hinata', toStopId: 'chichijima-transfer', sceneId: 'interisland-ferry', vesselId: 'interisland-vessel',
+      departMin: null, arriveMin: null, durationMin: null, timeStatus: 'unknown', confirmed: false, inferred: true,
+      name: L('Inter-island vessel: Hahajima → Chichijima (inferred; name/times not confirmed)', '島間船：母島→父島（推定・船名／時刻未確認）') },
+    { id: 'return-chichijima-transfer', direction: 'return', order: 2, kind: 'ship-transfer', fromStopId: 'chichijima-transfer', toStopId: 'chichijima-transfer', sceneId: 'chichijima-transfer', vesselId: null,
+      departMin: null, arriveMin: null, durationMin: null, timeStatus: 'unknown', confirmed: false, inferred: true,
+      name: L('Change ships at Chichijima (inferred; connection not confirmed)', '父島で船を乗り換え（推定・接続未確認）') },
+    { id: 'return-ogasawara-maru', direction: 'return', order: 3, kind: 'long-haul-voyage', fromStopId: 'chichijima-transfer', toStopId: 'takeshiba-terminal', sceneId: 'ogasawara-maru', vesselId: 'ogasawara-maru',
+      departMin: null, arriveMin: null, durationMin: VOYAGE_APPROX_MIN, timeStatus: 'unknown-timetable-approx-duration', confirmed: false, inferred: true,
+      name: L('Ogasawara-maru: Chichijima → Takeshiba (inferred; timetable not confirmed)', 'おがさわら丸：父島→竹芝（推定・時刻未確認）') },
+    { id: 'return-takeshiba', direction: 'return', order: 4, kind: 'arrival', fromStopId: 'takeshiba-terminal', toStopId: 'takeshiba-terminal', sceneId: 'takeshiba-terminal', vesselId: null,
+      departMin: null, arriveMin: null, durationMin: null, timeStatus: 'unknown', confirmed: false, inferred: true,
+      name: L('Arrive at Takeshiba (inferred; timetable not confirmed)', '竹芝に到着（推定・時刻未確認）') }
+  ];
+  function itineraryLeg(id) { for (var i = 0; i < ITINERARY.length; i++) if (ITINERARY[i].id === id) return ITINERARY[i]; return null; }
 
   // ---- the site map: zones where characters gather (spec §8 simulation screen) ----
   // Map geography (2026-07-07): LAND on the left (the buildings), OCEAN on the right; Port sits at the shore
@@ -78,9 +154,9 @@
   // now. Port = the shore; the iso rock is out in the ocean. `hub`/`hidden` are render hints (engine ignores them).
   var STATIONS = [
     { id: 'command', name: L('Command', '司令部'), icon: '🏛️', x: 0.30, y: 0.44, hidden: true },  // folded into Hinata
-    { id: 'port',    name: L('Port', '港'),         icon: '⚓', x: 0.52, y: 0.56 },  // the shore (land↔ocean edge)
+    { id: 'port',    name: L('Hahajima port', '母島の港'), icon: '⚓', x: 0.52, y: 0.56 },  // base map = Hahajima; route scenes override this label
     { id: 'vessel',  name: L('Iso rock', '磯'),     icon: '🪨', x: 0.82, y: 0.72 },  // OCEAN — the iso fishing rock
-    { id: 'lodging', name: L('Lodging', '宿'),      icon: '🏨', x: 0.13, y: 0.78 },  // land — lodging, bottom-left
+    { id: 'lodging', name: L('Hinata lodging', 'ひなた（宿）'), icon: '🏨', x: 0.13, y: 0.78 },  // Hahajima — lodging, bottom-left
     { id: 'mess',    name: L('Hinata', 'ひなた'),   icon: '🍽️', x: 0.30, y: 0.44, hub: true },     // land — the big Hinata compound (command/kitchen/rods/transport/clinic)
     { id: 'finance', name: L('Finance', '会計'),    icon: '🧮', x: 0.30, y: 0.44, hidden: true },   // hidden for now (folded into the hub)
     { id: 'clinic',  name: L('Clinic', '診療所'),   icon: '⛑️', x: 0.30, y: 0.44, hidden: true }   // folded into Hinata (clinic is also Hinata)
@@ -104,15 +180,19 @@
 
   // The trip is rehearsed one DAY/segment at a time: pick a day, plan it, run it.
   var SEGMENTS = [
-    // Voyage program (spec §1): the two Day-0 segments. Inserted BEFORE the existing four so the
-    // narrative order reads Day 0 → Day 1 → …; the RELATIVE order of the four legacy entries is
-    // unchanged, so createSim's pre/post day-scoping over classic tasks is byte-identical.
-    { id: 'load',    phaseEn: 'Day 0 · Load & board',          name: L('Day 0 · Load & board (Tokyo)', '0日目・積込・乗船（東京）') },
-    { id: 'voyage',  phaseEn: 'Day 0 · Ship day',              name: L('Day 0 · Ship day (aboard)', '0日目・船上（航海）') },
-    { id: 'arrival', phaseEn: 'Day 1 · Arrival',              name: L('Day 1 · Arrival', '1日目・到着') },
+    // Physical chronology: Tokyo setup → long-haul ship → Chichijima transfer/Hahajima →
+    // island operations/Fishing Day → inferred reverse return.
+    { id: 'load',    phaseEn: 'Day 0 · Tokyo hotel to Takeshiba', name: L('Day 0 · Tokyo hotel → Takeshiba', '0日目・東京のホテル→竹芝'),
+      routeLegIds: ['out-breakfast', 'out-hotel-takeshiba'], sceneIds: ['tokyo-hotel', 'takeshiba-terminal'] },
+    { id: 'voyage',  phaseEn: 'Day 0–1 · Ogasawara-maru', name: L('Day 0–1 · Ogasawara-maru (about one day)', '0〜1日目・おがさわら丸（約1日）'),
+      routeLegIds: ['out-ogasawara-maru'], sceneIds: ['ogasawara-maru'] },
+    { id: 'arrival', phaseEn: 'Day 1 · Arrival', routePhaseEn: 'Day 1 · Chichijima transfer to Hahajima', name: L('Day 1 · Chichijima transfer → Hahajima/Hinata', '1日目・父島乗換→母島／ひなた'),
+      routeLegIds: ['out-chichijima-transfer', 'out-interisland', 'out-hinata'], sceneIds: ['chichijima-transfer', 'interisland-ferry', 'hahajima-hinata'] },
     { id: 'ops',     phaseEn: 'Days 2–9 · Daily operations',  name: L('Days 2–9 · Operations', '2〜9日目・運営') },
-    { id: 'return',  phaseEn: 'Day 10 · Return & shipping',   name: L('Day 10 · Return', '10日目・帰着') },
-    { id: 'fishday', phaseEn: 'Day 3 · Fishing day',          name: L('Day 3 · Fishing day (minute-level)', '3日目・代表釣行日（分刻み）') }
+    { id: 'fishday', phaseEn: 'Day 3 · Fishing day',          name: L('Day 3 · Fishing day (minute-level)', '3日目・代表釣行日（分刻み）') },
+    { id: 'return',  phaseEn: 'Day 10 · Return & shipping', routePhaseEn: 'Day 10 · Return route (inferred)', name: L('Day 10 · Reverse return route (timetable unconfirmed)', '10日目・逆順の帰路（時刻未確認）'),
+      routeLegIds: ['return-hinata', 'return-interisland', 'return-chichijima-transfer', 'return-ogasawara-maru', 'return-takeshiba'],
+      sceneIds: ['hahajima-hinata', 'interisland-ferry', 'chichijima-transfer', 'ogasawara-maru', 'takeshiba-terminal'], inferred: true }
   ];
 
   // fishday checkpoints (関所): the minute-clock run pauses here for inspect / intervene (§8)
@@ -247,7 +327,7 @@
         // pricing (§3.3 amendment — the two owner/pm fishday standbys; behavior untouched)
         flex: !!o.flex };
     }
-    // §20.3 — HD() mirrors FD() for the three authorable coarse days (arrival/ops/return):
+    // §20.3 — HD() mirrors FD() for the authorable route/coarse days:
     // same output shape as a fishday task (minus the day-clock startDay/dur/phase/day fields
     // FD carries only so the legacy 10-day frame can run fishday), so a future daySchedule(plan,seg)
     // can treat HD and FD tasks identically. Adds `required` (default true; false = a decoy —
@@ -266,40 +346,70 @@
         safetyGate: o.safetyGate || 0, qualityCheck: o.qualityCheck || 0, moneyCheck: o.moneyCheck || 0,
         // Voyage additions (spec §2/§3), all inert on days that don't use them:
         //   carries[]  — manifest item ids this task moves (custody legs + Pack & Sail mirror)
-        //   custody    — an OUTBOUND custody leg (packed→trucked→in hold); carryState folds these
+        //   custody    — an OUTBOUND custody leg (packed→transferred to Takeshiba→in hold); carryState folds these
         //   care       — careGuestId: a per-VIP care task (starlink/escort); exempt from exec lanes,
         //                priced by the per-VIP care atom; buddies auto-staff + re-home ownerRoleId
         //   flex       — exempt from exec-lane pricing (see FD)
         carries: o.carries ? o.carries.slice() : [], custody: !!o.custody,
-        careGuestId: o.care || null, flex: !!o.flex };
+        transferCustody: !!o.transferCustody, returnCustody: !!o.returnCustody,
+        carrySegment: o.carrySegment || null,
+        careGuestId: o.care || null, flex: !!o.flex,
+        // Factual route annotations. Numeric startMin/durMin remain deterministic rehearsal
+        // anchors; `timeStatus` tells every consumer whether that clock is confirmed,
+        // approximate, or sequence-only because the real timetable has not been supplied.
+        routeLegId: o.routeLegId || null, sceneId: o.sceneId || null,
+        fromSceneId: o.fromSceneId || null, toSceneId: o.toSceneId || null,
+        locationId: o.locationId || o.sceneId || null, vesselId: o.vesselId || null,
+        timeStatus: o.timeStatus || 'planned', timeKnown: o.timeKnown !== false,
+        confirmedStartMin: (typeof o.confirmedStartMin === 'number') ? o.confirmedStartMin : null,
+        confirmedEndMin: (typeof o.confirmedEndMin === 'number') ? o.confirmedEndMin : null,
+        durationStatus: o.durationStatus || (o.timeKnown === false ? 'sequence-only' : 'planned'),
+        inferred: !!o.inferred };
     }
-    // §7/§13.4 P2 seed re-tune — Arrival ships PRE-CLEARED (empty board) as the tutorial: the
+    // §7/§13.4 P2 seed re-tune — Arrival ships PARTLY CLEARED as the tutorial: the
     // required tasks below are authored with their full canonical placement (assignedIds/
     // startMin/durMin), captured into arrivalCanonPlacement, then blanked to assignedIds:[] so
-    // the SHIPPED template hands the player an empty board. canonDay('arrival')/applyDayFix use
+    // the SHIPPED template hands the player an incomplete board. canonDay('arrival')/applyDayFix use
     // arrivalCanonPlacement to restore the placements (not just the handoffs) so the canonical
     // Arrival still reaches its full 15/15 (§13.4 acceptance).
+    // The internal minutes after VOYAGE_END_MIN are SEQUENCE ANCHORS, not a published
+    // inter-island timetable. Every such task says timeStatus:'unknown'. This preserves a
+    // runnable causal rehearsal while keeping the owner's unknown connection/name/duration
+    // unknown in the data and UI.
     var arrivalReqTasks = [
-      HD('hd_a_ferrycheck',   'Confirm ferry departure & manifest', '船便出港時刻・乗船名簿確認',       'port',    'pm',         ['p02'], 300, 60,  { produces: ['ic_ferry'] }),
-      // Voyage repack: arrival's quality/money flags retired (bucket 15 -> 12; its weight is
-      // execution + information). Pricing-only — task data/behavior byte-identical.
-      HD('hd_a_board',        'Ferry boarding & assemble',          '乗船確認・集合',                   'port',    'logi',       ['p06'], 360, 60,  { deps: ['hd_a_ferrycheck'], info: ['ic_ferry'] }),
-      HD('hd_a_cross',        'Sea crossing & seasickness watch',   '渡航・船酔い対応',                 'vessel',  'siteLead',   ['p03'], 420, 180, { deps: ['hd_a_board'], diff: 3 }),
-      HD('hd_a_checkin',      'Check-in & room assignment',         '受付・部屋割り',                   'lodging', 'logi',       ['p06'], 600, 60,  { deps: ['hd_a_cross'], produces: ['ic_rooms'] }),
-      HD('hd_a_foodsource',   'Food source & allergy check',        '食材調達・アレルギー確認',         'finance', 'budgetLead', ['p04'], 660, 60,  { produces: ['ic_food'] }),
-      HD('hd_a_intake',       'Supply & gear intake (drinks, tackle, food, ice)', '物資・釣具搬入（飲料・釣具・食材・氷）', 'lodging', 'logi', ['p06'], 660, 60, { deps: ['hd_a_checkin'], produces: ['ic_tackle'], res: ['storage'] }),
-      HD('hd_a_safety',       'Safety briefing',                    '安全説明会',                       'clinic',  'safetyLead', ['p05'], 660, 60,  { diff: 3, safetyGate: 1 }),
-      HD('hd_a_gearstow',     'Gear stow',                          '道具収納',                         'port',    'specialist', ['p08'], 720, 60,  { deps: ['hd_a_intake'], info: ['ic_tackle'] }),
-      HD('hd_a_dinnerprep',   'First-night meal prep',              '初日夕食仕込み',                   'mess',    'chef',       ['p09', 'p10'], 720, 120, { deps: ['hd_a_intake'], info: ['ic_food'], res: ['food'], diff: 3 }),
-      HD('hd_a_headcount',    'Arrival headcount',                  '到着点呼',                         'port',    'comms',      ['p07'], 840, 60,  { deps: ['hd_a_checkin'], info: ['ic_rooms'] }),
-      HD('hd_a_dinnerserve',  'First-night meal service',           '初日夕食提供',                     'mess',    'chef',       ['p09', 'p10', 'p11'], 1080, 60, { deps: ['hd_a_dinnerprep'], res: ['food'], guestFacing: true })
+      HD('hd_a_disembark',    'Disembark Ogasawara-maru at Chichijima and account for baggage', '父島でおがさわら丸を下船・荷物確認', 'port', 'logi', ['p06'], 2100, 60,
+        { routeLegId: 'out-chichijima-transfer', sceneId: 'chichijima-transfer', vesselId: 'ogasawara-maru', timeStatus: 'approximate-boundary', timeKnown: false }),
+      HD('hd_a_ferrycheck',   'Confirm the inter-island connection and manifest (time/name not supplied)', '島間船の接続・名簿確認（時刻・船名未提供）', 'port', 'pm', ['p02'], 2100, 60,
+        { produces: ['ic_ferry'], routeLegId: 'out-chichijima-transfer', sceneId: 'chichijima-transfer', timeStatus: 'unknown', timeKnown: false }),
+      HD('hd_a_transfer',     'Transfer baggage and manifest between ships at Chichijima', '父島で船間の荷物・積荷を引き継ぎ', 'port', 'logi', ['p06'], 2160, 60,
+        { deps: ['hd_a_disembark'], routeLegId: 'out-chichijima-transfer', sceneId: 'chichijima-transfer', timeStatus: 'unknown', timeKnown: false }),
+      HD('hd_a_board',        'Board the separate inter-island vessel', '別の島間船へ乗船', 'port', 'logi', ['p06'], 2220, 60,
+        { deps: ['hd_a_ferrycheck', 'hd_a_transfer'], info: ['ic_ferry'], routeLegId: 'out-interisland', fromSceneId: 'chichijima-transfer', toSceneId: 'interisland-ferry', sceneId: 'chichijima-transfer', vesselId: 'interisland-vessel', timeStatus: 'unknown', timeKnown: false }),
+      HD('hd_a_cross',        'Inter-island crossing from Chichijima to Hahajima', '父島から母島への島間航海', 'vessel', 'siteLead', ['p03'], 2280, 120,
+        { deps: ['hd_a_board'], diff: 3, routeLegId: 'out-interisland', sceneId: 'interisland-ferry', vesselId: 'interisland-vessel', timeStatus: 'unknown', timeKnown: false }),
+      HD('hd_a_checkin',      'Arrive on Hahajima, unload, and transfer to Hinata', '母島到着・荷下ろし・ひなたへ移動', 'lodging', 'logi', ['p06'], 2400, 60,
+        { deps: ['hd_a_cross'], produces: ['ic_rooms'], res: ['luggage'], routeLegId: 'out-hinata', fromSceneId: 'interisland-ferry', toSceneId: 'hahajima-hinata', sceneId: 'hahajima-hinata', timeStatus: 'unknown', timeKnown: false }),
+      HD('hd_a_foodsource',   'Food source & allergy check at Hinata', 'ひなたで食材調達・アレルギー確認', 'finance', 'budgetLead', ['p04'], 2400, 60,
+        { produces: ['ic_food'], routeLegId: 'out-hinata', sceneId: 'hahajima-hinata', timeStatus: 'planned' }),
+      HD('hd_a_intake',       'Supply & gear intake at Hinata (drinks, tackle, food, ice)', 'ひなたで物資・釣具搬入（飲料・釣具・食材・氷）', 'lodging', 'logi', ['p06'], 2460, 60,
+        { deps: ['hd_a_checkin'], produces: ['ic_tackle'], res: ['storage', 'tackle'], routeLegId: 'out-hinata', sceneId: 'hahajima-hinata', timeStatus: 'planned' }),
+      HD('hd_a_safety',       'Hahajima / Hinata safety briefing', '母島・ひなた安全説明会', 'clinic', 'safetyLead', ['p05'], 2400, 60,
+        { diff: 3, safetyGate: 1, routeLegId: 'out-hinata', sceneId: 'hahajima-hinata', timeStatus: 'planned' }),
+      HD('hd_a_gearstow',     'Stow gear at Hinata', 'ひなたで道具収納', 'port', 'specialist', ['p08'], 2520, 60,
+        { deps: ['hd_a_intake'], info: ['ic_tackle'], routeLegId: 'out-hinata', sceneId: 'hahajima-hinata', timeStatus: 'planned' }),
+      HD('hd_a_dinnerprep',   'First-night meal prep at Hinata', 'ひなたで初日夕食仕込み', 'mess', 'chef', ['p09', 'p10'], 2520, 120,
+        { deps: ['hd_a_intake'], info: ['ic_food'], res: ['food'], diff: 3, routeLegId: 'out-hinata', sceneId: 'hahajima-hinata', timeStatus: 'planned' }),
+      HD('hd_a_headcount',    'Hahajima / Hinata arrival headcount', '母島・ひなた到着点呼', 'port', 'comms', ['p07'], 2460, 60,
+        { deps: ['hd_a_checkin'], info: ['ic_rooms'], routeLegId: 'out-hinata', sceneId: 'hahajima-hinata', timeStatus: 'planned' }),
+      HD('hd_a_dinnerserve',  'First-night meal service at Hinata', 'ひなたで初日夕食提供', 'mess', 'chef', ['p09', 'p10', 'p11'], 2640, 60,
+        { deps: ['hd_a_dinnerprep'], res: ['food'], guestFacing: true, routeLegId: 'out-hinata', sceneId: 'hahajima-hinata', timeStatus: 'planned' })
     ];
     var arrivalCanonPlacement = {};
-    // §7/§13.4 refinement-3: HALF-clear (not all 11) — leave the early-morning chain placed
-    // (ferry check -> board -> cross -> checkin -> intake -> headcount, 6 tasks) and clear the
+    // §7/§13.4 refinement-3: leave the physical transfer chain and intake/headcount placed
+    // (8 of 13 tasks) and clear the
     // later/independent ones (food source, safety briefing, gear stow, dinner prep/serve, 5
     // tasks), so authoring Arrival (canonDay/applyDayFix) is a ~+7-8 lever, not +14 — fixHandoffs
-    // stays the dominant single jump (§1 invariant). canonPlacement still captures ALL 11 so
+    // stays the dominant single jump (§1 invariant). canonPlacement still captures ALL 13 so
     // canonDay('arrival')/applyDayFix restore the full roster regardless of what ships blank.
     var ARRIVAL_CLEARED = { hd_a_foodsource: 1, hd_a_safety: 1, hd_a_gearstow: 1, hd_a_dinnerprep: 1, hd_a_dinnerserve: 1 };
     arrivalReqTasks.forEach(function (t) {
@@ -339,13 +449,13 @@
     // neededResources tokens downstream: a resource with no manifest item is never
     // carry-bound (inert — 'boat', 'storage', 'keys', …), and a task needing a bound
     // resource stalls (手待ち-style) in any segment where a backing item is 'missing'.
-    function MI(id, en, jp, kind, resourceId, forSeg) { return { id: id, name: L(en, jp), kind: kind, resourceId: resourceId, forSeg: forSeg }; }
+    function MI(id, en, jp, kind, resourceId, forSeg, returnRequired) { return { id: id, name: L(en, jp), kind: kind, resourceId: resourceId, forSeg: forSeg, returnRequired: returnRequired !== false }; }
     var manifest = [
       MI('mi_rods',       'Rod sets ×6',           '竿セット×6',             'gear',    'tackle',  'fishday'),
       MI('mi_jigcase',    'Jig case (60–100 g)',   'ジグケース（60〜100g）', 'gear',    'jigs',    'fishday'),
       MI('mi_coolers',    'Coolers ×2',            'クーラーボックス×2',     'gear',    'ice',     'fishday'),
-      MI('mi_ice',        'Ice blocks 40 kg',      '氷40kg',                 'gear',    'ice',     'fishday'),
-      MI('mi_foodcrates', 'Food crates',           '食材ケース',             'food',    'food',    'ops'),
+      MI('mi_ice',        'Ice blocks 40 kg',      '氷40kg',                 'gear',    'ice',     'fishday', false),
+      MI('mi_foodcrates', 'Food crates',           '食材ケース',             'food',    'food',    'ops', false),
       MI('mi_medkit',     'Medkit',                '救急セット',             'safety',  'medkit',  'ops'),
       MI('mi_cashbox',    'Cash box',              '現金ボックス',           'money',   'cash',    'return'),
       MI('mi_lug_gd_nagatani', "Nagatani's luggage", 'ナガタニ様の荷物',     'luggage', 'luggage', 'voyage'),
@@ -354,15 +464,34 @@
       MI('mi_lug_gd_yamate',   "Yamate's luggage",   'ヤマテ様の荷物',       'luggage', 'luggage', 'voyage')
     ];
     var ALL_ITEMS = manifest.map(function (m) { return m.id; });
-    // --- Day 0 · LOAD & BOARD (06:00–11:00 Tokyo, hour snap, fixed 11:00 sailing) ---
-    // Custody chain (custody:true): packed → trucked to the pier → in the hold. carryState folds
+    var RETURN_ITEMS = manifest.filter(function (m) { return m.returnRequired; }).map(function (m) { return m.id; });
+    // The Chichijima ship change is a second, explicit custody chain. It is added only
+    // after the manifest exists so every physical item can be checked off at disembark,
+    // transfer, inter-island loading/crossing, and Hahajima unloading.
+    var transferTaskIds = { hd_a_disembark: 1, hd_a_transfer: 1, hd_a_board: 1, hd_a_cross: 1, hd_a_checkin: 1 };
+    arrivalReqTasks.forEach(function (t) {
+      if (transferTaskIds[t.id]) {
+        t.transferCustody = true; t.carries = ALL_ITEMS.slice();
+        if (arrivalCanonPlacement[t.id]) arrivalCanonPlacement[t.id].carries = ALL_ITEMS.slice();
+      }
+    });
+    // --- Day 0 · TOKYO HOTEL → TAKESHIBA (confirmed 10:00 departure / 11:00 sailing) ---
+    // Custody chain (custody:true): packed → transferred from the hotel to Takeshiba → in the hold. carryState folds
     // this chain into per-item availability for every later segment.
     var loadReqTasks = [
-      HD('hd_l_pack',      'Pack & check the manifest',               '積荷仕分け・現物照合',           'command', 'logi',     ['p06'], 360, 60,  { produces: ['ic_manifest'], custody: true, carries: ALL_ITEMS, moneyCheck: 1 }),
-      HD('hd_l_truck',     'Truck run to the pier',                   '埠頭へのトラック輸送',           'port',    'siteLead', ['p03'], 420, 60,  { deps: ['hd_l_pack'], info: ['ic_manifest'], custody: true, carries: ALL_ITEMS }),
-      HD('hd_l_cabins',    'Cabin assignment list',                   '船室割当リスト作成',             'command', 'pm',       ['p02'], 420, 60,  { produces: ['ic_cabins'] }),
-      HD('hd_l_hold',      'Hold loading & manifest check',           '船倉積込・積荷照合',             'port',    'siteLead', ['p03'], 480, 120, { deps: ['hd_l_truck'], info: ['ic_manifest'], custody: true, carries: ALL_ITEMS, diff: 3, safetyGate: 2 }),
-      HD('hd_l_headcount', 'Boarding headcount vs the 11:00 sailing', '出港前乗船点呼（11:00出港厳守）', 'port',    'comms',    ['p07'], 600, 60,  { deps: ['hd_l_hold'], info: ['ic_cabins'], safetyGate: 2 })
+      // The canvas anchor is sequence-only: the owner supplied breakfast PLACE but not TIME.
+      HD('hd_l_breakfast', 'Breakfast at the nearby Tokyo hotel (time not confirmed)', '東京の近隣ホテルで朝食（時刻未確認）', 'mess', 'owner', ['p01'], 480, 60,
+        { flex: true, guestFacing: true, routeLegId: 'out-breakfast', sceneId: 'tokyo-hotel', timeStatus: 'unknown', timeKnown: false }),
+      HD('hd_l_pack',      'Check luggage and the physical manifest at the Tokyo hotel', '東京のホテルで荷物・積荷の現物照合', 'command', 'logi', ['p06'], 480, 60,
+        { produces: ['ic_manifest'], custody: true, carries: ALL_ITEMS, moneyCheck: 1, routeLegId: 'out-breakfast', sceneId: 'tokyo-hotel', timeStatus: 'unknown', timeKnown: false }),
+      HD('hd_l_cabins',    'Prepare the Ogasawara-maru cabin assignment list', 'おがさわら丸の船室割当リスト作成', 'command', 'pm', ['p02'], 480, 60,
+        { produces: ['ic_cabins'], routeLegId: 'out-breakfast', sceneId: 'tokyo-hotel', timeStatus: 'unknown', timeKnown: false }),
+      HD('hd_l_truck',     'Leave the hotel at 10:00 and transfer people/luggage to Takeshiba', '10:00ホテル出発・人員／荷物を竹芝へ移動', 'port', 'siteLead', ['p03'], HOTEL_DEPART_MIN, 30,
+        { deps: ['hd_l_pack'], info: ['ic_manifest'], custody: true, carries: ALL_ITEMS, routeLegId: 'out-hotel-takeshiba', fromSceneId: 'tokyo-hotel', toSceneId: 'takeshiba-terminal', sceneId: 'takeshiba-terminal', timeStatus: 'confirmed-start-only', timeKnown: false, confirmedStartMin: HOTEL_DEPART_MIN }),
+      HD('hd_l_hold',      'Takeshiba baggage handoff and Ogasawara-maru hold check', '竹芝で荷物引き渡し・おがさわら丸船倉照合', 'port', 'siteLead', ['p03'], 630, 30,
+        { deps: ['hd_l_truck'], info: ['ic_manifest'], custody: true, carries: ALL_ITEMS, diff: 3, safetyGate: 2, routeLegId: 'out-ogasawara-maru', sceneId: 'takeshiba-terminal', vesselId: 'ogasawara-maru', timeStatus: 'unknown-before-fixed-sailing', timeKnown: false }),
+      HD('hd_l_headcount', 'Takeshiba boarding headcount before the 11:00 Ogasawara-maru sailing', 'おがさわら丸11:00出港前の竹芝乗船点呼', 'port', 'comms', ['p07'], 630, 30,
+        { deps: ['hd_l_truck'], info: ['ic_cabins'], safetyGate: 2, routeLegId: 'out-ogasawara-maru', sceneId: 'takeshiba-terminal', vesselId: 'ogasawara-maru', timeStatus: 'unknown-before-fixed-sailing', timeKnown: false })
     ];
     var loadDecoys = [
       HD('hd_l_dec_souvenir', 'Last-minute Tokyo souvenir run', '出発前の東京土産購入',   'command', 'logi',     [], 480, 60, { required: false }),
@@ -376,27 +505,37 @@
       loadCanonPlacement[t.id] = { assignedIds: t.assignedIds.slice(), startMin: t.startMin, durMin: t.durMin };
       if (t.custody) loadCanonPlacement[t.id].carries = t.carries.slice();
     });
-    // SEED GAP L1 (spec §4): the jig case is never assigned to the truck run — it misses the ship,
+    // SEED GAP L1 (spec §4): the jig case is never assigned to the hotel→Takeshiba transfer — it misses the ship,
     // and on Day 3 the gear check stalls on it ("what misses the ship cannot be fixed at sea").
-    loadReqTasks[1].carries = loadReqTasks[1].carries.filter(function (id) { return id !== 'mi_jigcase'; });
+    for (var lri = 0; lri < loadReqTasks.length; lri++) if (loadReqTasks[lri].id === 'hd_l_truck') {
+      loadReqTasks[lri].carries = loadReqTasks[lri].carries.filter(function (id) { return id !== 'mi_jigcase'; });
+    }
     var loadCanonArrows = [
       H('h_l_manifest', 'ic_manifest', 'logi', 'hd_l_pack',   'siteLead', 'hd_l_truck',     { type: 'onTaskDone', taskId: 'hd_l_pack' },   'faceToFace', 'idle', null,
-        '11 items packed & verified — manifest to the truck run', '積荷11点確認済・輸送班へ引き渡し'),
+        '11 items packed & verified — manifest to the hotel-to-terminal transfer', '積荷11点確認済・ホテルから港への移動班へ引き渡し'),
       H('h_l_cabins',   'ic_cabins',   'pm',   'hd_l_cabins', 'comms',    'hd_l_headcount', { type: 'onTaskDone', taskId: 'hd_l_cabins' }, 'faceToFace', 'idle', null,
         'Cabin list final — check boarders off against it', '船室割当確定・点呼で照合')
     ];
     // SEED GAP L2 (spec §4): the cabin list is UNSHARED (h_l_cabins withheld) — the boarding
     // headcount idles past the fixed 11:00 sailing and the boarding gate fails on the seed.
     var loadHandoffs = [clone(loadCanonArrows[0])];
-    // --- Day 0 · SHIP DAY (11:00–21:00 aboard, hour snap; the ship-map stations) ---
-    // The 12 per-VIP care tasks (t_v_star_/t_v_esc_l_/t_v_esc_d_) ship UNSTAFFED; assigning a
+    // --- Day 0–1 · OGASAWARA-MARU (11:00 departure, about one day aboard) ---
+    // The 16 per-VIP care tasks (t_v_star_/t_v_esc_l_/t_v_esc_d_/t_v_esc_b_) ship UNSTAFFED; assigning a
     // buddy (plan.buddies / overrides.buddies) auto-staffs them onto the buddy (mergePlan).
     var vipStarMin = { gd_nagatani: 780, gd_watanabe: 840, gd_yamate: 900, gd_kadou: 960 };
     var voyageTasks = [
-      HD('hd_v_luggage',   'Luggage runs to the cabins',      '手荷物の船室搬入',       'cabins', 'logi',       ['p06'], 660, 120, { info: ['ic_cabins'], res: ['luggage'] }),
-      HD('hd_v_watch',     'Deck watch & seasickness rounds', 'デッキ監視・船酔い巡回', 'deck',   'safetyLead', ['p05'], 720, 420, { diff: 3, safetyGate: 2 }),
-      HD('hd_v_brief',     'Arrival briefing on deck',        '到着前ブリーフィング',   'deck',   'pm',         ['p02'], 1140, 60, {}),
-      HD('hd_v_headcount', 'Evening roll call aboard',        '船内夜間点呼',           'deck',   'comms',      ['p07'], 1200, 60, {})
+      HD('hd_v_luggage',   'Ogasawara-maru departure and luggage runs to cabins', 'おがさわら丸出港・手荷物を船室へ', 'cabins', 'logi', ['p06'], SAIL_MIN, 120,
+        { info: ['ic_cabins'], res: ['luggage'], routeLegId: 'out-ogasawara-maru', sceneId: 'ogasawara-maru', vesselId: 'ogasawara-maru', timeStatus: 'confirmed-start-only', timeKnown: false, confirmedStartMin: SAIL_MIN }),
+      HD('hd_v_watch',     'Day deck watch & seasickness rounds', '日中のデッキ監視・船酔い巡回', 'deck', 'safetyLead', ['p05'], 720, 420,
+        { diff: 3, safetyGate: 2, routeLegId: 'out-ogasawara-maru', sceneId: 'ogasawara-maru', vesselId: 'ogasawara-maru', timeStatus: 'planned' }),
+      HD('hd_v_watch_night', 'Overnight watch and welfare rounds', '夜間当直・体調巡回', 'deck', 'siteLead', ['p03'], 1140, 420,
+        { diff: 3, flex: true, routeLegId: 'out-ogasawara-maru', sceneId: 'ogasawara-maru', vesselId: 'ogasawara-maru', timeStatus: 'planned' }),
+      HD('hd_v_watch_morning', 'Next-morning watch and welfare rounds', '翌朝の当直・体調巡回', 'deck', 'safetyLead', ['p05'], 1560, 420,
+        { diff: 3, flex: true, routeLegId: 'out-ogasawara-maru', sceneId: 'ogasawara-maru', vesselId: 'ogasawara-maru', timeStatus: 'planned' }),
+      HD('hd_v_brief',     'Brief the Chichijima ship change (arrival is approximate)', '父島での船乗換ブリーフィング（到着は概算）', 'deck', 'pm', ['p02'], 1980, 60,
+        { routeLegId: 'out-ogasawara-maru', sceneId: 'ogasawara-maru', vesselId: 'ogasawara-maru', timeStatus: 'approximate', timeKnown: false }),
+      HD('hd_v_headcount', 'Arrival-approach roll call aboard Ogasawara-maru', 'おがさわら丸・到着前点呼', 'deck', 'comms', ['p07'], 2040, 60,
+        { routeLegId: 'out-ogasawara-maru', sceneId: 'ogasawara-maru', vesselId: 'ogasawara-maru', timeStatus: 'approximate', timeKnown: false })
     ];
     var voyageDecoys = [
       HD('hd_v_dec_sternfish', 'Fishing off the stern underway', '航行中の船尾釣り',   'deck',   'specialist', [], 900, 60, { required: false, safetyFlag: true }),
@@ -410,8 +549,15 @@
       voyageTasks.push(
         HD('t_v_star_' + g.id,  'Starlink registration — ' + g.name.en, 'スターリンク登録（' + g.name.jp + '様）', 'purser', 'pm', [], vipStarMin[g.id], 60, { care: g.id }),
         HD('t_v_esc_l_' + g.id, 'Lunch escort — ' + g.name.en,          '昼食エスコート（' + g.name.jp + '様）',   'dining', 'pm', [], 720, 60,  { care: g.id, guestFacing: true }),
-        HD('t_v_esc_d_' + g.id, 'Dinner escort — ' + g.name.en,         '夕食エスコート（' + g.name.jp + '様）',   'dining', 'pm', [], 1080, 60, { care: g.id, guestFacing: true })
+        HD('t_v_esc_d_' + g.id, 'Dinner escort — ' + g.name.en,         '夕食エスコート（' + g.name.jp + '様）',   'dining', 'pm', [], 1080, 60, { care: g.id, guestFacing: true }),
+        HD('t_v_esc_b_' + g.id, 'Next-morning breakfast escort — ' + g.name.en, '翌朝食エスコート（' + g.name.jp + '様）', 'dining', 'pm', [], 1860, 60,
+          { care: g.id, guestFacing: true, routeLegId: 'out-ogasawara-maru', sceneId: 'ogasawara-maru', vesselId: 'ogasawara-maru', timeStatus: 'planned' })
       );
+    });
+    voyageTasks.forEach(function (t) {
+      if (!t.routeLegId) t.routeLegId = 'out-ogasawara-maru';
+      if (!t.sceneId) { t.sceneId = 'ogasawara-maru'; t.locationId = 'ogasawara-maru'; }
+      if (!t.vesselId) t.vesselId = 'ogasawara-maru';
     });
     var voyageCanonPlacement = {};
     voyageTasks.forEach(function (t) {
@@ -429,7 +575,11 @@
         name: L('Ogasawara 10-Day Company Retreat', '小笠原10日間 社員イベント'),
         goal: L('Build cross-company bonds over a 10-day shared stay and fishing — safely and within budget.',
                 'グループ会社横断メンバーが10日間共に生活し、釣り体験を通じて、安全かつ予算内で結束を深める。'),
-        days: DAYS, location: L('Ogasawara (Chichijima)', '小笠原（父島）'), headcount: HEADCOUNT, staff: STAFF, guests: GUESTS, chefs: CHEFS,
+        days: DAYS, location: L('Hahajima, Ogasawara (Hinata)', '小笠原・母島（ひなた）'), headcount: HEADCOUNT, staff: STAFF, guests: GUESTS, chefs: CHEFS,
+        homeBaseStopId: 'hahajima-hinata',
+        route: { outboundLegIds: ['out-breakfast', 'out-hotel-takeshiba', 'out-ogasawara-maru', 'out-chichijima-transfer', 'out-interisland', 'out-hinata'],
+          returnLegIds: ['return-hinata', 'return-interisland', 'return-chichijima-transfer', 'return-ogasawara-maru', 'return-takeshiba'],
+          returnConfirmed: false, returnStatus: 'inferred-reverse-route-timetable-unknown' },
         // dinner math (§5.1): chefs serve the 13 guests + 5 organizer add-ons = 18 portions @5 min = the 90-min cook block
         portions: { guests: GUESTS, organizers: STAFF, chefs: CHEFS, servedByChef: GUESTS, organizerAddOns: 5, cookMinPerPortion: 5 },
         successConditions: [
@@ -477,10 +627,14 @@
 
       tasks: [
         // --- Day 1: arrival ---
-        { id: 't01', name: L('Ferry boarding & assemble', '乗船確認・集合'),          station: 'port',    phase: pA,   ownerRoleId: 'logi',       assignedIds: ['p06'],               startDay: 0, dur: 1,   deps: [],          difficulty: 2, neededResources: ['bus'],     neededInfo: ['ic_ferry'],    neededAuthority: null },
-        { id: 't02', name: L('Sea crossing & seasickness', '渡航・船酔い対応'),       station: 'vessel',  phase: pA,   ownerRoleId: 'siteLead',   assignedIds: ['p03', 'p05'],        startDay: 0, dur: 1,   deps: ['t01'],     difficulty: 3, neededResources: ['medkit'],  neededInfo: ['ic_ferry'],    neededAuthority: null },
-        { id: 't03', name: L('Check-in & room assignment', '受付・部屋割り'),         station: 'lodging', phase: pA,   ownerRoleId: 'logi',       assignedIds: ['p06'],               startDay: 0, dur: 1.5, deps: ['t02'],     difficulty: 1, neededResources: ['keys'],    neededInfo: ['ic_rooms'],    neededAuthority: null },
-        { id: 't_intake', name: L('Supply & gear intake (drinks, tackle, food, ice)', '物資・釣具搬入（飲料・釣具・食材・氷）'), station: 'lodging', phase: pA, ownerRoleId: 'logi', assignedIds: ['p06'], startDay: 0, dur: 1.5, deps: ['t02'], difficulty: 2, neededResources: ['storage'], neededInfo: ['ic_tackle'], neededAuthority: null },
+        { id: 't01', name: L('Disembark Ogasawara-maru and change ships at Chichijima', '父島でおがさわら丸を下船・船を乗り換え'), station: 'port', phase: pA, ownerRoleId: 'logi', assignedIds: ['p06'], startDay: 1, dur: 0.25, deps: [], difficulty: 2, neededResources: [], neededInfo: ['ic_ferry'], neededAuthority: null,
+          routeLegId: 'out-chichijima-transfer', sceneId: 'chichijima-transfer', timeStatus: 'unknown', timeKnown: false },
+        { id: 't02', name: L('Separate inter-island vessel: Chichijima to Hahajima', '別の島間船で父島から母島へ'), station: 'vessel', phase: pA, ownerRoleId: 'siteLead', assignedIds: ['p03', 'p05'], startDay: 1.25, dur: 0.25, deps: ['t01'], difficulty: 3, neededResources: ['medkit'], neededInfo: ['ic_ferry'], neededAuthority: null,
+          routeLegId: 'out-interisland', sceneId: 'interisland-ferry', vesselId: 'interisland-vessel', timeStatus: 'unknown', timeKnown: false },
+        { id: 't03', name: L('Hahajima arrival and Hinata check-in / room assignment', '母島到着・ひなた受付／部屋割り'), station: 'lodging', phase: pA, ownerRoleId: 'logi', assignedIds: ['p06'], startDay: 1.5, dur: 0.25, deps: ['t02'], difficulty: 1, neededResources: ['keys'], neededInfo: ['ic_rooms'], neededAuthority: null,
+          routeLegId: 'out-hinata', sceneId: 'hahajima-hinata', timeStatus: 'unknown', timeKnown: false },
+        { id: 't_intake', name: L('Supply & gear intake at Hinata (drinks, tackle, food, ice)', 'ひなたで物資・釣具搬入（飲料・釣具・食材・氷）'), station: 'lodging', phase: pA, ownerRoleId: 'logi', assignedIds: ['p06'], startDay: 1.5, dur: 0.25, deps: ['t02'], difficulty: 2, neededResources: ['storage'], neededInfo: ['ic_tackle'], neededAuthority: null,
+          routeLegId: 'out-hinata', sceneId: 'hahajima-hinata', timeStatus: 'planned' },
         // --- Days 2–9: daily operations ---
         { id: 't_safety', name: L('Safety & weather watch', '安全・天候監視'),        station: 'clinic',  phase: pOps, ownerRoleId: 'safetyLead', assignedIds: ['p05'],               startDay: 1, dur: 8,   deps: [],          difficulty: 4, neededResources: ['medkit'],  neededInfo: ['ic_hospital'], neededAuthority: 'abort' }, // GAP A: no abort authority
         { id: 't_health', name: L('Health-issue response', '体調不良対応'),           station: 'clinic',  phase: pOps, ownerRoleId: 'safetyLead', assignedIds: ['p05'],               startDay: 1, dur: 8,   deps: [],          difficulty: 3, neededResources: ['medkit'],  neededInfo: ['ic_hospital'], neededAuthority: null },
@@ -493,9 +647,11 @@
         { id: 't11', name: L('Daily accounting & reconcile', '日次精算・領収書'),     station: 'finance', phase: pOps, ownerRoleId: 'budgetLead', assignedIds: ['p04'],               startDay: 1, dur: 8,   deps: [],          difficulty: 2, neededResources: ['cash'],    neededInfo: ['ic_food'],     neededAuthority: 'pay' },
         { id: 't_report', name: L('Daily report & headcount', '日次報告・点呼'),       station: 'command', phase: pOps, ownerRoleId: 'comms',      assignedIds: ['p07', 'p02'],        startDay: 1, dur: 8,   deps: [],          difficulty: 2, neededResources: [],          neededInfo: ['ic_return'],   neededAuthority: null },
         // --- Day 10: return & shipping ---
-        { id: 't_ship', name: L('Ship remaining supplies & teardown', '残置物の発送・撤収'), station: 'port', phase: pR, ownerRoleId: 'logi',     assignedIds: [],                    startDay: 9, dur: 1,   deps: ['t_clean'], difficulty: 3, neededResources: ['shipping'],neededInfo: ['ic_tackle'],   neededAuthority: null }, // GAP G: unstaffed
+        { id: 't_ship', name: L('Pack out at Hinata for the inferred reverse return route', 'ひなたで撤収・推定逆順ルートの帰路準備'), station: 'port', phase: pR, ownerRoleId: 'logi', assignedIds: [], startDay: 9, dur: 1, deps: ['t_clean'], difficulty: 3, neededResources: ['shipping'], neededInfo: ['ic_tackle'], neededAuthority: null,
+          routeLegId: 'return-hinata', sceneId: 'hahajima-hinata', inferred: true, timeStatus: 'unknown', timeKnown: false }, // GAP G: unstaffed
         { id: 't_settle', name: L('Final settlement & receipts', '最終精算・領収書'),  station: 'finance', phase: pR,   ownerRoleId: 'budgetLead', assignedIds: ['p04'],               startDay: 9, dur: 1,   deps: ['t11'],     difficulty: 2, neededResources: ['cash'],    neededInfo: ['ic_food'],     neededAuthority: 'pay' },
-        { id: 't12', name: L('Return headcount & departure', '帰着点呼・出発'),        station: 'port',    phase: pR,   ownerRoleId: 'comms',      assignedIds: ['p07', 'p03'],        startDay: 9, dur: 1,   deps: ['t_ship'],  difficulty: 2, neededResources: [],          neededInfo: ['ic_return'],   neededAuthority: null },
+        { id: 't12', name: L('Return-route headcount (reverse route inferred; timetable unconfirmed)', '帰路点呼（逆順ルートの推定・時刻未確認）'), station: 'port', phase: pR, ownerRoleId: 'comms', assignedIds: ['p07', 'p03'], startDay: 9, dur: 1, deps: ['t_ship'], difficulty: 2, neededResources: [], neededInfo: ['ic_return'], neededAuthority: null,
+          routeLegId: 'return-hinata', sceneId: 'hahajima-hinata', inferred: true, timeStatus: 'unknown', timeKnown: false },
 
         // --- Day 3 · THE representative fishing day, minute-level (§5.3, scores 100 as shipped-with-fixes) ---
         // PHASE 0 · pre-dawn intelligence (04:15–05:30)
@@ -548,8 +704,12 @@
       ],
 
       infoCards: [
-        { id: 'ic_ferry',    name: L('Ferry departure time', '船の出港時刻'),       reason: L('Everyone must reach the boat on time; a miss cascades 24h.', '全員が定刻に乗船する必要。逃すと24時間遅延。'),
-          ownerRoleId: 'pm',         recipientRoleIds: ['pm'],                                       shareTiming: L('night before 20:00 + morning', '前日20時＋当日朝'), secrecy: 'all', impactIfUnshared: L('Confusion, missed boat, 24h delay.', '混乱・乗り遅れ・24時間遅延。') }, // GAP C: only PM
+        { id: 'ic_ferry',    name: L('Vessel route & connection plan', '船の経路・乗換計画'),
+          reason: L('Ogasawara-maru leaves Takeshiba at 11:00; the separate Chichijima→Hahajima vessel still needs its name and connection time confirmed.', 'おがさわら丸は竹芝11:00発。父島→母島の別船は船名と接続時刻の確認が必要。'),
+          ownerRoleId: 'pm', recipientRoleIds: ['pm'], shareTiming: L('before hotel departure and again at the Chichijima transfer', 'ホテル出発前＋父島乗換時'), secrecy: 'all',
+          impactIfUnshared: L('Confusion or a missed long-haul sailing / inter-island connection.', '長距離便・島間接続の混乱や乗り遅れ。'),
+          known: { outboundHotelDepartMin: HOTEL_DEPART_MIN, outboundOgasawaraDepartMin: SAIL_MIN, outboundDurationMin: VOYAGE_APPROX_MIN },
+          unknown: ['interislandVesselName', 'interislandDepartMin', 'interislandArriveMin', 'returnTimetable'] }, // GAP C: only PM
         { id: 'ic_rooms',    name: L('Room assignment', '部屋割り'),                 reason: L('Check-in flow and key handout.', 'チェックインと鍵配布のため。'),
           ownerRoleId: 'logi',       recipientRoleIds: ['siteLead', 'comms', 'logi'],                shareTiming: L('on arrival', '到着時'), secrecy: 'all', impactIfUnshared: L('Check-in chaos.', 'チェックイン混乱。') },
         { id: 'ic_hospital', name: L('Emergency hospital / evac', '緊急病院・搬送先'), reason: L('Needed instantly on injury/illness.', '負傷・体調不良時に即必要。'),
@@ -581,10 +741,10 @@
         { id: 'ic_cash',     name: L('Cash reserve location & draw rule', '現金予備費の保管場所・使用ルール'), reason: L('Cards/comms unreliable on site — cash backstops ice, bait, fuel.', 'カード不安定な現地で氷・餌・燃料の裏付け。'),
           ownerRoleId: 'budgetLead', recipientRoleIds: ['siteLead', 'logi', 'budgetLead'],           shareTiming: L('day before', '前日'), secrecy: 'role', impactIfUnshared: L('On-site purchase stalls when cards fail.', 'カード不通時に現地購入が止まる。') },
         // --- Voyage Day-0 cards (spec §1/§4) ---
-        { id: 'ic_manifest', name: L('Load manifest: items & custody', '積荷リスト（品目・引き渡し）'), reason: L('The truck run and the hold loading must move exactly what was packed.', '輸送と船倉積込は積荷リストどおりに動く必要がある。'),
-          ownerRoleId: 'logi',       recipientRoleIds: ['siteLead', 'logi'],                          shareTiming: L('at pack-out 07:00', '積荷確認時 07:00'), secrecy: 'all', impactIfUnshared: L('Items miss the truck — and the ship.', '積み漏れ→船に載らない。') },
+        { id: 'ic_manifest', name: L('Route manifest: items & custody at both ship handovers', '経路積荷リスト（両方の船の引き渡し）'), reason: L('The hotel→Takeshiba movement and the Chichijima ship change must transfer exactly what was packed.', 'ホテル→竹芝の移動と父島での船の乗換で、積荷を確実に引き継ぐ必要がある。'),
+          ownerRoleId: 'logi', recipientRoleIds: ['siteLead', 'logi'], shareTiming: L('at hotel pack-out and again at the Chichijima transfer', 'ホテル荷造り時＋父島乗換時'), secrecy: 'all', impactIfUnshared: L('Items miss the Ogasawara-maru or are lost/delayed during the ship change.', 'おがさわら丸への積み漏れ、または船の乗換時の紛失・遅延。') },
         { id: 'ic_cabins',   name: L('Cabin assignment list', '船室割当リスト'), reason: L('Boarding roll call and the luggage runs work off the cabin list.', '乗船点呼と荷物搬入は船室割当が前提。'),
-          ownerRoleId: 'pm',         recipientRoleIds: ['comms', 'logi', 'pm'],                       shareTiming: L('before boarding 10:00', '乗船前 10:00'), secrecy: 'all', impactIfUnshared: L('Boarding stalls; luggage piles up unsorted.', '点呼が停滞・荷物が仕分け不能。') }
+          ownerRoleId: 'pm', recipientRoleIds: ['comms', 'logi', 'pm'], shareTiming: L('before Ogasawara-maru boarding', 'おがさわら丸乗船前'), secrecy: 'all', impactIfUnshared: L('Boarding stalls; luggage piles up unsorted.', '点呼が停滞・荷物が仕分け不能。') }
       ],
 
       // --- fishday handoffs (§6.1): the drawn arrows. Ships GAPPY like everything else:
@@ -637,7 +797,7 @@
       ],
 
       // ===========================================================================
-      // §20.3 — plan.days: the three authorable coarse-day rosters (arrival/ops/return),
+      // §20.3 — plan.days: the authorable route/day rosters (load/voyage/arrival/ops/return),
       // Phase 1 (DATA ONLY — nothing in score()/detect()/createSim/mergePlan reads this
       // yet; Phase 2 wires it up). fishday is intentionally ABSENT — its data stays in
       // plan.tasks/plan.handoffs (frozen, byte-identical to before this change).
@@ -645,8 +805,9 @@
       // Each day is { tasks:[HD(...)...], handoffs:[H(...)...], decoys:[taskId...] }.
       // `tasks` holds BOTH the required roster (required:true, the default) and the
       // decoys (required:false); `decoys` is just the id list into that same array.
-      // Every day ships fully staffed & wired here on 60-min quanta within [300,1140] —
-      // a canonical "would score 100" reference the future scoreDay/canonDay(seg) checks
+      // Each day carries deterministic rehearsal anchors within DAY_WINDOWS; route tasks whose
+      // real clocks are unknown say timeKnown:false/timeStatus:'unknown'. These anchors are a
+      // canonical "would score 100" sequence, never a substitute published timetable. scoreDay/canonDay(seg) checks
       // against — mirroring canonHandoffs()'s role for fishday. Each day's handoffs reuse
       // the existing infoCards catalog (ic_ferry/ic_rooms/ic_tackle/ic_food/ic_catch/
       // ic_cash/ic_return — no new cards were needed) and include 2–3 handoffs that are
@@ -662,6 +823,9 @@
       // are unassigned — and they are Nagatani & Kadou, the counterparties the trip exists for.
       buddies: { gd_watanabe: 'p01', gd_yamate: 'p04' },
       manifest: manifest,
+      itinerary: clone(ITINERARY),
+      physicalStops: clone(PHYSICAL_STOPS),
+      vessels: clone(VESSELS),
 
       days: {
         load: {
@@ -679,17 +843,17 @@
           decoys: ['hd_v_dec_sternfish', 'hd_v_dec_karaoke', 'hd_v_dec_nap']   // W2a: extended to 3
         },
         arrival: {
-          // required roster ships PRE-CLEARED (assignedIds:[] — see arrivalReqTasks above, §7/§13.4
-          // P2); decoys (3, plausible-but-wrong, never in the required set) always start unplaced too.
+          // required roster ships PARTLY CLEARED (see ARRIVAL_CLEARED above, §7/§13.4 P2);
+          // decoys (3, plausible-but-wrong, never in the required set) always start unplaced too.
           tasks: arrivalReqTasks.concat([
-            HD('hd_a_dec_nightfish',   'Night beach fishing',      '夜釣り',                   'vessel', 'specialist', [], 1080, 60, { required: false, diff: 3, safetyFlag: true }),
-            HD('hd_a_dec_sightseeing', 'Sightseeing detour',       '観光への立ち寄り',         'port',   'logi',       [], 480,  60, { required: false }),
-            HD('hd_a_dec_soloTackle',  'Early solo tackle test',   '個人的な早朝釣具テスト',   'port',   'specialist', [], 300,  60, { required: false })
+            HD('hd_a_dec_nightfish',   'Night beach fishing', '夜釣り', 'vessel', 'specialist', [], 2640, 60, { required: false, diff: 3, safetyFlag: true, sceneId: 'hahajima-hinata' }),
+            HD('hd_a_dec_sightseeing', 'Sightseeing detour during the ship change', '船の乗換中に観光へ立ち寄り', 'port', 'logi', [], 2160, 60, { required: false, sceneId: 'chichijima-transfer', timeStatus: 'unknown', timeKnown: false }),
+            HD('hd_a_dec_soloTackle',  'Solo tackle test during the transfer', '乗換中の個人的な釣具テスト', 'port', 'specialist', [], 2160, 60, { required: false, sceneId: 'chichijima-transfer', timeStatus: 'unknown', timeKnown: false })
           ]),
           canonPlacement: arrivalCanonPlacement,
           handoffs: [
             H('h_a_ferry', 'ic_ferry',  'pm',         'hd_a_ferrycheck', 'logi',       'hd_a_board',      { type: 'onTaskDone', taskId: 'hd_a_ferrycheck' }, 'faceToFace', 'idle', null,
-              'Ferry departs 06:00 sharp · full manifest confirmed', '船便6:00定刻出港・乗船名簿確認済'),
+              'Inter-island connection and manifest confirmed for boarding · published time/name remain external facts', '島間船の接続・名簿を乗船班へ共有・公表時刻／船名は外部確認事項'),
             H('h_a_tackle', 'ic_tackle', 'logi',       'hd_a_intake',     'specialist', 'hd_a_gearstow',   { type: 'onTaskDone', taskId: 'hd_a_intake' }, 'radio', 'idle', null,
               'Tackle & ice landed and staged at the port shed', '釣具・氷を港の倉庫に搬入・配置済'),
             H('h_a_food', 'ic_food',    'budgetLead', 'hd_a_foodsource', 'chef',       'hd_a_dinnerprep', { type: 'onTaskDone', taskId: 'hd_a_foodsource' }, 'faceToFace', 'idle', null,
@@ -739,31 +903,41 @@
         },
 
         'return': {
-          // ===== Voyage §1/§5: Day 10 reshaped to PACK & SAIL — settle books → pack → hold loading
-          // → sail home → Tokyo headcount ("close the loop you opened"). Anchor migration record:
-          //   · every pre-Voyage required task is KEPT byte-identical in id/time/staffing/deps
-          //     (teardown/checkout/ship/settle/sitecash/headcount/ferrymarshal/boarding/finalreport);
-          //   · hd_r_teardown IS the "pack" phase step and now carries the homebound manifest
-          //     (carries data only — inert to scheduling);
-          //   · +3 new tasks: hd_r_hold (hold loading), hd_r_sail (sail home), hd_r_tokyocount
-          //     (Tokyo headcount) — all landing in EXISTING role lanes (no new exec atoms);
-          //   · pricing migrations (repack 12 -> 10): hd_r_sitecash moneyCheck retired (its cash
-          //     sign-off stays priced as the siteLead exec lane + its ic_cash socket); hd_r_boarding
-          //     safetyGate retired (its execution folds into the pm exec lane; the return safety
-          //     point is the headcount 点呼); hd_r_settle keeps the money check.
+          // Return is the explicitly INFERRED reverse route; no published departure, connection,
+          // or arrival clock has been supplied. Internal minutes are sequence anchors only. The
+          // physical chain is Hahajima → inter-island vessel → Chichijima ship change →
+          // Ogasawara-maru (~one day) → Takeshiba, never a direct five-hour Hahajima→Tokyo sail.
           tasks: [
-            HD('hd_r_teardown',     'Teardown & pack',                        '撤収・荷造り',               'lodging', 'logi',       ['p06'], 300, 120, { carries: ['mi_rods', 'mi_jigcase', 'mi_coolers', 'mi_medkit', 'mi_cashbox'] }),
-            HD('hd_r_checkout',     'Room checkout',                          '部屋チェックアウト',         'lodging', 'logi',       ['p06'], 420, 60,  { deps: ['hd_r_teardown'] }),
-            HD('hd_r_ship',         'Ship remaining supplies',                '残置物の発送',               'port',    'logi',       ['p06'], 480, 60,  { deps: ['hd_r_checkout'], info: ['ic_cash'], res: ['shipping'] }),
-            HD('hd_r_settle',       'Final settlement & receipts',            '最終精算・領収書',           'finance', 'budgetLead', ['p04'], 300, 180, { res: ['cash'], produces: ['ic_cash'], diff: 3 }),   // Voyage §4.1: settle moneyCheck retired (lane+socket price the work)
-            HD('hd_r_sitecash',     'Site-lead cash sign-off',                '現地責任者による現金確認',   'finance', 'siteLead',   ['p03'], 480, 60,  { deps: ['hd_r_settle'], info: ['ic_cash'] }),
-            HD('hd_r_headcount',    'Return headcount',                       '帰着点呼',                   'port',    'comms',      ['p07'], 540, 60,  { deps: ['hd_r_ship'], produces: ['ic_return'], safetyGate: 1 }),
-            HD('hd_r_ferrymarshal', 'Ferry marshal & departure roll call',    '乗船整理・出発点呼',         'port',    'pm',         ['p02'], 600, 60,  { deps: ['hd_r_headcount'], info: ['ic_return'] }),
-            HD('hd_r_hold',         'Hold loading for the sail home',         '帰路の船倉積込',             'port',    'siteLead',   ['p03'], 600, 60,  { deps: ['hd_r_ship'], carries: ['mi_rods', 'mi_jigcase', 'mi_coolers', 'mi_medkit', 'mi_cashbox'] }),
-            HD('hd_r_boarding',     'Ferry boarding for departure',           '出発乗船',                   'port',    'pm',         ['p02'], 660, 60,  { deps: ['hd_r_ferrymarshal'] }),
-            HD('hd_r_sail',         'Sail home',                              '帰航',                       'vessel',  'siteLead',   ['p03'], 720, 300, { deps: ['hd_r_boarding'], diff: 3 }),
-            HD('hd_r_finalreport',  'Final report & sign-off',                '最終報告・締め',             'command', 'comms',      ['p07'], 720, 60,  { deps: ['hd_r_boarding'] }),
-            HD('hd_r_tokyocount',   'Tokyo arrival headcount',                '東京帰着点呼',               'port',    'comms',      ['p07'], 1080, 60, { deps: ['hd_r_sail'] }),
+            HD('hd_r_teardown', 'Teardown and pack at Hinata on Hahajima', '母島のひなたで撤収・荷造り', 'lodging', 'logi', ['p06'], 300, 120,
+              { carries: RETURN_ITEMS, returnCustody: true, routeLegId: 'return-hinata', sceneId: 'hahajima-hinata', inferred: true, timeStatus: 'unknown', timeKnown: false }),
+            HD('hd_r_checkout', 'Hinata room checkout', 'ひなた部屋チェックアウト', 'lodging', 'logi', ['p06'], 420, 60,
+              { deps: ['hd_r_teardown'], routeLegId: 'return-hinata', sceneId: 'hahajima-hinata', inferred: true, timeStatus: 'unknown', timeKnown: false }),
+            HD('hd_r_ship', 'Ship remaining supplies from Hahajima', '母島から残置物を発送', 'port', 'logi', ['p06'], 480, 60,
+              { deps: ['hd_r_checkout'], info: ['ic_cash'], res: ['shipping'], routeLegId: 'return-hinata', sceneId: 'hahajima-hinata', inferred: true, timeStatus: 'unknown', timeKnown: false }),
+            HD('hd_r_settle', 'Final settlement & receipts at Hinata', 'ひなたで最終精算・領収書', 'finance', 'budgetLead', ['p04'], 300, 180,
+              { res: ['cash'], produces: ['ic_cash'], diff: 3, routeLegId: 'return-hinata', sceneId: 'hahajima-hinata', inferred: true, timeStatus: 'unknown', timeKnown: false }),
+            HD('hd_r_sitecash', 'Site-lead cash sign-off at Hinata', 'ひなたで現地責任者による現金確認', 'finance', 'siteLead', ['p03'], 480, 60,
+              { deps: ['hd_r_settle'], info: ['ic_cash'], routeLegId: 'return-hinata', sceneId: 'hahajima-hinata', inferred: true, timeStatus: 'unknown', timeKnown: false }),
+            HD('hd_r_headcount', 'Hahajima departure headcount', '母島出発点呼', 'port', 'comms', ['p07'], 540, 60,
+              { deps: ['hd_r_ship'], produces: ['ic_return'], safetyGate: 1, routeLegId: 'return-hinata', sceneId: 'hahajima-hinata', inferred: true, timeStatus: 'unknown', timeKnown: false }),
+            HD('hd_r_ferrymarshal', 'Confirm inferred reverse connection and marshal at Hahajima', '推定逆順ルートの接続確認・母島で乗船整理', 'port', 'pm', ['p02'], 600, 60,
+              { deps: ['hd_r_headcount'], info: ['ic_return'], routeLegId: 'return-hinata', sceneId: 'hahajima-hinata', inferred: true, timeStatus: 'unknown', timeKnown: false }),
+            HD('hd_r_hold', 'Load baggage onto the inter-island vessel at Hahajima', '母島で島間船へ荷物積込', 'port', 'siteLead', ['p03'], 600, 60,
+              { deps: ['hd_r_ship'], carries: RETURN_ITEMS, returnCustody: true, routeLegId: 'return-interisland', sceneId: 'hahajima-hinata', vesselId: 'interisland-vessel', inferred: true, timeStatus: 'unknown', timeKnown: false }),
+            HD('hd_r_boarding', 'Board the inter-island vessel at Hahajima', '母島で島間船に乗船', 'port', 'pm', ['p02'], 660, 60,
+              { deps: ['hd_r_ferrymarshal', 'hd_r_hold'], carries: RETURN_ITEMS, returnCustody: true, routeLegId: 'return-interisland', fromSceneId: 'hahajima-hinata', toSceneId: 'interisland-ferry', sceneId: 'hahajima-hinata', vesselId: 'interisland-vessel', inferred: true, timeStatus: 'unknown', timeKnown: false }),
+            HD('hd_r_interisland', 'Inter-island crossing from Hahajima to Chichijima', '母島から父島への島間航海', 'vessel', 'siteLead', ['p03'], 720, 120,
+              { deps: ['hd_r_boarding'], carries: RETURN_ITEMS, returnCustody: true, routeLegId: 'return-interisland', sceneId: 'interisland-ferry', vesselId: 'interisland-vessel', inferred: true, timeStatus: 'unknown', timeKnown: false, diff: 3 }),
+            HD('hd_r_chichi_transfer', 'Change ships and transfer baggage at Chichijima', '父島で船の乗換・荷物引き継ぎ', 'port', 'logi', ['p06'], 840, 120,
+              { deps: ['hd_r_interisland'], carries: RETURN_ITEMS, returnCustody: true, routeLegId: 'return-chichijima-transfer', sceneId: 'chichijima-transfer', inferred: true, timeStatus: 'unknown', timeKnown: false }),
+            HD('hd_r_ogasawara_board', 'Board Ogasawara-maru at Chichijima', '父島でおがさわら丸に乗船', 'port', 'pm', ['p02'], 960, 60,
+              { deps: ['hd_r_chichi_transfer'], carries: RETURN_ITEMS, returnCustody: true, routeLegId: 'return-ogasawara-maru', fromSceneId: 'chichijima-transfer', toSceneId: 'ogasawara-maru', sceneId: 'chichijima-transfer', vesselId: 'ogasawara-maru', inferred: true, timeStatus: 'unknown', timeKnown: false }),
+            HD('hd_r_sail', 'Ogasawara-maru voyage from Chichijima to Takeshiba (about one day)', 'おがさわら丸で父島から竹芝へ（約1日）', 'vessel', 'siteLead', ['p03'], 1020, VOYAGE_APPROX_MIN,
+              { deps: ['hd_r_ogasawara_board'], carries: RETURN_ITEMS, returnCustody: true, routeLegId: 'return-ogasawara-maru', sceneId: 'ogasawara-maru', vesselId: 'ogasawara-maru', inferred: true, timeStatus: 'unknown-timetable-approx-duration', timeKnown: false, diff: 3 }),
+            HD('hd_r_tokyocount', 'Takeshiba arrival headcount (timetable not confirmed)', '竹芝到着点呼（時刻未確認）', 'port', 'comms', ['p07'], 2460, 60,
+              { deps: ['hd_r_sail'], routeLegId: 'return-takeshiba', sceneId: 'takeshiba-terminal', inferred: true, timeStatus: 'unknown', timeKnown: false }),
+            HD('hd_r_finalreport', 'Final report after the Takeshiba headcount', '竹芝点呼後の最終報告・締め', 'command', 'comms', ['p07'], 2520, 60,
+              { deps: ['hd_r_tokyocount'], routeLegId: 'return-takeshiba', sceneId: 'takeshiba-terminal', inferred: true, timeStatus: 'unknown', timeKnown: false }),
             // --- decoys (3) ---
             HD('hd_r_dec_sidetrip',     'Last-day sightseeing detour',   '最終日の観光立ち寄り', 'port',    'siteLead',   [], 300, 60, { required: false }),
             HD('hd_r_dec_extraservice', 'Extra souvenir shopping run',   'お土産追加購入',       'finance', 'budgetLead', [], 600, 60, { required: false }),
@@ -775,7 +949,7 @@
             H('h_r_cash_ship', 'ic_cash',  'budgetLead', 'hd_r_settle',    'logi',     'hd_r_ship',        { type: 'onTaskDone', taskId: 'hd_r_settle' }, 'radio', 'idle', null,
               'Shipping cash draw approved', '発送費の現金使用承認済'),
             H('h_r_return',    'ic_return', 'comms',     'hd_r_headcount', 'pm',       'hd_r_ferrymarshal', { type: 'onTaskDone', taskId: 'hd_r_headcount' }, 'faceToFace', 'idle', null,
-              '24 aboard, headcount confirmed', '24名乗船・点呼確認済')
+              '24 accounted for on Hahajima · reverse-route connection still requires operator confirmation', '母島で24名点呼済・逆順ルートの接続は運航確認が必要')
           ],
           decoys: ['hd_r_dec_sidetrip', 'hd_r_dec_extraservice', 'hd_r_dec_latefish']
         }
@@ -831,7 +1005,7 @@
       if (od.placement) for (var pid in od.placement) {
         var dt = byId(dd.tasks, pid); if (!dt) continue; var pv = od.placement[pid];
         if (pv === null) { dt.assignedIds = []; }                                                 // back to the deck (unplaced)
-        else { if (typeof pv.startMin === 'number') dt.startMin = pv.startMin; if (typeof pv.durMin === 'number') dt.durMin = pv.durMin; if (pv.assignedIds) dt.assignedIds = pv.assignedIds.slice(); if (pv.carries) dt.carries = pv.carries.slice(); } // carries: Voyage custody edits (jig case -> truck run)
+        else { if (typeof pv.startMin === 'number') dt.startMin = pv.startMin; if (typeof pv.durMin === 'number') dt.durMin = pv.durMin; if (pv.assignedIds) dt.assignedIds = pv.assignedIds.slice(); if (pv.carries) dt.carries = pv.carries.slice(); } // carries: route custody edits (for example, an item omitted from a transfer)
       }
       if (od.handoffs) for (var dh in od.handoffs) {
         var eh = byId(dd.handoffs, dh);
@@ -896,7 +1070,7 @@
         if (!bPid || !SEAT_DEFAULT_PIDS[bPid]) continue;              // organizers (p01–p08) only
         buddyLoad[bPid] = (buddyLoad[bPid] || 0) + 1;
         if (buddyLoad[bPid] > 2) continue;                            // at most 2 VIPs per organizer
-        var bPre = ['t_v_star_', 't_v_esc_l_', 't_v_esc_d_'];
+        var bPre = ['t_v_star_', 't_v_esc_l_', 't_v_esc_d_', 't_v_esc_b_'];
         for (bj = 0; bj < bPre.length; bj++) {
           var bTask = byId(vTasks, bPre[bj] + bGuest.id);
           if (bTask) { bTask.assignedIds = [bPid]; bTask.ownerRoleId = roleOfPid[bPid] || bTask.ownerRoleId; }
@@ -1079,7 +1253,7 @@
   // read-offs (unplacedRequired / decoysPlaced / misassigned / overbookMin) the fishday path
   // simply reports as empty/0.
   function fishdaySchedule(plan, injections) { return daySchedule(plan, 'fishday', injections); }
-  function daySchedule(plan, seg, injections) {
+  function daySchedule(plan, seg, injections, internalOpts) {
     seg = seg || 'fishday';
     var allSeg = tasksForSeg(plan, seg), fds = [], i, j, k;
     for (i = 0; i < allSeg.length; i++) if (isPlaced(allSeg[i])) fds.push(allSeg[i]);
@@ -1092,7 +1266,7 @@
     // 'load' segment / no placed task needing a manifest-bound resource => carry is never computed;
     // and an 'aboard' (or 'late'-but-aboard) item adds nothing to the cascade.
     var carryByRes = null, carrySt = null;
-    if (seg !== 'load' && plan.manifest && plan.manifest.length) {
+    if (!(internalOpts && internalOpts.skipCarry) && seg !== 'load' && plan.manifest && plan.manifest.length) {
       var resMap = {}, needCarry = false, mri, mrj;
       for (mri = 0; mri < plan.manifest.length; mri++) { var mIt = plan.manifest[mri]; (resMap[mIt.resourceId] = resMap[mIt.resourceId] || []).push(mIt.id); }
       for (mri = 0; mri < fds.length && !needCarry; mri++) { var mNr = fds[mri].neededResources || []; for (mrj = 0; mrj < mNr.length; mrj++) if (resMap[mNr[mrj]]) { needCarry = true; break; } }
@@ -1172,7 +1346,8 @@
             var crIds = carryByRes[t.neededResources[j]];
             if (!crIds) continue;
             for (k = 0; k < crIds.length; k++) {
-              if ((carrySt[crIds[k]] || {})[seg] === 'missing') {
+              var carrySeg = t.carrySegment || seg;
+              if ((carrySt[crIds[k]] || {})[carrySeg] === 'missing') {
                 var capR = t.startMin + IDLE_CAP;
                 waits.push({ resourceId: t.neededResources[j], itemId: crIds[k], missing: true, until: capR });
                 if (capR > start) start = capR;
@@ -1220,61 +1395,108 @@
       unplacedRequired: unplacedRequired, decoysPlaced: decoysPlaced, misassigned: misassigned, overbookMin: overbookMin };
   }
   // ===========================================================================
-  // Voyage §2 — MANIFEST CARRYOVER (pure, RNG-free, exported). carryState(plan) folds
-  // the ordered segments' load-day outcomes into per-item availability per segment:
-  //   {itemId: {load|voyage|arrival|ops|fishday|return: 'aboard'|'late'|'missing'}}
-  //   · 'missing' — a custody leg never carried the item / a leg is unplaced / the
-  //     chain finishes after the fixed 11:00 sailing (SAIL_MIN). Downstream consumers
-  //     of its resource stall (daySchedule consults this internally).
-  //   · 'late'    — the chain made the ship but ran behind its planned times (its idle
-  //     is already billed on the load day); downstream it behaves as available.
-  //   · 'aboard'  — the canonical case; carry adds nothing anywhere (pinned inert).
-  // The homebound Pack & Sail custody mirrors the chain as task data (carries on
-  // hd_r_teardown/hd_r_hold) and is priced by its own atoms; it has no downstream
-  // consumer segment, so carryState does not fold it.
+  // PHYSICAL MANIFEST CARRYOVER (pure, RNG-free, exported).
+  //
+  // There are three independent custody chains instead of one magic "aboard forever"
+  // flag: Tokyo hotel→Takeshiba→Ogasawara-maru, the Chichijima ship change, and the
+  // inferred return chain through BOTH vessels. A missing/unplaced carry leg can now
+  // strand an item specifically at the transfer. `late` means the physical item remains
+  // available but the rehearsal sequence slipped; only `missing` blocks a consumer.
+  // Consumables (food/ice) report `not-required` on return rather than pretending they
+  // must be shipped back.
   // ===========================================================================
-  function manifestChainGaps(plan) {
-    // item ids whose OUTBOUND custody chain is broken: some custody leg is unplaced,
-    // or doesn't carry the item (e.g. the seed's jig case missing from the truck run).
-    var items = plan.manifest || [], gaps = [], custody = [], i, j;
-    var loadTasks = tasksForSeg(plan, 'load');
-    for (i = 0; i < loadTasks.length; i++) if (loadTasks[i].custody) custody.push(loadTasks[i]);
+  function custodyTasksFor(plan, seg, flag) {
+    return tasksForSeg(plan, seg).filter(function (t) { return !!t[flag]; });
+  }
+  function custodyGaps(plan, seg, flag, items) {
+    var gaps = [], custody = custodyTasksFor(plan, seg, flag), i, j;
+    items = items || plan.manifest || [];
     for (i = 0; i < items.length; i++) {
+      var itemId = typeof items[i] === 'string' ? items[i] : items[i].id;
       var bad = custody.length === 0;
       for (j = 0; j < custody.length && !bad; j++) {
-        var ct = custody[j];
-        if (!isPlaced(ct) || (ct.carries || []).indexOf(items[i].id) < 0) bad = true;
+        if (!isPlaced(custody[j]) || (custody[j].carries || []).indexOf(itemId) < 0) bad = true;
       }
-      if (bad) gaps.push(items[i].id);
+      if (bad) gaps.push(itemId);
     }
     return gaps;
   }
-  function carryState(plan) {
-    var out = {}, items = plan.manifest || [], i, j;
-    if (!items.length) return out;
-    var chainGap = {}; manifestChainGaps(plan).forEach(function (id) { chainGap[id] = 1; });
-    var ds = daySchedule(plan, 'load');   // 'load' never consults carry -> no recursion
-    var custody = tasksForSeg(plan, 'load').filter(function (t) { return t.custody && isPlaced(t); });
-    var DOWN = ['voyage', 'arrival', 'ops', 'fishday', 'return'];
+  function manifestChainGaps(plan) { return custodyGaps(plan, 'load', 'custody', plan.manifest || []); }
+  function manifestTransferGaps(plan) { return custodyGaps(plan, 'arrival', 'transferCustody', plan.manifest || []); }
+  function manifestReturnGaps(plan) {
+    var returnItems = (plan.manifest || []).filter(function (m) { return m.returnRequired !== false; });
+    return custodyGaps(plan, 'return', 'returnCustody', returnItems);
+  }
+  function custodyStageState(plan, seg, flag, items, deadlineMin) {
+    var out = {}, gaps = {}, i, j;
+    custodyGaps(plan, seg, flag, items).forEach(function (id) { gaps[id] = 1; });
+    // skipCarry prevents arrival/return schedule inspection from recursing back here.
+    var ds = daySchedule(plan, seg, null, { skipCarry: true });
+    var custody = custodyTasksFor(plan, seg, flag).filter(isPlaced);
     for (i = 0; i < items.length; i++) {
-      var it = items[i], st = null;
-      if (chainGap[it.id]) st = 'missing';
-      else {
-        var end = 0, delayed = false;
-        for (j = 0; j < custody.length; j++) {
-          if ((custody[j].carries || []).indexOf(it.id) < 0) continue;
-          var e = ds.byTask[custody[j].id];
-          if (!e) { st = 'missing'; break; }
-          if (e.end > end) end = e.end;
-          if (e.idleMin > 0 || e.unresolved) delayed = true;
-        }
-        if (!st) st = end > SAIL_MIN ? 'missing' : (delayed ? 'late' : 'aboard');
+      var itemId = typeof items[i] === 'string' ? items[i] : items[i].id;
+      var st = gaps[itemId] ? 'missing' : null, delayed = false, end = -Infinity;
+      for (j = 0; j < custody.length && !st; j++) {
+        if ((custody[j].carries || []).indexOf(itemId) < 0) continue;
+        var e = ds.byTask[custody[j].id];
+        if (!e || e.unresolved) { st = 'missing'; break; }
+        end = Math.max(end, e.end);
+        if (e.idleMin > 0) delayed = true;
       }
-      var rec = { load: 'aboard' };       // during Load & Board the items are at origin, in hand
-      for (j = 0; j < DOWN.length; j++) rec[DOWN[j]] = st;
-      out[it.id] = rec;
+      if (!st && typeof deadlineMin === 'number' && end > deadlineMin) st = 'missing';
+      out[itemId] = st || (delayed ? 'late' : 'aboard');
     }
     return out;
+  }
+  function carryState(plan) {
+    var out = {}, items = plan.manifest || [], i;
+    if (!items.length) return out;
+    var returnItems = items.filter(function (m) { return m.returnRequired !== false; });
+    var loadSt = custodyStageState(plan, 'load', 'custody', items, SAIL_MIN);
+    var transferSt = custodyStageState(plan, 'arrival', 'transferCustody', items, null);
+    var returnSt = custodyStageState(plan, 'return', 'returnCustody', returnItems, null);
+    function combine(a, b) { return a === 'missing' || b === 'missing' ? 'missing' : (a === 'late' || b === 'late' ? 'late' : 'aboard'); }
+    for (i = 0; i < items.length; i++) {
+      var it = items[i], longHaul = loadSt[it.id] || 'missing';
+      var hahajima = combine(longHaul, transferSt[it.id] || 'missing');
+      var ret = it.returnRequired === false ? 'not-required' : combine(hahajima, returnSt[it.id] || 'missing');
+      out[it.id] = { load: longHaul, voyage: longHaul, arrival: hahajima, ops: hahajima, fishday: hahajima, 'return': ret };
+    }
+    return out;
+  }
+
+  // Route-scene resolver shared by Canvas, DOM fallback, reports, and audio. Boundaries
+  // come from the SOLVED task schedule: moving a crossing moves the scenery; unplacing it
+  // leaves the group at the last physical stop instead of teleporting on a decorative clock.
+  function routeSceneId(plan, seg, minute) {
+    if (seg === 'all') return 'route-overview';
+    if (seg === 'ops' || seg === 'fishday') return 'hahajima-hinata';
+    if (seg === 'voyage') return 'ogasawara-maru';
+    var ds = daySchedule(plan, seg, null, { skipCarry: true });
+    function edge(id) { return ds.byTask[id] || null; }
+    if (seg === 'load') {
+      var move = edge('hd_l_truck');
+      return move && minute >= move.start ? 'takeshiba-terminal' : 'tokyo-hotel';
+    }
+    if (seg === 'arrival') {
+      var disembark = edge('hd_a_disembark'), cross = edge('hd_a_cross');
+      if (!disembark || minute < disembark.start) return 'ogasawara-maru';
+      if (!cross || minute < cross.start) return 'chichijima-transfer';
+      return minute < cross.end ? 'interisland-ferry' : 'hahajima-hinata';
+    }
+    if (seg === 'return') {
+      var inter = edge('hd_r_interisland'), sail = edge('hd_r_sail');
+      if (!inter || minute < inter.start) return 'hahajima-hinata';
+      if (minute < inter.end) return 'interisland-ferry';
+      if (!sail || minute < sail.start) return 'chichijima-transfer';
+      return minute < sail.end ? 'ogasawara-maru' : 'takeshiba-terminal';
+    }
+    return 'hahajima-hinata';
+  }
+  function routeState(plan, seg, minute) {
+    var sceneId = routeSceneId(plan, seg, minute), stop = physicalStop(sceneId);
+    return { sceneId: sceneId, stop: stop, vessel: stop && stop.vesselId ? vessel(stop.vesselId) : null,
+      segment: seg, minute: minute, inferred: seg === 'return' };
   }
 
   function idleMinutes(plan) { var fd = fishdaySchedule(plan); return { total: fd.idleTotal, byTask: fd.byTask }; }
@@ -1426,8 +1648,9 @@
       for (i = 0; i < fd.unplacedRequired.length; i++) out.push({ type: 'UNPLACED_REQUIRED', taskId: fd.unplacedRequired[i] });
       for (i = 0; i < fd.decoysPlaced.length; i++) out.push({ type: 'DECOY_PLACED', taskId: fd.decoysPlaced[i] });
       for (i = 0; i < fd.misassigned.length; i++) out.push({ type: 'MISASSIGNED', taskId: fd.misassigned[i] });
-      // Voyage §2: a broken custody chain is a LOAD-day authoring gap (the item will miss the ship)
-      if (seg === 'load') { var cgap = manifestChainGaps(plan); for (i = 0; i < cgap.length; i++) out.push({ type: 'CARRY_GAP', itemId: cgap[i] }); }
+      // Physical custody gaps are attributed to the exact handover where they occur.
+      var cgap = seg === 'load' ? manifestChainGaps(plan) : (seg === 'arrival' ? manifestTransferGaps(plan) : (seg === 'return' ? manifestReturnGaps(plan) : []));
+      for (i = 0; i < cgap.length; i++) out.push({ type: 'CARRY_GAP', itemId: cgap[i], stage: seg });
     }
     for (i = 0; i < fd.missing.length; i++) {
       var m = fd.missing[i], mt = segById[m.taskId];
@@ -1528,7 +1751,7 @@
     cfg = cfg || { seed: 1, overrides: {} };
     var plan = mergePlan(cfg);
     var sIdx = segIndex(segment);  // -1 = whole trip; otherwise rehearse just this day
-    // §21.8b: fishday is always minute-clock; a coarse day (arrival/ops/return) animates on the minute clock
+    // §21.8b: fishday is always minute-clock; another authorable segment animates on the minute clock
     // ONLY when the caller opts in (opts.animate) — verify.js's 2-arg createSim never does, so the classic
     // day-clock / daySummary anchors + the fishdaySchedule façade stay untouched.
     var coarseMin = AUTHORABLE.indexOf(segment) >= 0 && segment !== 'fishday' && !!(opts && opts.animate);
@@ -1551,6 +1774,9 @@
         return { id: t.id, name: t.name, station: t.station, phase: null, ownerRoleId: t.ownerRoleId,
           assignedIds: (t.assignedIds || []).slice(), startDay: null, dur: null, deps: (t.deps || []).slice(), scope: 'in',
           day: t.day || segment, startMin: t.startMin, durMin: t.durMin,
+          routeLegId: t.routeLegId || null, sceneId: t.sceneId || null, fromSceneId: t.fromSceneId || null, toSceneId: t.toSceneId || null,
+          locationId: t.locationId || null, vesselId: t.vesselId || null, timeStatus: t.timeStatus || 'planned', timeKnown: t.timeKnown !== false, inferred: !!t.inferred,
+          confirmedStartMin: t.confirmedStartMin, confirmedEndMin: t.confirmedEndMin, durationStatus: t.durationStatus || 'planned',
           progress: 0, state: 'pending', stalled: false, problem: null, blocked: false };
       });
     } else {
@@ -1560,6 +1786,9 @@
         return { id: t.id, name: t.name, station: t.station, phase: t.phase, ownerRoleId: t.ownerRoleId,
           assignedIds: t.assignedIds.slice(), startDay: t.startDay, dur: t.dur, deps: t.deps.slice(), scope: scope,
           day: t.day || null, startMin: t.startMin, durMin: t.durMin,
+          routeLegId: t.routeLegId || null, sceneId: t.sceneId || null, fromSceneId: t.fromSceneId || null, toSceneId: t.toSceneId || null,
+          locationId: t.locationId || null, vesselId: t.vesselId || null, timeStatus: t.timeStatus || 'planned', timeKnown: t.timeKnown !== false, inferred: !!t.inferred,
+          confirmedStartMin: t.confirmedStartMin, confirmedEndMin: t.confirmedEndMin, durationStatus: t.durationStatus || 'planned',
           progress: scope === 'pre' ? 1 : 0, state: scope === 'pre' ? 'done' : 'pending', stalled: false, problem: probByTask[t.id] || null, blocked: !!blocked[t.id] };
       });
     }
@@ -1592,7 +1821,9 @@
     };
     if (minute) {
       var win = DAY_WINDOWS[segment] || [DAY_START_MIN, DAY_END_MIN];
-      sim.mode = 'minute'; sim.clockMin = win[0]; sim.winStart = win[0]; sim.winEnd = win[1]; sim.day = 2; sim.clock = 2;
+      var dayBase = { load: 0, voyage: 0, arrival: 1, ops: 2, fishday: 2, 'return': 9 }[segment];
+      if (typeof dayBase !== 'number') dayBase = 0;
+      sim.mode = 'minute'; sim.clockMin = win[0]; sim.winStart = win[0]; sim.winEnd = win[1]; sim.dayBase = dayBase; sim.day = dayBase; sim.clock = dayBase;
       sim.sched = (segment === 'fishday') ? fishdaySchedule(plan) : daySchedule(plan, segment);
       sim.injections = []; sim.handFed = 0; sim.paused = false; sim.checkpoint = null; sim.cpDone = {}; sim.stallSeen = {};
     }
@@ -1605,7 +1836,7 @@
   function tickMinute(sim) {
     if (sim.finished || sim.paused) return sim;
     sim.tick++; sim.clockMin = Math.min((sim.winEnd || DAY_END_MIN), sim.clockMin + MIN_DT);
-    sim.clock = 2 + (sim.clockMin - (sim.winStart || DAY_START_MIN)) / 1440; sim.day = sim.clock;
+    sim.clock = (typeof sim.dayBase === 'number' ? sim.dayBase : 2) + (sim.clockMin - (sim.winStart || DAY_START_MIN)) / 1440; sim.day = sim.clock;
     var i, t, p, now = sim.clockMin;
 
     for (i = 0; i < sim.tasks.length; i++) {
@@ -1662,7 +1893,10 @@
     var END = sim.winEnd || DAY_END_MIN;
     if (now >= END) {
       sim.paused = false; sim.checkpoint = null;
-      sim.finished = (gapsForSegment(sim.plan, sim.segment).length === 0) ? 'done' : 'incomplete';
+      if (AUTHORABLE.indexOf(sim.segment) >= 0) {
+        var allDone = sim.tasks.every(function (rt) { return rt.scope !== 'in' || rt.state === 'done'; });
+        sim.finished = dayReadiness(sim.plan, sim.segment).length === 0 && sim.sched.unresolved === 0 && allDone ? 'done' : 'incomplete';
+      } else sim.finished = (gapsForSegment(sim.plan, sim.segment).length === 0) ? 'done' : 'incomplete';
       return sim;
     }
     if (sim.segment === 'fishday') {
@@ -2083,7 +2317,7 @@
     // Voyage load-day gates (spec §4 flag table):
     else if (task.id === 'hd_l_hold') {
       // the HOLD MANIFEST CHECK — you count the crates in the hold and find what never made the
-      // truck. Earns only when every item's outbound custody chain is complete.
+      // hotel-to-terminal transfer. Earns only when every item's outbound custody chain is complete.
       ok = placedRight && manifestChainGaps(plan).length === 0;
     } else if (task.id === 'hd_l_headcount') {
       // the SAILING-TIME BOARDING GATE — the 11:00 sailing is fixed; boarding must FINISH by it
@@ -2188,7 +2422,7 @@
     if (seg === 'fishday') out = out.concat(tripFishdayQualityGates(plan, tmplDur, ds));
 
     // 5b. voyage computed atoms (Voyage §3/§4): one 1-pt CARE atom per VIP guest — earned iff all
-    // three of the VIP's care tasks (starlink + both meal escorts) are staffed at template floor
+    // all of the VIP's care tasks (starlink + lunch/dinner/next-morning breakfast escorts) are staffed at template floor
     // (the worst task decides, like a collapsed socket). A DOUBLE-BOOKED buddy is deliberately NOT
     // billed here — spec §3 maps it to "overload/idle", i.e. the generic per-person overlap
     // machinery (overbookMin / OVERLOAD readiness / efficiency), never a second Score row. The id
@@ -2303,9 +2537,16 @@
     SNAP_MIN: SNAP_MIN, DAY_WINDOWS: DAY_WINDOWS, AUTHORABLE: AUTHORABLE,
     // rubric v1.0 — the whole-trip 100-point derived ledger + trip-wide efficiency
     scoreTrip: scoreTrip, tripEfficiency: tripEfficiency,
-    // Voyage program (spec 2026-07-13): Day-0 segments, the ship map, and manifest carryover
-    VOYAGE_STATIONS: VOYAGE_STATIONS, SAIL_MIN: SAIL_MIN,
-    carryState: carryState, manifestChainGaps: manifestChainGaps
+    // Physical route model: factual outbound chain + explicitly inferred reverse return.
+    PHYSICAL_STOPS: PHYSICAL_STOPS, VESSELS: VESSELS, ITINERARY: ITINERARY,
+    physicalStop: physicalStop, vessel: vessel, itineraryLeg: itineraryLeg,
+    HOTEL_DEPART_MIN: HOTEL_DEPART_MIN, SAIL_MIN: SAIL_MIN,
+    VOYAGE_APPROX_MIN: VOYAGE_APPROX_MIN, VOYAGE_END_MIN: VOYAGE_END_MIN,
+    routeSceneId: routeSceneId, routeState: routeState,
+    // Voyage/manifest program: ship map plus separate outbound, transfer, and return custody chains.
+    VOYAGE_STATIONS: VOYAGE_STATIONS,
+    carryState: carryState, manifestChainGaps: manifestChainGaps,
+    manifestTransferGaps: manifestTransferGaps, manifestReturnGaps: manifestReturnGaps
   };
   global.PRS = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

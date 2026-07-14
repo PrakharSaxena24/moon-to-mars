@@ -124,13 +124,15 @@ button{font-family:inherit;}
 .timeline{display:flex;flex-direction:column;gap:10px;}
 .tl-rail{display:flex;gap:3px;}
 .tl-day{flex:1;text-align:center;font-size:11px;font-weight:700;color:var(--ink2);padding:5px 0;border-radius:var(--r-sm);background:var(--bg2);border:1px solid var(--line);}
-.tl-day.arr{background:rgba(61,90,108,.14);border-color:rgba(61,90,108,.4);color:#2c4250;}
+.tl-day.load{background:rgba(138,105,70,.12);border-color:rgba(138,105,70,.38);color:#57442f;}
+.tl-day.voyage{background:rgba(61,90,108,.14);border-color:rgba(61,90,108,.4);color:#2c4250;}
+.tl-day.arr,.tl-day.arrival{background:rgba(61,90,108,.14);border-color:rgba(61,90,108,.4);color:#2c4250;}
 .tl-day.ops{background:rgba(91,107,69,.13);border-color:rgba(91,107,69,.4);color:var(--build-dark);}
-.tl-day.fish{background:rgba(184,137,43,.16);border-color:rgba(184,137,43,.45);color:var(--idle-dark);}
-.tl-day.ret{background:rgba(193,122,31,.16);border-color:rgba(193,122,31,.42);color:var(--idle-dark);}
+.tl-day.fish,.tl-day.fishday{background:rgba(184,137,43,.16);border-color:rgba(184,137,43,.45);color:var(--idle-dark);}
+.tl-day.ret,.tl-day.return{background:rgba(193,122,31,.16);border-color:rgba(193,122,31,.42);color:var(--idle-dark);}
 .tl-blocks{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;}
 .tl-stage{flex:1;min-width:130px;border:1px solid var(--line);border-top:3px solid var(--line2);border-radius:var(--r-md);padding:8px;background:var(--bg2);}
-.tl-stage.arr{border-top-color:var(--leader);} .tl-stage.ops{border-top-color:var(--build);} .tl-stage.fish{border-top-color:var(--accent);} .tl-stage.ret{border-top-color:var(--idle);}
+.tl-stage.load{border-top-color:#8a6946;} .tl-stage.voyage{border-top-color:#3d5a6c;} .tl-stage.arr,.tl-stage.arrival{border-top-color:var(--leader);} .tl-stage.ops{border-top-color:var(--build);} .tl-stage.fish,.tl-stage.fishday{border-top-color:var(--accent);} .tl-stage.ret,.tl-stage.return{border-top-color:var(--idle);}
 .tl-h{font-family:var(--serif);font-size:11.5px;color:var(--ink3);font-weight:700;margin-bottom:6px;letter-spacing:.3px;}
 .tl-chip{display:block;font-size:11.5px;padding:4px 7px;border-radius:var(--r-sm);background:var(--bg1);border:1px solid var(--line);margin:4px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 
@@ -214,15 +216,97 @@ button{font-family:inherit;}
 .planhint.good{background:rgba(91,107,69,.09);border-color:rgba(91,107,69,.35);color:var(--build-dark);}
 
 /* ============ RUN: site map (night map) + dashboard (paper HUD) ============ */
-.runwrap{display:grid;grid-template-columns:1fr 312px;gap:14px;margin-bottom:14px;}
+.runwrap{display:grid;grid-template-columns:minmax(0,1fr) 312px;gap:14px;margin-bottom:14px;align-items:start;}
 .runwrap.drawer-closed{grid-template-columns:1fr;}
 .runwrap.drawer-closed .dashboard{display:none;}
+.run-main{min-width:0;}
+.run-main > .live-dock{margin-top:14px;}
+.run-main > .legend{margin:12px 0;}
 .sitemap{
   position:relative;height:clamp(460px,74vh,780px);border-radius:var(--r-lg);overflow:hidden;border:1px solid var(--indigo-line);   /* §21.5: taller stage */
   background:
     radial-gradient(ellipse at 28% 18%, #1c2733, var(--indigo-deep) 72%);
   box-shadow:var(--shadow2);
 }
+/* Segment-aware fallback worlds. Canvas draws the richer equivalents; these
+   keep the documented ?dom mode honest instead of reverting to one harbor. */
+.sitemap.scene-tokyo{
+  background:
+    linear-gradient(90deg,rgba(70,81,91,.96) 0 53%,rgba(30,62,86,.96) 54% 100%),
+    var(--indigo-deep);
+}
+.sitemap[data-scene="tokyo-hotel"]{
+  background:
+    linear-gradient(90deg,rgba(49,58,66,.98),rgba(28,37,46,.98)),
+    var(--indigo-deep);
+}
+.sitemap[data-scene="tokyo-hotel"]::before{
+  background:
+    linear-gradient(90deg,transparent 0 9%,rgba(246,239,220,.055) 9% 11%,transparent 11% 22%,rgba(246,239,220,.045) 22% 24%,transparent 24%),
+    repeating-linear-gradient(0deg,rgba(246,239,220,.04) 0 1px,transparent 1px 42px);
+}
+.sitemap[data-scene="takeshiba-terminal"]{
+  background:linear-gradient(90deg,#3d4851 0 55%,#244d68 56% 100%);
+}
+.sitemap.scene-tokyo::before{
+  background:
+    repeating-linear-gradient(135deg,rgba(246,239,220,.055) 0 1px,transparent 1px 36px),
+    linear-gradient(180deg,rgba(20,27,34,.18),rgba(20,27,34,.62));
+}
+.sitemap.scene-ship{
+  background:linear-gradient(145deg,#315d78 0%,#1d3a52 46%,#101d2a 100%);
+}
+.sitemap.scene-ship::before{
+  background:repeating-linear-gradient(168deg,rgba(178,204,214,.09) 0 2px,transparent 2px 46px);
+}
+.sitemap.scene-ship .paths{display:none;}
+.sitemap.scene-ship .water{inset:0;width:100%;height:100%;border-radius:0;background:transparent;box-shadow:none;}
+.sitemap.scene-tokyo .water{display:none;} /* the Tokyo background already owns its right-side quay water */
+/* The scene may still need its guests (hotel breakfast, terminal boarding and
+   aboard care). Hide only island-specific wildlife and the local fishing skiff. */
+.sitemap.scene-tokyo .gull,.sitemap.scene-tokyo .splash,
+.sitemap.scene-ship .gull,.sitemap.scene-ship .splash,
+.sitemap.scene-tokyo .boat,.sitemap.scene-ship .boat,
+.sitemap.scene-tokyo .wk,.sitemap.scene-ship .wk{display:none;}
+.sitemap.scene-tokyo .st-arch,.sitemap.scene-ship .st-arch{display:none;}
+/* The code-native Canvas paints the detailed ferry. Give the documented ?dom
+   fallback one continuous deck instead of floating station discs. */
+body:not(.canvas-stage) .sitemap.scene-ship #stations::before{
+  content:"";position:absolute;left:7%;right:7%;top:19%;bottom:13%;z-index:2;pointer-events:none;
+  border:2px solid rgba(227,196,107,.62);border-radius:48% 48% 28% 28% / 14% 14% 30% 30%;
+  background:repeating-linear-gradient(90deg,rgba(246,239,220,.10) 0 1px,transparent 1px 42px),
+    linear-gradient(180deg,rgba(72,55,36,.94),rgba(31,39,46,.96));
+  box-shadow:0 16px 30px rgba(5,10,16,.48),inset 0 0 24px rgba(227,196,107,.10);
+}
+body:not(.canvas-stage) .sitemap[data-scene="ogasawara-maru"] #stations::before{
+  left:5%;right:5%;top:16%;bottom:10%;border-radius:44% 44% 24% 24% / 12% 12% 28% 28%;
+  border-color:rgba(229,234,230,.72);
+  background:repeating-linear-gradient(90deg,rgba(246,239,220,.09) 0 1px,transparent 1px 54px),
+    linear-gradient(180deg,#677581 0 16%,#343f49 17% 76%,#1b2730 77%);
+}
+body:not(.canvas-stage) .sitemap[data-scene="interisland-ferry"] #stations::before{
+  left:17%;right:17%;top:25%;bottom:18%;border-radius:48% 48% 32% 32% / 16% 16% 34% 34%;
+  border-color:rgba(178,204,214,.78);
+  background:repeating-linear-gradient(90deg,rgba(246,239,220,.10) 0 1px,transparent 1px 34px),
+    linear-gradient(180deg,#d8ded9 0 15%,#44677c 16% 70%,#182a37 71%);
+}
+.sitemap[data-scene="chichijima-transfer"]{
+  background:linear-gradient(90deg,#273a35 0 58%,#295573 59% 100%);
+}
+.sitemap[data-scene="chichijima-transfer"] .water{left:auto;right:-5%;transform:scaleX(-1);}
+.sitemap[data-scene="chichijima-transfer"] .boat{display:none;}
+.sitemap.scene-overview{
+  background:
+    radial-gradient(circle at 18% 24%,rgba(227,196,107,.72) 0 5px,transparent 6px),
+    radial-gradient(circle at 68% 61%,rgba(124,143,92,.85) 0 7px,transparent 8px),
+    radial-gradient(circle at 82% 78%,rgba(124,143,92,.95) 0 9px,transparent 10px),
+    linear-gradient(145deg,#172c3d,#24516d 56%,#132535);
+}
+.sitemap.scene-overview::before{
+  opacity:.9;background:linear-gradient(32deg,transparent 0 44%,rgba(227,196,107,.55) 44.3% 44.7%,transparent 45% 100%);
+}
+.sitemap.scene-overview .paths,.sitemap.scene-overview .sealayer,
+.sitemap.scene-overview .ambient{display:none;}
 .sitemap::before{
   content:"";position:absolute;inset:0;pointer-events:none;opacity:.55;
   background:
@@ -457,7 +541,8 @@ button.rail-row:focus-visible{outline:2px solid var(--accent);outline-offset:1px
 .rc-earned{font-size:12px;font-weight:700;color:var(--build-dark);}
 .rc-undo{padding:3px 9px;font-size:11px;color:var(--ink3);}
 
-/* setup layout: single column below 1180px (rail stacks above the cards); 2-col grid above */
+/* setup layout: source order keeps the plan before the Run rail below 1180px;
+   the wide grid pins the same rail alongside it. */
 #setup{display:grid;grid-template-columns:1fr;}
 @media(min-width:1180px){
   .wrap{max-width:1280px;}
@@ -679,6 +764,7 @@ button.rail-row:focus-visible{outline:2px solid var(--accent);outline-offset:1px
 .dd-close{
   flex:0 0 auto; width:34px; height:34px; border-radius:50%;
   border:1px solid var(--line2); background:var(--bg1); color:var(--ink2);
+  display:inline-grid;place-items:center;padding:0;
   font-size:20px; line-height:1; cursor:pointer; box-shadow:var(--shadow);
 }
 .dd-close:hover{ background:var(--bg2); color:var(--ink); }
@@ -788,7 +874,6 @@ button.rail-row:focus-visible{outline:2px solid var(--accent);outline-offset:1px
 /* ---------- responsive ---------- */
 @media(max-width:760px){
   .runwrap{grid-template-columns:1fr;}
-  .dashboard{order:2;}
 }
 @media(max-width:640px){
   body{padding:18px 12px 40px;}
@@ -819,6 +904,11 @@ button.rail-row:focus-visible{outline:2px solid var(--accent);outline-offset:1px
 }
 @media(prefers-reduced-motion:reduce){
   /* every decorative animation off; JS-driven motion is separately gated on the same media query */
+  html{scroll-behavior:auto !important;}
+  *,*::before,*::after{
+    animation-duration:.001ms !important;animation-iteration-count:1 !important;
+    transition:none !important;transition-delay:0s !important;scroll-behavior:auto !important;
+  }
   .astro,.astro::after,.astro .pw,.astro .lg,.astro .bub,.astro .sh,.astro.spot .sh,
   .station.stalled .st-ic,.station.strike .st-ic,
   .fd-socket.miss,.fd-slot,.r-badge.show,.guest .g-body,.gull,.splash,.water::after,
@@ -1013,6 +1103,20 @@ body.canvas-stage .sitemap::after{display:none;} /* vignette is drawn on the can
 .plan-tokens{position:absolute;inset:0;z-index:6;pointer-events:none;}
 .plan-stage-wrap.pawn-hover{cursor:pointer;}
 .plan-stage-wrap.placing{cursor:copy;}
+/* Visible, compact keyboard path to every canvas pawn. app.js owns the
+   localized accessible name and button contents; :empty keeps the seam quiet
+   if the optional renderer is unavailable. */
+.plan-roster{display:flex;align-items:center;gap:6px;overflow-x:auto;scrollbar-width:thin;
+  margin-top:8px;padding:7px 8px;background:rgba(246,239,220,.96);border:1px solid var(--line2);
+  border-radius:var(--r-sm);box-shadow:var(--shadow);}
+.plan-roster:empty{display:none;}
+.plan-roster h2,.plan-roster .plan-roster-label{flex:0 0 auto;font-family:var(--serif);font-size:12px;margin:0 4px 0 0;}
+.plan-roster button{flex:0 0 auto;white-space:nowrap;background:var(--bg1);color:var(--ink);border:1px solid var(--line2);
+  border-radius:var(--r-sm);padding:5px 8px;font:600 11.5px/1.25 var(--font);cursor:pointer;}
+.plan-roster button:hover{background:var(--bg2);border-color:var(--accent);}
+.plan-roster button:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
+.fd-block.time-unknown{border-style:dashed;}
+.fd-block.time-unknown::after{content:"?";position:absolute;right:3px;top:2px;font-weight:800;color:var(--wait);}
 /* a gold ring at a valid target pawn's feet while an object is lifted */
 .pawn-halo{position:absolute;width:46px;height:46px;margin:-23px 0 0 -23px;border-radius:50%;
   border:2px solid var(--accent-light);background:radial-gradient(circle,rgba(227,196,107,.28),rgba(227,196,107,0) 70%);
@@ -1116,7 +1220,8 @@ body.canvas-stage .sitemap::after{display:none;} /* vignette is drawn on the can
 @media(max-width:640px){
   .plan-stage-wrap{height:38vh;min-height:230px;}
   .tray-obj,.tray-duty{font-size:12px;padding:5px 8px;}
-  .tray-obj .to-nm{display:none;}   /* icon-only objects on narrow screens; names via aria-label + picker */
+  .tray-decisions .tray-obj{flex:1 1 145px;min-width:0;justify-content:flex-start;}
+  .tray-obj .to-nm{display:inline;min-width:0;white-space:normal;text-align:left;line-height:1.25;}
 }
 @media(prefers-reduced-motion:reduce){
   .pawn-halo{animation:none;transform:scale(1);}

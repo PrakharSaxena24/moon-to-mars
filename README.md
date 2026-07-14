@@ -20,15 +20,21 @@ member — what they hold, what they wait on — and optionally hand a card over
 (which rescues *this* run but leaves the plan gap in place). Beside the grade sits
 **Efficiency %** — a plan can be "sound" yet still waste everyone's time.
 
-**New — the whole voyage is the game.** The campaign now starts in Tokyo on **Day 0**: a
-**Load & Board** morning (pack the manifest → truck to the pier → hold loading → boarding
-点呼, all against the fixed 11:00 sailing — *what misses the ship cannot be fixed at sea*)
-and a **Ship Day** aboard, where the 4 main guests each need a dedicated buddy who registers
-Starlink on their phone via the company credit card and escorts them to ship meals. Loading
-mistakes **carry over**: a jig case that never made the truck stalls the fishing day's gear
-check three days later. The return is a mirrored **Pack & Sail** day home. There's also an
+**New — the whole voyage is the game.** The campaign now starts at a nearby Tokyo hotel on
+**Day 0**. Breakfast is at the hotel (time unconfirmed); the group leaves at the confirmed
+**10:00**, transfers to Takeshiba, and boards the **Ogasawara-maru** for its confirmed
+**11:00** departure. The long-haul crossing takes about one day to Chichijima. There the
+group changes to a separate inter-island vessel—whose name and connection times are left
+explicitly unconfirmed—for the final leg to Hahajima and Hinata. The 4 main guests each need
+a dedicated buddy aboard to register Starlink on their phone via the company credit card and
+escort them to ship meals. Custody mistakes **carry over across both ship handovers**: a jig
+case omitted in Tokyo or lost at the Chichijima transfer stalls the fishing-day gear check.
+The return rehearsal uses the reverse route, clearly labeled as an inference with no claimed
+timetable. There's also an
 ambient **sound layer** (surf, wind, an engine hum aboard, a freeze bell, the hanko *thock*)
 behind a 🔊 header toggle — muted by default, and the game never depends on it.
+The stage follows six physical identities: Tokyo hotel → Takeshiba terminal → Ogasawara-maru →
+Chichijima transfer → unnamed inter-island vessel → Hahajima/Hinata.
 
 > 止まったキャラクターは、失敗した社員ではない。止まった場所こそが、計画を直すべき場所である。
 > The stalled character isn't a failed employee — the place they stalled is the place to fix the plan.
@@ -50,8 +56,9 @@ fully offline. / **`index.html`** をブラウザで開くだけ。ビルド・�
 ## 🔁 The loop / 基本フロー
 1. **Read the plan** — the Ogasawara event is pre-built (canvas, org & roles, 10-day timeline).
    The team is **8 AIBOS organizers + 3 contracted chefs** who run it, hosting **13 group-company guests**.
-2. **Choose a day** — rehearse **Day 1 (Arrival)**, **Days 2–9 (Operations)**, **Day 3 (Fishing day,
-   minute-level)**, or **Day 10 (Return)** one at a time, or the **whole trip**.
+2. **Choose a day** — rehearse **Day 0 (hotel → Takeshiba)**, **Days 0–1 (Ogasawara-maru)**,
+   **Day 1 (Chichijima transfer → Hahajima/Hinata)**, **Days 2–9 (Operations)**, **Day 3 (Fishing day, minute-level)**,
+   or **Day 10 (Return)** one at a time, or run the **whole trip**.
 3. **Close the gaps** — the demo opens gappy on purpose: **7 classic frame gaps** (ferry-time
    sharing, safety abort-authority, meals budget authority, illness report route, site-lead
    deputy/load, cash reserve, return shipping & headcount), **Arrival shipped half-cleared**
@@ -131,7 +138,7 @@ OgasawaraSim/
 ├─ index.html   screens (canvas/editors → site map + dashboard → report)
 ├─ style.css    calm light business theme + site map + character states
 ├─ engine.js    window.PRS — deterministic sim: data model, detectors, scoreTrip ledger (no DOM)
-├─ stage.js     window.PRS_STAGE — the Canvas 2D harbor renderer (reads sim state, writes nothing back)
+├─ stage.js     window.PRS_STAGE — six route-aware Canvas worlds + route overview (presentation-only)
 ├─ sprites.js   window.PRS_SPRITES — the SVG sprite cast (optional enhancement; game runs without it)
 ├─ sound.js     window.PRS_SOUND — procedural WebAudio ambience + cues (optional; muted by default)
 ├─ rubric.html  the public 100-point scoring framework page (renders live from engine.js)
@@ -146,7 +153,7 @@ OgasawaraSim/
 ```
 
 `engine.js` is deterministic (seeded RNG) and runs in the browser **and** Node, so the
-teaching curve is **headless-verified**: `node verify.js` (323 checks) pins the atom count (99),
+teaching curve is **headless-verified**: `node verify.js` (356 checks) pins the atom count (99),
 both matrix axes (bucket totals 11/10/11/12/13/**34**/9 across frame · load · voyage · arrival ·
 ops · **fishing day** · return, dimension totals **37**/29/21/7/5/1 for info/exec/safety/quality/
 money/people), that earned atoms always sum to the shown total, the exact seed scores below, a
@@ -156,7 +163,7 @@ drawn-but-late, redundant-arrow, collapsed-socket, decoy/overlap/dep-broken/comp
 full EN/JA i18n parity. Verified seed curve:
 
 ```
-gappy plan                          D    53 /100   trip efficiency  83%
+gappy plan                          D    52 /100   trip efficiency  86%
   bucket earned → frame 0 · load 5 · voyage 8 · arrival 6 · ops 11 · fishday 15 · return 8
   … classic fixes + authoring the coarse days raise it step by step, monotonically …
 +fixHandoffs (draw every fishing-  +16 — the single largest jump of any individual fix
@@ -166,7 +173,7 @@ canonical (every classic fix +      A   100 /100   clean · trip efficiency 100%
 ```
 
 `engine.js` は決定的（シード乱数）でブラウザでも Node でも動き、学びの曲線を `node verify.js`
-（323チェック）で検証済み：ギャップだらけの計画は53点・D（旅程効率83%）、情報の矢印を描く修正
+（356チェック）で検証済み：ギャップだらけの計画は52点・D（旅程効率86%）、情報の矢印を描く修正
 （+fixHandoffs）が単独最大の+16点、全修正で100点・A・clean（旅程効率100%）。同一シードで
 同一結果を再現。
 
@@ -175,10 +182,11 @@ canonical (every classic fix +      A   100 /100   clean · trip efficiency 100%
 ## 🗺️ Scope (MVP) / 範囲
 This is the **MVP** the spec recommends starting from (§24) plus the fishday temporal layer
 (CLAUDE.md §12) and the whole-trip **scoreTrip** ledger (CLAUDE.md §23): the guided Ogasawara
-rehearsal, eight problem detectors mapped to character behaviors, all four days authorable
-(hour-level Arrival/Ops/Return, minute-level Fishing day with the timeline + info-arrow editor),
-checkpoints with intervene, trip Efficiency %, the 89-atom Score Ledger + individual values, and
-the on-screen improvement pack. **Out of scope** (spec Phase 2/3 & CLAUDE.md §13): NO-GO/abort
+rehearsal, eight problem detectors mapped to character behaviors, all six campaign segments authorable
+(hour-level Load/Voyage/Arrival/Ops/Return, minute-level Fishing day with the timeline + info-arrow editor),
+six route-aware physical scenes plus a Whole Trip overview, checkpoints with intervene, trip Efficiency %, the 99-atom
+Score Ledger + individual values, and the on-screen improvement pack. **Out of scope** (spec Phase 2/3
+& CLAUDE.md §13): NO-GO/abort
 branches, low-catch resilience, channel outages, seasickness deputy handover, spoilage clock,
 AI task/risk generation, replay timeline, post-execution comparison, and Word/PDF/Excel export.
 
