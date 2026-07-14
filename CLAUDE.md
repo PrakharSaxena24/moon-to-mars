@@ -9,6 +9,22 @@
 ## User
 - **Prakhar Saxena** (`prakhar.saxena@aibos.co.jp`) — primary user / product owner.
 
+## Current owner amendments (2026-07-14; supersede older implementation history)
+- The simulator labels the full campaign **Day 0 through Day 10**. Main/priority guests are
+  **Day 0–5 inclusive: Watanabe, Nagatani, Kadou, Maeda**; **Day 6–10 inclusive: Watanabe,
+  Nagatani, Yamate, Saito**. `plan.guestRotations` and `guestRosterForDay(plan, tripDay)` are the
+  authority. The 13-person hosted-guest planning envelope remains separate from these four-person waves.
+- Outbound Voyage care, luggage, and buddy scoring apply to the Day-0 cohort: Watanabe, Nagatani,
+  Kadou, Maeda. Each has four scored care tasks: Starlink registration, lunch escort, dinner escort,
+  and next-morning breakfast escort (16 tasks total). The legacy `vip` field is only a compatibility
+  alias for `voyageCare`, not a global presence rule.
+- The people in the Day-6 exchange are known, but its route, timing, and luggage handoff are not.
+  This is the fifth unresolved critical external assumption; it affects real-execution readiness,
+  never the rehearsal Score.
+- Day 3 authoring is **hour-level**: task moves/resizes and manual send times quantize to 60-minute
+  blocks. The deterministic engine may retain finer internal timing to calculate and explain waits,
+  channel latency, checkpoints, and dinner impact; that evidence is not sub-hour authoring.
+
 ---
 
 ## 0. One paragraph
@@ -44,7 +60,7 @@ Every stall is **computed from plan data, never random** (an explainable rule en
 |---|---|---|
 | D1 | **Setting** | Ogasawara 10-day fishing trip (keep; drop the "moon→mars" space theme). |
 | D2 | **Roster** | 24 = **8 organizers (運営) + 13 guests (ゲスト) + 3 chefs (料理長)**. Chefs cook for the 13 guests; the 8 organizers self-cater but sometimes receive food from chefs. Guests are hosted — they fish for enjoyment, own no duties. |
-| D3 | **MVP depth** | Model **one representative fishing-day loop in full, minute-level detail** (cook→angler→boat→cook), inside the 10-day frame. |
+| D3 | **MVP depth** | Model one representative fishing-day loop (cook→angler→boat→cook) with **hour-level authoring** and detailed deterministic rehearsal evidence, inside the 10-day frame. |
 | D4 | **Authoring** | **Hybrid timeline + info-arrows**, author-heavy **from a skeleton**: trip facts given; player assigns duties, times task blocks, and **draws every information handoff**. |
 | D5 | **Run model** | Mostly **hands-off** (press Run, watch) **+ checkpoints** (pause → inspect each member → optionally intervene → resume). |
 | D6 | **Scoring** | Perfect modeled plan = 100; every plan-cause point is explainable. A separate headline **Efficiency %** records wasted time/rework effects beside the grade. |
@@ -242,13 +258,13 @@ the 7 stations; the 10-day frame focused on the **代表釣行日**; the **Duty 
 
 **Built — three moves:**
 - **A · Assign each duty** — drag a duty chip onto a person → writes `overrides.staffing` + role `holder`/`deputyId`. A duty left in the Deck stays red; the sim will 合議 (huddle) at that station.
-- **B · Place task blocks** — each duty-holder has a horizontal **lane**; drag a task onto it to make a `{start, dur}` block, snapped to a 5/15/30-min grid. Right-edge handle resizes. Faint ties show `deps`; a block that starts before its prerequisite finishes flags red.
+- **B · Place task blocks** — each duty-holder has a horizontal **lane**; drag a task onto it to make a `{start, dur}` block. Day 3 movement and resizing use whole-hour blocks; the deterministic rehearsal may still retain finer reference timing as evidence. The right-edge handle resizes. Faint ties show `deps`; a block that starts before its prerequisite finishes flags red.
 - **C · Draw a handoff arrow** — each task shows an **output port** ○ and, per `neededInfo`, an **input socket** ● (hollow if unfed). Drag ○→● to create an arrow; a panel sets message / sender / receiver / trigger / channel and shows **arrival = sendTime + latency vs. consumer start** (✓ / ⚑ late).
 
 ### 7.1 ASCII mockup
 ```
 ┌─ SETUP · 代表釣行日 Representative Fishing Day ───────────────── ⚑ Ready-check: 2 ─┐
-│ PEOPLE 人材     │  TIME →  05:00   05:30   06:00   06:30   07:00 ······· 14:00   17:00 │
+│ PEOPLE 人材     │  TIME →  04:00   05:00   06:00   07:00   08:00 ······· 14:00   17:00 │
 │ 🎣 Kato         │        ○ output port   ● input socket                               │
 │ 🧭 Suzuki       │ 📦 Nakamura │[Tackle prep]○·····(前夜)              [Catch+Ice]      │
 │ 🍳 Chef 1·2·3   │            │      ①↓ ic_tackle 05:30 ✓                              │
@@ -282,7 +298,10 @@ This is the **pre-Run mirror of the post-Run score** — draw an arrow, watch a 
 Press **Run** and step back; nothing is random. Extends the existing `createSim()`/`tick()` (which advances tasks
 by day-window + `deps` and pulls stalled characters to a gap station) — it does **not** replace it.
 
-- **Two clocks.** The 10-day frame keeps `DT = 0.25 day`. The representative day runs a **fine minute clock** (`MIN_DT = 5`, window **04:00→20:00** — widened from the draft's 05:00 so the §5.3 pre-dawn tasks at 04:15 fit) only when `segment === 'fishday'`. Fixed `MIN_DT` ⇒ deterministic.
+- **Two clocks.** The 10-day frame keeps `DT = 0.25 day`. Behind Day 3's whole-hour authoring UI,
+  the representative-day rehearsal runs a **fine minute clock** (`MIN_DT = 5`, window **04:00→20:00**
+  — widened from the draft's 05:00 so the §5.3 pre-dawn reference tasks at 04:15 fit) only when
+  `segment === 'fishday'`. Fixed `MIN_DT` ⇒ deterministic; it is evidence resolution, not authoring resolution.
 - **Idle minutes (手待ち) — the core cost.** Per fine tick, a duty-holder whose due task can't start (dep not done, or needed info not arrived) accrues `idleMin += MIN_DT`, tagged with the exact missing `infoId`/`depId`, and is drawn **waiting at that task's station** (visible pile-up). Clears the instant the info arrives — the map shows waiting *resolve in real time* as upstream catches up.
 - **Wrong-fish rework (手戻り).** A per-task knob `onMissingInfo: 'wait' | 'assume'`. `'assume'` tasks (a boat at sea *must* head somewhere) proceed on a **defined wrong default** → reproducible rework; when the correcting info lands, spent progress is discarded and `reworkMin` accrues, poisoning downstream consumers (the cascade).
 - **Stall-reason → character-state map** (reuse existing states; **add two**):
@@ -394,7 +413,7 @@ MVP scope** (a separate `gh repo rename`).
 ### 12.2 Engine additions (`engine.js`)
 - **Constants:** `CHEFS=3`; recompute `GUESTS = HEADCOUNT − STAFF − CHEFS = 13`. New tunables `MIN_DT=5`, `DAY_START_MIN=240` (04:00 — widened so §5.3's 04:15 tasks fit; the draft said 300), `DAY_END_MIN=1200`, `IDLE_TOL=0`, `IDLE_CAP=60`, `CHANNELS` latency map.
 - **Roster:** add role `chef` 🍳 (before `crew`, keep `crew` last as `role()` fallback); add `co_chef`; add participants `p09–p11`; re-hat `p08` `teamLead → specialist`; add `roles.chef` + `roles.specialist`, delete the `teamLead` instance; `project.portions = { guests:13, organizers:8, chefs:3, servedByChef:13, organizerAddOns:5 }`. Migrate the mechanical `teamLead` references (§10).
-- **Segment:** add a 4th `SEGMENTS` entry `fishday` (代表的な釣行日／分刻み) so the minute clock never touches the day-clock segments.
+- **Segment:** add a 4th `SEGMENTS` entry `fishday` (代表的な釣行日). Its detailed rehearsal clock stays separate from hour-block authoring.
 - **Tasks:** the **30** `fishday` tasks from §5, each with optional `startMin`/`durMin`/`day:'fishday'`/`produces[]`/`assumeOn[]` alongside the existing day-based fields (absent → behaves as today).
 - **`handoffs[]`** (new top-level array) per §6.1; ship it **gappy** (one arrow late, one missing) exactly as the template already ships gappy.
 - **Pure helpers:** `fishdayTasks`, `resolveSendMin`, `infoArrival`, `idleMinutes`, `wrongFishTasks`, `reworkMinutes`, `efficiency` (all DOM-free, exported on `api`).
@@ -488,7 +507,7 @@ re-derived as scoring rubric v1.0 SHIPPED 2026-07-10 (§24). Teaching MVP SHIPPE
 **LIVE on GitHub Pages: https://prakharsaxena24.github.io/moon-to-mars/** (`main` → Pages serves `main`/root,
 auto-deploys on push; `gh` authed as PrakharSaxena24 — everything through §30 is pushed and live;
 `_config.yml` excludes CLAUDE.md/WORLD.md/docs/archive/verify.js from the published site).
-Headless-verified `node verify.js` **385 checks** (classic D→A gradient; the fishday temporal block — gappy
+Headless-verified `node verify.js` **431/431 checks** (classic D→A gradient; the fishday temporal block — gappy
 plan idleTotal 1450 person-min, fishday-day efficiency 68%; the rubric v1.0 constitution — 99 atoms Σ=100,
 gappy trip 52/D at 86% trip Efficiency, canonical 100/A/clean at 100%, arrow-draw the largest single fix
 jump; Layer 0 helpers; the §20
@@ -611,8 +630,8 @@ A-grade clean report, JP mid-freeze switch, reduced-motion page, resize) — all
 > Kept for history.
 
 The timeline+info-arrow grid used to be Day-3-only and hard-hidden off it (§7's `daySel!=='fishday'`
-gate — the "I can't find it" bug). It now renders on **every day tab**. Day 3 stays the full
-minute-level drag-and-drop authoring editor; **Arrival / Ops / Return are a read-only hour-level
+gate — the "I can't find it" bug). It now renders on **every day tab**. Day 3 uses the full
+timeline/info-arrow editor (now superseded to hour-block authoring by §20); **Arrival / Ops / Return are a read-only hour-level
 Gantt** derived from data the engine already holds — no invented reference plans, coarse-day scoring
 unchanged. Locked with a Fable design gut-check (caught: arrows evaporate on coarse days, view-only
 drag reads as fake, two determinism traps) → **PROCEED-WITH-CHANGES**, all applied.
@@ -671,9 +690,10 @@ pivotal calls. This supersedes §19's "coarse days are read-only" decision.
 
 ### 20.1 Locked decisions (owner sign-off 2026-07-06)
 - **Direction:** build the authorable days (full plan), not scenario branches.
-- **Day 3 granularity:** hour ruler + **15-min placement snap** (NOT literal 60-min). Keeps the 90-min
-  cook block (5×18), the 0–30 min channel-latency lesson, and **all fishday verify anchors byte-intact**.
-  Other days snap 60 min. `SNAP_MIN = {arrival:60, ops:60, return:60, fishday:15}`.
+- **Day 3 granularity (owner amendment 2026-07-14):** hour ruler + **literal 60-minute authoring
+  snap**. Existing 30/45/90-minute reference facts and channel latency remain internal evidence, but
+  the player cannot create a sub-hour task move, resize, or manual send-time edit.
+  `SNAP_MIN = {load:30, voyage:60, arrival:60, ops:60, return:60, fishday:60}`.
 - **Scoring identity:** **rule-based** — any consistent arrangement can score 100 (required tasks placed &
   staffed on the right role, deps ordered, every needed card delivered on time over a priced channel, no
   double-booking, no decoys). The hidden per-day reference plan is only verify's witness that 100 is reachable.
@@ -681,9 +701,9 @@ pivotal calls. This supersedes §19's "coarse days are read-only" decision.
   authoring (Arrival pre-cleared to half as the tutorial). Protects Live + all anchors.
 - **Live mode:** unchanged, fishday-only this release.
 
-### 20.2 Architecture spine — "blocks quantize, information doesn't"
-Snap constrains **edits**, not the latency math (which stays minute-precise) — so authoring in hours still
-lets minutes leak in (the thesis restated). **Additive engine** (D7 survives): a new `plan.days` container
+### 20.2 Architecture spine — hour-block authoring, detailed causal evidence
+Snap constrains **edits**, not the latency math (which stays minute-precise). Sub-hour effects may appear as
+rehearsal evidence, but cannot be directly authored on Day 3. **Additive engine** (D7 survives): a new `plan.days` container
 that `score()`/`detect()`/the classic 10-day frame **never read** (91 core anchors stay byte-identical);
 `fishdaySchedule` generalizes to one pure `daySchedule(plan,seg)` (fishday delegates, verify pins equality);
 a new rule-based `scoreDay(plan,seg)` beside `score()`. The day-grid **UI is a real rewrite** into one
@@ -753,11 +773,15 @@ lesson is weaker by construction (reference plans MUST include tight back-to-bac
 (3 consistency-verified reference plans) is the real schedule cost · fd-* editor carries ~30 §18 hardening fixes
 — the existing Playwright suite must stay green as the guardrail, not be rewritten to match.
 
-### 20.8 As-built (SHIPPED 2026-07-06, Phases 1–5 committed)
+### 20.8 Historical as-built state (SHIPPED 2026-07-06, Phases 1–5 committed)
+> The 15-minute Day-3 behavior recorded here was superseded by the 2026-07-14 owner amendment
+> in §20.1. The current UI authors Day 3 in whole-hour blocks.
+
 All four days are now one **deck→arrange→connect** editor. Choose required tasks from the **Task Deck**
 rail (3 hidden decoys per coarse day), drag them onto per-person hour lanes, wire the information arrows;
-live projection + ready-check as you build; **"Clear day"** authors from an empty board. **Day 3** keeps its
-15-min snap, minute channel-latency lesson, and every anchor byte-identical; Arrival/Ops/Return snap 60.
+live projection + ready-check as you build; **"Clear day"** authors from an empty board. At this historical
+shipping point, **Day 3** kept its 15-minute snap and minute channel-latency lesson while
+Arrival/Ops/Return snapped to 60 minutes.
 Rule-based `scoreDay` grades any consistent arrangement toward 100 (perfect 100/A → half ~66/C → cleared 25/D,
 monotone). A **coarse-day Run → `scoreDay` report** (grade + 8-category scorecard + dayReadiness fix-pack +
 "Auto-arrange the arrows" `applyDayFix` + Edit/Run-again).
@@ -1149,7 +1173,7 @@ by fixed rule, from the flagged template data**, and make every number in it pin
   Ops 18 / Fishing Day 41 / Return 12**; dimensions **Info 34 / Execution 25 / Safety 20 / Quality 10 /
   Money 10 / People 1** — both axes sum to 100, asserted by `verify.js`, not just documented.
 - **Clean-gate amendment.** "Clean" is now precisely: every atom at its max **AND** zero live classic
-  detectors. A ≥90-but-unclean plan shows its true sum with a withheld grade (`"97 · B — an A requires zero
+  detectors **AND** zero authorable-day readiness gaps (including custody and overload). A ≥90-but-unclean plan shows its true sum with a withheld grade (`"97 · B — an A requires zero
   known gaps"`) — the old `!clean→89` cap is gone from **every** player-facing surface, engine included
   (it had survived inside `scoreDay`/`score()` after §23).
 - **Migrations closed.** Live mode's win check now reads `scoreTrip` (not legacy `score()`), its win string
@@ -1301,8 +1325,8 @@ bigger. Spec `docs/superpowers/specs/2026-07-11-harbor-complete-design.md` · pl
 
 ## 28. The Voyage — the full-trip campaign (SHIPPED 2026-07-13)
 Owner direction: add the **before/after voyage days** — the trip should start in Tokyo, not at the island —
-with a **Load & Board day** (pack → truck → hold → boarding vs the fixed 11:00 sailing), a **Ship Day**
-where the **4 main VIP guests** each need an assigned member to **register Starlink on their phone via the
+with a **Load & Board day** (pack → truck → hold → boarding vs the fixed 11:00 sailing), an **Outbound Voyage (Days 0–1)**
+where the **4 outbound main guests** each need an assigned member to **register Starlink on their phone via the
 company credit card** and **escort them to ship meals**, real cross-day carryover, and **sound** (the only
 "completeness" item wanted — no PWA/backend/libraries, per §11). Spec
 `docs/superpowers/specs/2026-07-13-voyage-design.md` (incl. the §4.1 senior-dev gate ruling) · plan
@@ -1311,12 +1335,13 @@ the senior dev (every wave's final code gate-approved before commit) · Fable on
 the program-end everything-check.**
 
 - **The campaign (W1, `e02b3d3`).** `AUTHORABLE` grows to `['load','voyage','arrival','ops','fishday',
-  'return']` (+ the frame): `load` Day 0 · 06:00–11:00 Tokyo, `voyage` Day 0 · 11:00–21:00 aboard, both
+  'return']` (+ the frame): `load` Day 0 Tokyo, `voyage` Day 0 11:00 through approximately Day 1 11:00 aboard, both
   hour-level; `return` reshaped to **Pack & Sail** (settle → pack → hold → sail home → Tokyo 点呼). Five
   **ship stations** over the water (`VOYAGE_STATIONS`: Hold 船倉 · Cabins 船室 · Dining saloon 船内食堂 ·
   Deck デッキ · Purser's desk 事務長窓口) — a voyage sim's `sim.stations` is this set.
-- **Manifest & real carryover.** `plan.manifest` (11 physical items incl. `mi_jigcase`, coolers, ice, the
-  cash box, per-VIP luggage) + **`carryState(plan)`** — a pure exported function folding the ordered
+- **Manifest & real carryover.** `plan.manifest` carries 13 directional records: 11 outbound physical
+  items (including Watanabe/Nagatani/Kadou/Maeda luggage) and 9 return-required items (including
+  Watanabe/Nagatani/Yamate/Saito luggage). `carryState(plan)` is a pure exported function folding the ordered
   segments' `daySchedule` outcomes into per-item availability; binding uses the EXISTING `neededResources`
   field, so *what missed the ship stalls its downstream consumer* in the same visible language as
   information gaps (unplace the truck run → the jig case reads `missing` from voyage onward → the fishday
@@ -1324,12 +1349,14 @@ the program-end everything-check.**
   `aboard` and the fishday numbers sit at the pre-Voyage pins **1450 idle / 68% eff** byte-identically;
   arrival/ops still reach their own 100/A/clean. A downstream stall bills **Efficiency and the visible run
   only** — never double-billed in the Score (causes, not consequences).
-- **Named guests & the care roster.** `plan.guests` (13, WORLD.md-consistent; **VIPs Nagatani · Kadou ·
-  Watanabe · Yamate** carry `starlink` + `escort` needs) + **`overrides.buddies` {guestId: pid}** — assigning
-  a buddy auto-instantiates that VIP's voyage tasks (Starlink registration in the purser-desk window, paid
-  via the new **`bl_card`** company-card envelope; lunch/dinner escorts); no buddy → unstaffed (priced by
-  existing machinery); cap **2 VIPs per organizer**. V2 surface: a **care shelf** on the command tray — the
-  4 VIP cards hand to organizer pawns in the same "you hand things to people" grammar (All-settings fallback
+- **Named guests & the care roster.** `plan.guests` is the 13-record master hosted catalog;
+  `plan.guestRotations` selects the four main guests for an explicit day. **Watanabe · Nagatani · Kadou ·
+  Maeda** carry outbound `voyageCare` (`starlink` + `escort`) needs. **`overrides.buddies` {guestId: pid}** assigns
+  a buddy to those voyage tasks (Starlink registration in the purser-desk window, paid
+  via the new **`bl_card`** company-card envelope; lunch, dinner, and next-morning breakfast escorts);
+  no buddy → unstaffed (priced by
+  existing machinery); cap **2 care guests per organizer**. V2 surface: a **care shelf** on the command tray — the
+  4 outbound-care cards hand to organizer pawns in the same "you hand things to people" grammar (All-settings fallback
   keeps selects).
 - **The constitution re-derived (§4.1 ruling).** The W1 engine landed Σ=100 but changed two frozen tiers
   without a spec edit — the **Opus gate BLOCKED it** (the process working as designed). Ruling, spec-first:
@@ -1339,11 +1366,11 @@ the program-end everything-check.**
   matrix (pinned):** frame 11 · load 10 · voyage 11 · arrival 12 · ops 13 · **fishday 34 (heaviest)** ·
   return 9 = 100; dimensions **Info 37 (heaviest)** · Exec 29 · Safety 21 · Quality 7 · Money 5 · People 1;
   **99 atoms**. Seed gaps extended (load: jig case never assigned to the truck run + cabin list unshared;
-  voyage: 2 VIP buddies unassigned + card authority missing) → the **then-current** seed was **53/D · trip
+  voyage: 2 outbound-care buddies unassigned + card authority missing) → the **then-current** seed was **53/D · trip
   efficiency 83%** (superseding §23's narrated 54/D under the re-packed matrix). The route-corrected current
   pin is **52/D · 86%** (§15/§31); true canonical (all
   classic fixes + every arrow + applyDayFix on all 5 coarse days) → **100/A/clean · 100%**;
-  **`fixHandoffs` +16 stays the strictly largest single jump** (authoring Arrival +6, classics ≤ +5).
+  **`fixHandoffs` +16 stays the strictly largest single jump** (authoring Arrival +7, classics ≤ +5).
 - **Voyage UI (W2, `5839aaa`).** Rail/ledger/day-drawers speak all **7 buckets**; the care shelf; a
   carry-gap readiness hint (`rhCarryGap`: "Jig case never made the truck — it will miss the ship"); decoys
   `hd_l_dec_socialpost`/`hd_v_dec_nap`; `sb_load`/`sb_voyage` labels EN+JP.
@@ -1367,7 +1394,7 @@ the program-end everything-check.**
   One session-limit park (`03bd674`) resumed clean; the W3 stage worker died on report format only (its
   edits landed; the gate verified them live and approved).
 - **Program-end everything-check (Fable) + fixes (W4).** The Fable check played the full campaign (intro →
-  all 7 day tabs → load-day stall → VIP buddy cap → ship-day run → fix ladder → Live → sound fallback →
+  all 7 day tabs → load-day stall → outbound-care buddy cap → ship-day run → fix ladder → Live → sound fallback →
   JP/RM) and found 4 real defects — all fixed, gate-approved and re-verified:
   1. **Live was unwinnable** — the plan's pinned "carry-canonical" half was never implemented, so the seeded
      jig-case gap idled the gear check 60 min and dinner could never hit 18:00. `startLive` now folds the
@@ -1430,9 +1457,9 @@ The trip owner supplied the actual outbound itinerary after the first route-awar
 the source of truth: breakfast is at a nearby Tokyo hotel (time unknown); the group leaves that hotel at
 **10:00**; the **Ogasawara-maru leaves Takeshiba at 11:00**; its crossing takes **about one day** to
 **Chichijima**; the group changes ships there; a separate inter-island vessel continues to **Hahajima**;
-and **Hinata is on Hahajima**. The inter-island vessel name, its connection times, the breakfast time, and
-the return timetable remain deliberately unknown. The reverse return chain is a labeled inference, not a
-claimed schedule.
+and **Hinata is on Hahajima**. The inter-island vessel name, its connection times, the breakfast time,
+the Day-6 guest-exchange route/timing/luggage handoff, and the return timetable remain deliberately unknown.
+The reverse return chain is a labeled inference, not a claimed schedule.
 
 - **Physical route model:** `PHYSICAL_STOPS`, `VESSELS`, and `ITINERARY` separate places, route vessels,
   and logical work stations. Unknown clocks are `null`; deterministic task anchors used by the rehearsal
@@ -1443,6 +1470,9 @@ claimed schedule.
 - **Independent custody chains:** Tokyo→Takeshiba/Ogasawara-maru, Chichijima ship change, and inferred
   return each track manifest custody. An omitted transfer item becomes missing downstream instead of being
   treated as magically aboard forever.
+- **Day-6 exchange boundary:** the roster identities are authoritative, but no transport route, clock,
+  or luggage handoff has been supplied for Kadou/Maeda leaving and Yamate/Saito joining. The rehearsal
+  keeps the directional luggage records visible and reports this as an unresolved execution assumption.
 - **Six persistent scene identities:** `tokyo-hotel`, `takeshiba-terminal`, `ogasawara-maru`,
   `chichijima-transfer`, `interisland-ferry`, and `hahajima-hinata`, plus `route-overview`. Long-haul ferry,
   unnamed inter-island vessel, and the two local fishing boats remain visually and semantically distinct.
@@ -1491,10 +1521,12 @@ The governing spec is `docs/superpowers/specs/2026-07-14-teaching-mvp-design.md`
 - **Three distinct verdicts.** `scoreTrip(plan)` remains the 99-atom, seven-bucket, six-dimension plan-artifact
   receipt (Σ=100); `tripEfficiency(plan)` remains the separate effect/wasted-time measure. Neither is learner
   mastery. `criticalAssumptions(plan)` and `executionReadiness(plan)` add the real-execution lens with statuses
-  `rehearsal-incomplete`, `rehearsal-complete`, and `real-execution-ready`. The current external fact set is
-  hotel breakfast time, inter-island vessel name, Chichijima connection time, and the complete return timetable.
-  These facts do not invent score deductions: a canonical 100/A/clean plan is rehearsal-complete but remains
-  pending confirmation until all four are resolved.
+  `rehearsal-incomplete`, `rehearsal-complete`, and `real-execution-ready`. The five current external facts are
+  hotel breakfast time, inter-island vessel name, Chichijima connection time, the Day-6 guest-exchange
+  route/timing/luggage handoff, and the complete return timetable. The Day-6 item resolves only through the
+  external attestation `project.guestRotationExchange.logisticsAttested`; it is not inferred from a fabricated
+  route. These facts do not invent score deductions:
+  a canonical 100/A/clean plan is rehearsal-complete but remains pending confirmation until all five are resolved.
 - **Channel context is part of the lesson.** `channelFeasibility(plan, handoff, segment?)` returns stable
   `ok`, `unknown-channel`, `requires-colocation`, or `scenario-channel-unavailable` reasons plus sender/receiver
   contexts. Face-to-face and a notice board cannot satisfy a Fishing-Day sea-to-shore handoff; infeasible
@@ -1509,7 +1541,7 @@ The governing spec is `docs/superpowers/specs/2026-07-14-teaching-mvp-design.md`
   dimensions**, keep Score and Efficiency separate, and distinguish rehearsal completion from real execution
   readiness. Historical §§9, 20.4, 23, and 24 preserve earlier ledgers only as implementation history; they
   must not be reused for current player copy.
-- **Verification.** `node verify.js` passes **385/385** checks, including every prior anchor plus readiness
+- **Verification.** `node verify.js` passes **431/431** checks, including every prior anchor plus readiness
   determinism/purity, score independence of unknown external facts, normal-scenario invariance, physical channel
   feasibility, Fishday and Voyage outage integration, radio recovery, and canonical 100/A reachability.
 

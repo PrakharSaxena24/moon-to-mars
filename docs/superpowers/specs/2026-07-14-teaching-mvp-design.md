@@ -1,6 +1,6 @@
 # Teaching MVP — from plan checker to learning game
 
-**Status:** SHIPPED (2026-07-14) — 385 deterministic engine checks plus
+**Status:** SHIPPED (2026-07-14) — 431 deterministic engine checks plus
 headless browser coverage for curriculum, prediction/debrief, outage repair,
 EN/JA rerendering, focus restoration, persistence, and hostile local data.
 
@@ -222,7 +222,42 @@ channel context rather than memorized the lowest latency.
 - EN and JA flows, keyboard focus, Escape, reduced motion, and the existing
   Live/Morning paths remain functional.
 
-## 10. Explicitly deferred
+## 10. Progressive onboarding refinement (2026-07-14)
+
+The first-session presentation follows progressive disclosure without removing
+any curriculum or planning capability:
+
+- Opening a link shows a stable, non-autoplay poster, one guided-rehearsal
+  primary action, and a secondary route to the full plan.
+- The guided path starts from the canonical Day 3 plan with only the food-menu
+  handoff removed. The learner observes that single stall, chooses a feasible
+  channel, sees one recovery beat, and reaches the result without waiting for
+  the rest of the simulated day to animate.
+- Guided channel choices use qualitative pace and before/after-deadline
+  feedback. Minute math and projected points remain internal until the result.
+- A successful guided report headlines the clean Fishing Day result and causal
+  repair; whole-trip scoring and detailed assumptions remain optional detail.
+- The success state offers progression into planning as the primary action,
+  with review and replay secondary.
+- Mission options, cast, advanced settings, score anatomy, ledger detail, and
+  role-by-role results remain available through named native disclosures.
+- Live mode initially prioritizes the map, the current problem, and the repair;
+  telemetry and dashboard detail do not compete with that decision.
+- Plan readiness exposes the first three actionable issues and keeps every
+  additional issue in an expandable list instead of discarding evidence.
+- The full planner preserves Practice/Challenge, starts at the first relevant
+  chapter, scopes the command tray to that day, and collapses the whole-trip
+  score preview and expert settings.
+- Learn keeps the full reflection form collapsed for a calm first report, but
+  preserves the observed pre-repair gap and shows one compact causal takeaway;
+  Practice and Challenge open the prediction/evidence comparison because it is
+  part of their required loop.
+
+This is a presentation rule, not a reduced model: the full six-segment planner,
+99-atom ledger, execution-readiness distinction, bilingual strings, and all
+deterministic scoring behavior remain intact.
+
+## 11. Explicitly deferred
 
 - A multi-scenario resilience score;
 - additional storm, low-catch, unavailable-principal, spoilage, and allergy

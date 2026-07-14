@@ -4,10 +4,11 @@
 > of truth** — the real people, organizations, ships, fishing, and meals the game's Ogasawara trip is
 > modeled on. CLAUDE.md stays the build/engine spec; new world & roster facts go **here**.
 >
-> **Scope decision (2026-07-07):** WORLD.md is the world bible; **rename the game's 11 named people** to
-> the real names below — **no structural rework yet** (the engine still models 24 = 8 + 13 + 3 on one map;
-> the richer world — two ships, iso vs jigging, Hinata, the Day-5 guest swap — is documented here for a
-> later build pass). `[TBD]` marks something still to be supplied by the owner.
+> **Current scope (updated 2026-07-14):** WORLD.md is the world bible. The engine models
+> 24 = 8 organizers + 13 hosted/non-duty guest records + 3 chefs, and now implements the inclusive
+> Day 0–5 / Day 6–10 main-guest rotation below. The four-person priority roster is deliberately
+> separate from the 13-person planning/headcount envelope; the named physical headcount still needs
+> reconciliation (§8) and no missing identity is invented. `[TBD]` marks an owner-supplied fact.
 
 ---
 
@@ -31,7 +32,7 @@ Plus the chef **Akiyama** (an AEGIS company worker who also cooks) and everyone 
 
 ### External guests AEGIS is courting (the negotiation)
 - **Nagatani** and his junior **Kadou (角谷)** — **not AEGIS**; they are the counterparties the trip exists to
-  negotiate with. Kadou is present **Days 1–5** (then leaves — see §3).
+  negotiate with. Kadou is present **Day 0–5 inclusive** (then leaves — see §3).
 
 ### AIBOS — the players' company (funded by AEGIS)
 The **8 members who plan the trip**: **Matsumoto · Inaba · Nishinaga · Prakhar · Martin · Kevin · Andrew · Ambrose.**
@@ -43,12 +44,23 @@ The **8 members who plan the trip**: **Matsumoto · Inaba · Nishinaga · Prakha
 
 ---
 
-## 3. Guests / VIPs (hosted; served at meals)
-| Period | Main guests present |
+## 3. Hosted catalog and main/priority guest rotation
+| Period | Main/priority guests |
 |---|---|
-| **Days 1–5** | Watanabe (渡邊) · Nagatani · **Kadou (角谷)** · Maeda |
-| **After Day 5** | **Maeda & Kadou leave**; **Yamate & Saito join** |
-| **Days 6–10** | Watanabe · Nagatani · Yamate · Saito |
+| **Day 0–5 inclusive** | Watanabe (渡邊) · Nagatani · **Kadou (角谷)** · Maeda |
+| **After Day 5 / before Day 6** | **Kadou & Maeda leave**; **Yamate & Saito join** |
+| **Day 6–10 inclusive** | Watanabe · Nagatani · Yamate · Saito |
+
+Day 3 therefore uses the early roster; Day 10 uses the late roster. Outbound Voyage care belongs
+to Watanabe, Nagatani, Kadou and Maeda: one Starlink registration plus lunch, dinner, and
+next-morning breakfast escorts for each guest (16 care tasks total), with buddy assignment and
+outbound luggage. The broad `ops` segment spans Days 2–9 and crosses the swap, so any
+roster-dependent operation must use an explicit campaign day rather than infer from the segment.
+
+The roster identities at the Day-6 boundary are confirmed, but the physical exchange is not:
+the route, timing, and luggage handoff for Kadou/Maeda leaving and Yamate/Saito joining remain
+owner-supplied facts. The simulator keeps this as a critical real-execution assumption rather
+than inventing transport details or deducting rehearsal points.
 
 Other members present (AEGIS unless noted): **Nobuaki · Shimura · Tamaya · Nate · Daisuke · Miki & Megu
 (ladies) · Natsuki (cameraman, not AEGIS).**
@@ -128,8 +140,10 @@ these 8 seats; the 3 chefs fill the 3 cook seats. (`teamLead` is retired; angler
 > person-agnostic — 15 anchors in `verify.js`, 170/170). Chefs are out of scope. Japanese labels: kanji for JP
 > surnames + katakana for Western names (秋山 confident; **ナオ/カイト stay katakana — final, by owner's call**).
 
-The **13 guests** are anonymous ambient figures in the engine (`GUESTS = 13`, no individual names), so they
-aren't renamed — the named guests/members in §3 are world reference for a later build pass.
+The engine keeps a 13-record named guest catalog plus 13 generic ambient figures for the existing
+planning/headcount and meal contracts. `guestRotations` and `guestRosterForDay(plan, day)` select the
+four main guests for an explicit Day 0–10 label. The generic ambient count is not evidence that all
+13 catalog identities are simultaneously present.
 
 ---
 
@@ -141,5 +155,11 @@ aren't renamed — the named guests/members in §3 are world reference for a lat
 2. **Name kanji (optional):** kanji for the AIBOS surnames + AEGIS members if wanted; confirm 角谷 = "Kadou",
    渡邊 = "Watanabe". *(Nao/Kaito stay ナオ/カイト katakana — decided.)*
 3. Anyone missing, or any relationship detail to add.
+4. **Physical headcount reconciliation:** six rotating principals plus seven persistent catalog names
+   substantiate 11 active named guests per wave; WORLD also names Natsuki outside the engine catalog.
+   Confirm the remaining hosted identity/identities and Natsuki's count before making presence-driven
+   headcount, meal, or ambient-actor changes. Until then, 13 remains the compatibility planning envelope.
+5. **Day-6 exchange logistics:** confirm the route, timing, and luggage handoff for
+   Kadou/Maeda departing and Yamate/Saito joining.
 
 *(Resolved: Hinata = ひなた · Sadou = Kadou (角谷) · Nagatani+Kadou are external · Akiyama = AEGIS.)*

@@ -240,12 +240,13 @@ var miCoarse = null, miThrew = false;
 try { miCoarse = P.memberInfo(coarse, 'p03'); } catch (e) { miThrew = true; }
 ok(!miThrew && miCoarse === null, 'memberInfo on a coarse sim returns null (no crash)');
 
-// editor merge surface: draw / erase arrows, retime a block
+// merge/config surface: draw / erase arrows and retain detailed timing compatibility.
 // §7/§13.4 P2 re-tune: the gappy seed now ships only 5 of 14 fishday arrows (was 12)
 ok(P.mergePlan({ seed: 1, overrides: { handoffs: { h_x: { cardId: 'ic_menu', fromRoleId: 'chef', fromTaskId: 't_f_menu', toRoleId: 'specialist', toTaskId: 't_f_gearload', trigger: { type: 'onTaskDone', taskId: 't_f_menu' }, channel: 'faceToFace', ifLate: 'assume', reworkKind: 'wrongFish', content: { en: 'x', jp: 'x' } } } } }).handoffs.length === 6, 'editor can draw a new arrow (5 -> 6)');
 ok(P.mergePlan({ seed: 1, overrides: { handoffs: { h_catch_chef: null } } }).handoffs.length === 4, 'editor can erase an arrow (5 -> 4)');
 var mv = P.mergePlan({ seed: 1, overrides: { timing: { t_f_menu: { startMin: 315, durMin: 45 } } } }).tasks.filter(function (t) { return t.id === 't_f_menu'; })[0];
-ok(mv.startMin === 315 && mv.durMin === 45, 'editor can retime a task block (315/45)');
+ok(mv.startMin === 315 && mv.durMin === 45,
+  'internal/config timing overrides retain detailed-minute compatibility (315/45); the UI authoring projection is hourly');
 
 console.log('\n=== DETERMINISM ===');
 var a = JSON.stringify(scoreOf({ seed: 42, overrides: {} }));
@@ -1065,12 +1066,12 @@ console.log('\n=== VOYAGE §1 — new-seg structural anchors (load/voyage) ===')
   // than crashing the rest of this file's checks.
   var manifest = canonPlan.manifest || [], guests = canonPlan.guests || [];
   ok(Array.isArray(canonPlan.manifest) && manifest.length > 0, 'plan.manifest is a non-empty array (' + manifest.length + ')');
-  ok(manifest.every(function (m) { return m.id && m.name && m.name.en && m.name.jp && m.kind && m.forSeg; }),
-    'every manifest item carries {id, name:{en,jp}, kind, forSeg}');
+  ok(manifest.every(function (m) { return m.id && m.name && m.name.en && m.name.jp && m.kind && m.forSeg && typeof m.outboundRequired === 'boolean' && typeof m.returnRequired === 'boolean'; }),
+    'every manifest item carries {id, name:{en,jp}, kind, forSeg, outboundRequired, returnRequired}');
   ok(Array.isArray(canonPlan.guests) && guests.length === 13, 'plan.guests carries 13 named guests (' + guests.length + ')');
-  ok(guests.every(function (g) { return g.id && g.name && g.name.en && g.name.jp && typeof g.vip === 'boolean'; }),
-    'every guest carries {id, name:{en,jp}, vip, party}');
-  ok(guests.filter(function (g) { return g.vip; }).length === 4, 'exactly 4 of the 13 guests are flagged vip');
+  ok(guests.every(function (g) { return g.id && g.name && g.name.en && g.name.jp && typeof g.vip === 'boolean' && typeof g.voyageCare === 'boolean'; }),
+    'every guest carries {id, name:{en,jp}, voyageCare, legacy vip, party}');
+  ok(guests.filter(function (g) { return g.voyageCare; }).length === 4, 'exactly 4 of the 13 guest records belong to outbound Voyage care');
 
   // canonDay reaches full placement on load/voyage — the same §20 contract already proven for
   // arrival/ops/return, extended to the two new segments
@@ -1079,6 +1080,109 @@ console.log('\n=== VOYAGE §1 — new-seg structural anchors (load/voyage) ===')
     ok(ds.unplacedRequired.length === 0, seg + ': canonDay (via applyDayFix) places every required task (' + ds.unplacedRequired.length + ' unplaced)');
     ok(!rd.some(function (r) { return r.type === 'UNPLACED_REQUIRED'; }), seg + ': dayReadiness has no UNPLACED_REQUIRED after canonDay');
   });
+})();
+
+console.log('\n=== MAIN-GUEST ROTATION — inclusive Day 0–5 / Day 6–10 contract ===');
+(function () {
+  var plan = P.makeTemplate(), before = JSON.stringify(plan);
+  function ids(day) { return P.guestRosterForDay(plan, day).map(function (g) { return g.id; }); }
+  var early = ['gd_watanabe', 'gd_nagatani', 'gd_kadou', 'gd_maeda'];
+  var late = ['gd_watanabe', 'gd_nagatani', 'gd_yamate', 'gd_saito'];
+  ok(typeof P.guestRosterForDay === 'function', 'guestRosterForDay is exported as an explicit trip-day resolver');
+  ok(JSON.stringify(ids(0)) === JSON.stringify(early), 'Day 0 main guests are Watanabe, Nagatani, Kadou, Maeda');
+  ok(JSON.stringify(ids(5)) === JSON.stringify(early), 'Day 5 keeps the early roster (inclusive boundary)');
+  ok(JSON.stringify(ids(6)) === JSON.stringify(late), 'Day 6 swaps to Watanabe, Nagatani, Yamate, Saito');
+  ok(JSON.stringify(ids(10)) === JSON.stringify(late), 'Day 10 keeps the late roster (inclusive boundary)');
+  ok(ids(-1).length === 0 && ids(11).length === 0 && ids(5.5).length === 0, 'out-of-campaign and fractional days resolve to no roster');
+  ok(plan.guestRotations.length === 2 && plan.guestRotations.every(function (wave) {
+    return wave.guestIds.length === 4 && new Set(wave.guestIds).size === 4 && wave.guestIds.every(function (id) { return !!plan.guests.filter(function (g) { return g.id === id; })[0]; });
+  }), 'both rotation waves contain exactly 4 unique, resolvable guest ids');
+  ok(ids(0).slice(0, 2).join(',') === ids(10).slice(0, 2).join(','), 'Watanabe and Nagatani remain in both waves');
+  ok(JSON.stringify(plan) === before && JSON.stringify(ids(6)) === JSON.stringify(ids(6)), 'guestRosterForDay is pure and deterministic');
+  ok(P.GUESTS === 13 && plan.project.guests === 13 && plan.guests.length === 13 && P.ambientActors(1, 0).length === 13,
+    'the 4-person priority rotation does not alter the 13-guest planning/headcount envelope');
+  ok(P.SNAP_MIN.fishday === 60, 'Day 3 authoring snap is exactly one hour (60 min)');
+  ok(P.snapAuthoringMinute('fishday', 315, 'floor') === 300 && P.snapAuthoringMinute('fishday', 315, 'ceil') === 360,
+    'Day 3 manual time authoring quantizes to hour blocks while preserving detailed internal math');
+  var foodBlock = P.authoringTaskBlock('fishday', 255, 30), returnBlock = P.authoringTaskBlock('fishday', 765, 75);
+  ok(foodBlock.startMin === 240 && foodBlock.durMin === 60 && foodBlock.endMin === 300 &&
+     returnBlock.startMin === 720 && returnBlock.durMin === 120,
+    'Day 3 detailed anchors project to containing whole-hour blocks (04:15/30m → 04:00–05:00; 12:45/75m → 12:00–14:00)');
+  var projectedBefore = JSON.stringify(plan);
+  var detailedTasks = P.tasksForSeg(plan, 'fishday');
+  var projected = detailedTasks.map(function (task) { return P.authoringTaskBlock('fishday', task.startMin, task.durMin); });
+  ok(projected.every(function (block, i) {
+    var task = detailedTasks[i];
+    return block && block.startMin % 60 === 0 && block.durMin >= 60 && block.durMin % 60 === 0 &&
+      block.startMin <= task.startMin && block.endMin >= task.startMin + task.durMin;
+  }) && JSON.stringify(plan) === projectedBefore,
+    'every Day 3 authoring block is hour-aligned, contains its detailed task, and leaves rehearsal anchors untouched');
+  ok(typeof P.authoringLaneLayout === 'function', 'authoringLaneLayout is exported as the pure Day 3 display-track resolver');
+  var layoutInputBefore = JSON.stringify(detailedTasks);
+  var layout = P.authoringLaneLayout('fishday', detailedTasks);
+  var placedIds = detailedTasks.filter(function (task) { return task.assignedIds && task.assignedIds.length; })
+    .map(function (task) { return task.id; }).sort();
+  var layoutIds = layout.map(function (record) { return record.taskId; }).sort();
+  ok(layout.length === placedIds.length && JSON.stringify(layoutIds) === JSON.stringify(placedIds),
+    'authoring lane layout contains every placed Day 3 task id exactly once (' + layout.length + '/' + placedIds.length + ')');
+  ok(layout.every(function (record) {
+    var task = detailedTasks.filter(function (candidate) { return candidate.id === record.taskId; })[0];
+    var expected = task && P.authoringTaskBlock('fishday', task.startMin, task.durMin);
+    return expected && record.participantId === task.assignedIds[0] &&
+      record.startMin === expected.startMin && record.durMin === expected.durMin && record.endMin === expected.endMin;
+  }), 'every lane-layout record exactly matches its containing authoringTaskBlock and primary assignee');
+  var noTrackOverlap = layout.every(function (record, i) {
+    return layout.every(function (other, j) {
+      return i === j || record.participantId !== other.participantId || record.track !== other.track ||
+        record.endMin <= other.startMin || other.endMin <= record.startMin;
+    });
+  });
+  ok(noTrackOverlap, 'same-person blocks on the same track never overlap (half-open intervals may touch)');
+  var tallyLayout = layout.filter(function (record) { return record.taskId === 't_f_tally'; })[0];
+  var stowLayout = layout.filter(function (record) { return record.taskId === 't_f_stow'; })[0];
+  ok(tallyLayout && stowLayout && tallyLayout.participantId === stowLayout.participantId && tallyLayout.track !== stowLayout.track,
+    't_f_tally and t_f_stow project onto distinct tracks in the specialist lane');
+  var layoutAgain = P.authoringLaneLayout('fishday', detailedTasks);
+  ok(JSON.stringify(detailedTasks) === layoutInputBefore && JSON.stringify(layoutAgain) === JSON.stringify(layout),
+    'authoringLaneLayout is pure and deterministic');
+  var greedyFixture = [
+    { id: 'lane_a', assignedIds: ['p01'], startMin: 240, durMin: 60 },
+    { id: 'lane_b', assignedIds: ['p01'], startMin: 300, durMin: 60 },
+    { id: 'lane_overlap', assignedIds: ['p01'], startMin: 270, durMin: 60 }
+  ];
+  var greedyLayout = P.authoringLaneLayout('fishday', greedyFixture), greedyById = {};
+  greedyLayout.forEach(function (record) { greedyById[record.taskId] = record; });
+  ok(greedyById.lane_a.track === 0 && greedyById.lane_overlap.track === 1 && greedyById.lane_b.track === 0,
+    'lane layout greedily reuses the lowest track when the previous half-open interval ends at the next start');
+  var worstCaseFixture = [0, 1, 2, 3, 4, 5].map(function (n) {
+    return { id: 'lane_worst_' + n, assignedIds: ['p01'], startMin: 240 + n * 5, durMin: 5 };
+  });
+  var worstCaseBefore = JSON.stringify(worstCaseFixture);
+  var worstCaseLayout = P.authoringLaneLayout('fishday', worstCaseFixture);
+  var worstCaseTracks = worstCaseLayout.map(function (record) { return record.track; }).sort(function (a, b) { return a - b; });
+  ok(worstCaseLayout.length === 6 && worstCaseLayout.every(function (record) {
+    return record.participantId === 'p01' && record.startMin === 240 && record.endMin === 300;
+  }) && worstCaseTracks.join(',') === '0,1,2,3,4,5',
+    'six legal same-person tasks collapsed into one Day 3 hour receive distinct tracks 0..5');
+  ok(worstCaseLayout.every(function (record, i) {
+    return worstCaseLayout.every(function (other, j) {
+      return i === j || record.participantId !== other.participantId || record.track !== other.track ||
+        record.endMin <= other.startMin || other.endMin <= record.startMin;
+    });
+  }), 'six-track worst case preserves the same-track half-open non-overlap invariant');
+  ok(JSON.stringify(worstCaseFixture) === worstCaseBefore &&
+     JSON.stringify(P.authoringLaneLayout('fishday', worstCaseFixture)) === JSON.stringify(worstCaseLayout),
+    'six-track worst-case layout is pure and deterministic');
+  var leftBoundary = P.editAuthoringTaskBlock('fishday', 255, 30, -60, false);
+  var movedRight = P.editAuthoringTaskBlock('fishday', 255, 30, 60, false);
+  var clampedWhole = P.editAuthoringTaskBlock('fishday', 300, 60, -180, false);
+  var shrinkFloor = P.editAuthoringTaskBlock('fishday', 255, 30, -60, true);
+  var grown = P.editAuthoringTaskBlock('fishday', 255, 30, 60, true);
+  ok(leftBoundary.startMin === 240 && leftBoundary.durMin === 60 && movedRight.startMin === 300 && movedRight.durMin === 60 && clampedWhole.startMin === 240 &&
+     shrinkFloor.durMin === 60 && grown.durMin === 120,
+    'the shared pointer/keyboard reducer applies full-hour moves/resizes and clamps boundaries only to whole hours');
+  ok(P.authoringSendMinute('fishday', 360, 405) === 420 && P.authoringSendMinute('fishday', 480, 405) === 480,
+    'manual and automatic arrow sends round after production (06:45 → 07:00) without delaying an already-later hour');
 })();
 
 console.log('\n=== VOYAGE §2 — carryover purity: all-aboard is carry-inert; a missing item stalls its consumer ===');
@@ -1097,10 +1201,14 @@ console.log('\n=== VOYAGE §2 — carryover purity: all-aboard is carry-inert; a
 
   var cs = carryStateSafe(loadFixedPlan);
   ok(cs && typeof cs === 'object' && Object.keys(cs).length > 0, 'carryState returns a non-empty {itemId: {seg: status}} map (' + Object.keys(cs).length + ' items)');
-  var outboundAboard = Object.keys(cs).every(function (itemId) {
+  var outboundIds = (loadFixedPlan.manifest || []).filter(function (m) { return m.outboundRequired !== false; }).map(function (m) { return m.id; });
+  var outboundAboard = outboundIds.every(function (itemId) {
     return ['load', 'voyage', 'arrival', 'ops', 'fishday'].every(function (seg) { return cs[itemId][seg] === 'aboard'; });
   });
-  ok(outboundAboard, 'canonical Load day -> every manifest item remains aboard through the outbound stay');
+  ok(outboundAboard, 'canonical Load day -> every outbound-required manifest item remains aboard through the outbound stay');
+  var joinedIds = (loadFixedPlan.manifest || []).filter(function (m) { return m.outboundRequired === false; }).map(function (m) { return m.id; });
+  ok(joinedIds.length === 2 && joinedIds.every(function (id) { return cs[id].load === 'not-applicable' && cs[id].ops === 'joins-day-6'; }),
+    'Yamate/Saito return luggage joins at the Day-6 roster swap instead of being invented aboard on Day 0');
 
   var fullRouteCs = carryStateSafe(P.mergePlan(trueCanonCfgV()));
   var fullRouteAboard = Object.keys(fullRouteCs).every(function (itemId) {
@@ -1166,6 +1274,26 @@ console.log('\n=== VOYAGE §2 — carryover purity: all-aboard is carry-inert; a
     var transferStatus = carryStateSafe(P.mergePlan(transferCfg))[jigItem.id] || {};
     ok(transferStatus.voyage === 'aboard' && transferStatus.arrival === 'missing' && transferStatus.fishday === 'missing',
       'breaking the Chichijima vessel-transfer chain loses custody only after the long-haul voyage (' + JSON.stringify(transferStatus) + ')');
+
+    function omitFromCustody(seg, taskId, itemId) {
+      var cfg = trueCanonCfgV(), merged = P.mergePlan(cfg);
+      var task = P.tasksForSeg(merged, seg).filter(function (x) { return x.id === taskId; })[0];
+      cfg.overrides.days[seg].placement[taskId] = { startMin: task.startMin, durMin: task.durMin,
+        assignedIds: task.assignedIds.slice(), carries: task.carries.filter(function (id) { return id !== itemId; }) };
+      return P.mergePlan(cfg);
+    }
+    var loadCustodyBroken = omitFromCustody('load', 'hd_l_truck', 'mi_lug_gd_watanabe');
+    var transferCustodyBroken = omitFromCustody('arrival', 'hd_a_transfer', 'mi_lug_gd_watanabe');
+    var returnCustodyBroken = omitFromCustody('return', 'hd_r_hold', 'mi_lug_gd_yamate');
+    ok(P.manifestChainGaps(loadCustodyBroken).indexOf('mi_lug_gd_watanabe') >= 0 && !P.scoreTrip(loadCustodyBroken).gate.clean,
+      'an item-level Load custody omission withholds the trip A');
+    ok(P.manifestTransferGaps(transferCustodyBroken).indexOf('mi_lug_gd_watanabe') >= 0 && !P.scoreTrip(transferCustodyBroken).gate.clean,
+      'an item-level Chichijima transfer omission withholds the trip A');
+    var brokenReturnTrip = P.scoreTrip(returnCustodyBroken);
+    ok(P.manifestReturnGaps(returnCustodyBroken).indexOf('mi_lug_gd_yamate') >= 0 && brokenReturnTrip.total === 100 &&
+       brokenReturnTrip.grade === 'B' && brokenReturnTrip.gate.withheldA &&
+       P.dayReadiness(returnCustodyBroken, 'return').some(function (x) { return x.type === 'CARRY_GAP' && x.itemId === 'mi_lug_gd_yamate'; }),
+      'a Day-6 guest return-luggage omission is visible on Return and cannot score 100/A clean');
   }
 })();
 
@@ -1173,8 +1301,26 @@ console.log('\n=== VOYAGE §3 — named guests & VIP buddies ===');
 (function () {
   var voyCfg = trueCanonCfgV();
   var voyPlan = P.mergePlan(voyCfg);
-  var vips = (voyPlan.guests || []).filter(function (g) { return g.vip; });
-  ok(vips.length === 4, 'exactly 4 VIP guests are available to buddy (' + vips.length + ')');
+  var vips = (voyPlan.guests || []).filter(function (g) { return g.voyageCare; });
+  var careIds = vips.map(function (g) { return g.id; });
+  var expectedCare = ['gd_watanabe', 'gd_nagatani', 'gd_kadou', 'gd_maeda'];
+  ok(JSON.stringify(careIds) === JSON.stringify(expectedCare), 'outbound care cohort is exactly Watanabe, Nagatani, Kadou, Maeda');
+  var voyageTasks = P.tasksForSeg(voyPlan, 'voyage'), careTasks = voyageTasks.filter(function (t) { return !!t.careGuestId; });
+  ok(careTasks.length === 16 && careTasks.every(function (t) { return expectedCare.indexOf(t.careGuestId) >= 0; }),
+    'Voyage keeps exactly 16 care tasks (4 per outbound main guest)');
+  ok(!voyageTasks.some(function (t) { return /gd_yamate|gd_saito/.test(t.id); }), 'late-wave Yamate/Saito receive no outbound Voyage care tasks');
+  var outboundLuggage = (voyPlan.manifest || []).filter(function (m) { return m.kind === 'luggage' && m.outboundRequired; }).map(function (m) { return m.id.replace('mi_lug_', ''); });
+  var returnLuggage = (voyPlan.manifest || []).filter(function (m) { return m.kind === 'luggage' && m.returnRequired; }).map(function (m) { return m.id.replace('mi_lug_', ''); });
+  ok(JSON.stringify(outboundLuggage) === JSON.stringify(['gd_watanabe', 'gd_nagatani', 'gd_kadou', 'gd_maeda']),
+    'outbound luggage follows the Day 0–5 main guests');
+  ok(JSON.stringify(returnLuggage) === JSON.stringify(['gd_watanabe', 'gd_nagatani', 'gd_yamate', 'gd_saito']),
+    'return luggage follows the Day 6–10 main guests');
+  ok(voyPlan.buddies.gd_watanabe === 'p01' && voyPlan.buddies.gd_nagatani === 'p02' && voyPlan.buddies.gd_kadou === 'p07' && voyPlan.buddies.gd_maeda === 'p04',
+    'canonical Voyage assigns buddies to the exact early-wave care cohort');
+  var careAtomGuests = P.scoreTrip(voyPlan).atoms.filter(function (a) { return a.itemRef && a.itemRef.guestId; })
+    .map(function (a) { return a.itemRef.guestId; });
+  ok(JSON.stringify(careAtomGuests) === JSON.stringify(expectedCare),
+    'the four scored care gates belong exactly to the outbound care cohort');
 
   function starId(gid) { return 't_v_star_' + gid; }
   // [integrator note] atom ids are not pinned by the plan for buddy tasks (buddy assignment is
@@ -1190,6 +1336,7 @@ console.log('\n=== VOYAGE §3 — named guests & VIP buddies ===');
     // (a) unassigned VIP -> its auto-instantiated task exists but is unstaffed, and is priced as such
     var noBuddyCfg = trueCanonCfgV();
     noBuddyCfg.overrides.buddies = {};
+    vips.forEach(function (g) { noBuddyCfg.overrides.buddies[g.id] = null; });
     var noBuddyPlan = P.mergePlan(noBuddyCfg);
     var nbTasks = P.tasksForSeg(noBuddyPlan, 'voyage'), nbById = {};
     nbTasks.forEach(function (t) { nbById[t.id] = t; });
@@ -1200,6 +1347,19 @@ console.log('\n=== VOYAGE §3 — named guests & VIP buddies ===');
     var noBuddyTrip = P.scoreTrip(noBuddyPlan);
     var a0 = atomForTask(noBuddyTrip.atoms, starId(vip0.id));
     ok(!!a0 && a0.earned === 0, 'unassigned VIP ' + vip0.id + ': its priced atom earns 0 (' + (a0 && a0.id) + '/' + (a0 && a0.earned) + ')');
+
+    var manualCareCfg = trueCanonCfgV();
+    manualCareCfg.overrides.buddies = {};
+    vips.forEach(function (g) { manualCareCfg.overrides.buddies[g.id] = null; });
+    manualCareCfg.overrides.days.voyage.placement = manualCareCfg.overrides.days.voyage.placement || {};
+    careTasks.forEach(function (task, i) {
+      manualCareCfg.overrides.days.voyage.placement[task.id] = { startMin: task.startMin, durMin: task.durMin,
+        assignedIds: ['p0' + ((i % 8) + 1)] };
+    });
+    var manualCarePlan = P.mergePlan(manualCareCfg), manualCareTrip = P.scoreTrip(manualCarePlan);
+    ok(P.tasksForSeg(manualCarePlan, 'voyage').filter(function (task) { return task.careGuestId; })
+      .every(function (task) { return task.assignedIds.length === 0; }) && manualCareTrip.grade !== 'A' && !manualCareTrip.gate.clean,
+      'generic task placement cannot bypass the dedicated-buddy relationship or earn a clean A');
 
     // (b) assigned buddy -> the task is staffed and earns its pts
     var oneBuddyCfg = trueCanonCfgV();
@@ -1221,7 +1381,29 @@ console.log('\n=== VOYAGE §3 — named guests & VIP buddies ===');
     ok(dbDs.overbookMin > 0, 'buddy p06 double-booked across VIPs ' + vip0.id + '/' + vip1.id + ' -> overbookMin>0 (' + dbDs.overbookMin + ')');
     var dbRd = P.dayReadiness(dbPlan, 'voyage');
     ok(dbRd.some(function (r) { return r.type === 'OVERLOAD'; }), 'double-booked buddy -> dayReadiness surfaces an OVERLOAD hint (' + dbRd.map(function (r) { return r.type; }).join(',') + ')');
+
+    var cleanGateCfg = trueCanonCfgV();
+    cleanGateCfg.overrides.buddies = { gd_watanabe: 'p08', gd_nagatani: 'p08', gd_kadou: 'p07', gd_maeda: 'p04' };
+    var cleanGatePlan = P.mergePlan(cleanGateCfg), cleanGateTrip = P.scoreTrip(cleanGatePlan);
+    ok(cleanGateTrip.total === 100 && cleanGateTrip.grade === 'B' && cleanGateTrip.gate.withheldA && !cleanGateTrip.gate.clean &&
+       P.dayReadiness(cleanGatePlan, 'voyage').some(function (r) { return r.type === 'OVERLOAD'; }),
+      'a care-task overload can retain 100 points but the zero-known-gaps gate withholds the A');
+
+    var overCapCfg = trueCanonCfgV();
+    overCapCfg.overrides.buddies = { gd_watanabe: 'p06', gd_nagatani: 'p06', gd_kadou: 'p06', gd_maeda: 'p06' };
+    var overCapPlan = P.mergePlan(overCapCfg);
+    ok(overCapPlan.buddies.gd_watanabe === 'p06' && overCapPlan.buddies.gd_nagatani === 'p06' &&
+       !overCapPlan.buddies.gd_kadou && !overCapPlan.buddies.gd_maeda,
+      'buddy assignments beyond the two-guest cap are removed from the accepted plan mapping');
   }
+
+  var lateBuddyCfg = trueCanonCfgV();
+  lateBuddyCfg.overrides.buddies = lateBuddyCfg.overrides.buddies || {};
+  ['gd_yamate', 'gd_saito', 'gd_nobuaki'].forEach(function (gid) { lateBuddyCfg.overrides.buddies[gid] = 'p06'; });
+  var lateBuddyPlan = P.mergePlan(lateBuddyCfg);
+  ok(['gd_yamate', 'gd_saito', 'gd_nobuaki'].every(function (gid) { return !lateBuddyPlan.buddies[gid]; }) &&
+     !P.tasksForSeg(lateBuddyPlan, 'voyage').some(function (t) { return /gd_yamate|gd_saito|gd_nobuaki/.test(t.id); }),
+    'late-wave and non-care guests cannot acquire an outbound buddy or mint Voyage care tasks');
 
   // (d) missing bl_card authority fails the money gate (spec §3: "a new bl_card budget envelope
   // with approver and payMethod"). [integrator note] atom id matched by /card/i since the exact
@@ -1627,16 +1809,70 @@ console.log('\n=== TEACHING MVP — readiness, channel feasibility, and scenario
   ok(P.scoreTrip(normalPlan).total === canonTrip.total && canonTrip.total === 100 && canonTrip.grade === 'A',
     'normal scenario preserves the canonical 100/A scoreTrip result');
 
+  // Guided progressive-disclosure tutorial seam: the UI may reveal one repair
+  // at a time, but the lesson itself is an engine contract. Start from the true
+  // canonical Day 3, remove only the food handoff, then repair that socket with
+  // a separately-id'd feasible path. These checks deliberately avoid app.js
+  // source text and DOM copy: a renamed panel or shorter hint cannot make them
+  // pass while the tutorial's causal example is broken.
+  var guidedFood = P.canonHandoffs().filter(function (h) { return h.id === 'h_food'; })[0];
+  ok(!!guidedFood && guidedFood.cardId === 'ic_food' && guidedFood.fromTaskId === 't_f_food' &&
+     guidedFood.toTaskId === 't_f_menu' && canonPlan.handoffs.some(function (h) { return h.id === 'h_food'; }),
+    'guided tutorial: canonical Day 3 contains the food handoff into the menu task');
+
+  var guidedCanonBefore = JSON.stringify(canonPlan);
+  var guidedGapCfg = JSON.parse(JSON.stringify(canonCfg));
+  guidedGapCfg.overrides.handoffs = guidedGapCfg.overrides.handoffs || {};
+  guidedGapCfg.overrides.handoffs.h_food = null;
+  var guidedGapPlan = P.mergePlan(guidedGapCfg);
+  var guidedGapDay = P.daySchedule(guidedGapPlan, 'fishday');
+  var guidedGapReady = P.dayReadiness(guidedGapPlan, 'fishday');
+  var guidedMissing = guidedGapDay.missing.map(function (g) { return g.taskId + '|' + g.cardId; });
+  ok(!guidedGapPlan.handoffs.some(function (h) { return h.id === 'h_food'; }) &&
+     guidedMissing.length === 1 && guidedMissing[0] === 't_f_menu|ic_food' && guidedGapDay.late.length === 0,
+    'guided tutorial: deleting only h_food yields exactly the earliest menu|food missing pair');
+  ok(guidedGapReady.length === 1 && guidedGapReady[0].type === 'MISSING_ARROW' &&
+     guidedGapReady[0].taskId === 't_f_menu' && guidedGapReady[0].cardId === 'ic_food' &&
+     P.scoreDay(guidedGapPlan, 'fishday').clean === false,
+    'guided tutorial: the single missing food path surfaces as one actionable Day-3 readiness gap');
+  ok(guidedGapDay.idleTotal === 240 && guidedGapDay.reworkTotal === 90 && guidedGapDay.efficiency === 91 &&
+     guidedGapDay.dinnerMin === 1110,
+    'guided tutorial: the missing food path creates visible wait/rework and moves dinner from 18:00 to 18:30');
+
+  var guidedRepairCfg = JSON.parse(JSON.stringify(guidedGapCfg));
+  // Build the same shape the Live UI commits instead of cloning the canonical
+  // answer. This catches missing endpoint/trigger fields in the real repair seam.
+  var guidedRepair = {
+    id: 'h_food_guided_repair', cardId: 'ic_food',
+    fromRoleId: 'budgetLead', fromTaskId: 't_f_food',
+    toRoleId: 'chef', toTaskId: 't_f_menu',
+    trigger: { type: 'onTaskDone', taskId: 't_f_food' }, channel: 'radio',
+    ifLate: 'idle', reworkKind: null, content: { en: '', jp: '' }
+  };
+  guidedRepairCfg.overrides.handoffs[guidedRepair.id] = guidedRepair;
+  var guidedRepairPlan = P.mergePlan(guidedRepairCfg);
+  var guidedRepairDay = P.daySchedule(guidedRepairPlan, 'fishday');
+  var guidedRepairScore = P.scoreDay(guidedRepairPlan, 'fishday');
+  ok(P.channelFeasibility(guidedRepairPlan, guidedRepair, 'fishday').ok === true &&
+     !guidedRepairPlan.handoffs.some(function (h) { return h.id === 'h_food'; }) &&
+     guidedRepairPlan.handoffs.some(function (h) { return h.id === guidedRepair.id; }) &&
+     guidedRepairDay.missing.length === 0 && guidedRepairDay.late.length === 0 &&
+     guidedRepairDay.idleTotal === 0 && P.dayReadiness(guidedRepairPlan, 'fishday').length === 0 &&
+     guidedRepairScore.score === 100 && guidedRepairScore.grade === 'A' && guidedRepairScore.clean === true,
+    'guided tutorial: a feasible replacement path restores Day 3 to clean 100/A');
+  ok(JSON.stringify(canonPlan) === guidedCanonBefore,
+    'guided tutorial variants do not mutate the canonical plan');
+
   var planBeforeAssumptions = JSON.stringify(canonPlan);
   var assumptionsA = P.criticalAssumptions(canonPlan), assumptionsB = P.criticalAssumptions(canonPlan);
   var unresolvedIds = assumptionsA.filter(function (x) { return x.status === 'unresolved'; }).map(function (x) { return x.id; }).sort();
   ok(JSON.stringify(assumptionsA) === JSON.stringify(assumptionsB) && JSON.stringify(canonPlan) === planBeforeAssumptions,
     'criticalAssumptions is deterministic and does not mutate the plan');
-  ok(unresolvedIds.join(',') === 'chichijima-connection-time,hotel-breakfast-time,interisland-vessel-name,return-timetable',
-    'criticalAssumptions exposes breakfast, vessel-name, Chichijima-connection, and return-timetable facts');
+  ok(unresolvedIds.join(',') === 'chichijima-connection-time,day-6-guest-exchange,hotel-breakfast-time,interisland-vessel-name,return-timetable',
+    'criticalAssumptions exposes breakfast, vessel-name, Chichijima connection, Day-6 guest exchange, and return-timetable facts');
   var er = P.executionReadiness(canonPlan);
-  ok(er.rehearsalComplete === true && er.realExecutionReady === false && er.status === 'rehearsal-complete' && er.unresolvedCount === 4,
-    'canonical 100/A is rehearsal-complete but not real-execution-ready while 4 critical facts are unknown');
+  ok(er.rehearsalComplete === true && er.realExecutionReady === false && er.status === 'rehearsal-complete' && er.unresolvedCount === 5,
+    'canonical 100/A is rehearsal-complete but not real-execution-ready while 5 critical facts are unknown');
   ok(P.scoreTrip(canonPlan).total === 100 && P.scoreTrip(canonPlan).grade === 'A' && P.scoreTrip(canonPlan).gate.clean === true,
     'critical external assumptions do not deduct scoreTrip points or withhold the rehearsal A');
 
@@ -1653,6 +1889,7 @@ console.log('\n=== TEACHING MVP — readiness, channel feasibility, and scenario
     confirmedPlan.itinerary[ci].departMin = 3000 + ci * 60;
   }
   confirmedPlan.project.route.returnConfirmed = true;
+  confirmedPlan.project.guestRotationExchange.logisticsAttested = true;
   var confirmedEr = P.executionReadiness(confirmedPlan);
   ok(confirmedEr.rehearsalComplete && confirmedEr.realExecutionReady && confirmedEr.status === 'real-execution-ready' && confirmedEr.unresolvedCount === 0,
     'confirming every external fact advances a 100/A plan to real-execution-ready');

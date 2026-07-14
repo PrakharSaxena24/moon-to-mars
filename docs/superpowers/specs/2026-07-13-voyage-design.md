@@ -1,8 +1,17 @@
 # The Voyage — the full-trip campaign (Load & Board · Ship Day · carryover · named guests · sound)
 
+> **Post-ship owner amendment (2026-07-14; authoritative over the historical choices below):**
+> Outbound Voyage spans Day 0 11:00 through approximately Day 1 11:00. Its care cohort is explicitly
+> Watanabe, Nagatani, Kadou, Maeda. The main-guest rotation is Day 0–5 W/N/K/M and Day 6–10
+> W/N/Y/S, inclusive; `guestRotations` replaces seniority inference/global presence. Directional
+> luggage follows W/N/K/M outbound and W/N/Y/S return. Each outbound-care guest has four tasks:
+> Starlink, lunch escort, dinner escort, and next-morning breakfast escort (16 total). The Day-6
+> exchange route, timing, and luggage handoff remain a critical real-execution assumption, resolved only by
+> explicit owner attestation (`project.guestRotationExchange.logisticsAttested`).
+
 **Status:** APPROVED (owner picks 2026-07-13: Shape A full voyage · real carryover · named guests + buddies ·
-the 4 main guests each get a dedicated member who registers Starlink on their phone via the company credit
-card and escorts them to ship meals · sound is the only "completeness" item · owner: "go ahead and execute").
+the 4 outbound-care guests each get a dedicated member who registers Starlink on their phone via the company
+credit card and escorts them to ship meals · sound is the only "completeness" item · owner: "go ahead and execute").
 **Allocation (standing rule):** Sonnet executes · **Opus is the senior dev — every wave's final code needs an
 Opus approval** · Fable ONLY for the V1 engine core and the program-end everything-check.
 **Constraints (absolute):** offline/no-build/no-libs, ES5, deterministic, EN/JP parity, the §11 charter.
@@ -18,16 +27,20 @@ plans the WHOLE journey:
 | Seg | Day · window | The plan | Signature lesson |
 |---|---|---|---|
 | `load` *(new)* | Day 0 · 06:00–11:00 Tokyo, hour-level | pack manifest → truck to the pier → hold loading → cabin list → boarding 点呼 — against the **fixed 11:00 sailing** | what misses the ship cannot be fixed at sea |
-| `voyage` *(new)* | Day 0 · 11:00–21:00 aboard, hour-level | the 4 **VIP Starlink registrations** (buddy + company card), **meal escorts** (lunch 12:00 / dinner 18:00 windows), luggage-to-cabin runs, arrival briefing | care is a schedule; a double-booked buddy is a stalled guest |
+| `voyage` *(new)* | Day 0 11:00 → approximately Day 1 11:00 aboard, hour-level | the 4 **outbound-care Starlink registrations** (buddy + company card), **meal escorts** (lunch, dinner, next-morning breakfast), luggage-to-cabin runs, arrival briefing | care is a schedule; a double-booked buddy is a stalled guest |
 | `arrival` | *(exists; its ferry-boarding tasks re-read naturally as the island docking morning)* | | |
 | `ops` / `fishday` | *(exist; fishday remains the heart)* | | |
 | `return` | **reshaped to Pack & Sail**: settle books → pack → hold loading → sail home → Tokyo headcount (keeps 7 buckets, not 8) | close the loop you opened |
 
 ## 2. The manifest & real carryover (V1 — the Fable core)
 
-- **`plan.manifest`**: physical items `{id, name{en,jp}, kind, forSeg}` — rod sets, jig case, coolers, ice,
-  food crates, the medkit, the cash box, and per-VIP luggage. Load-day tasks carry custody
+- **`plan.manifest`**: directional physical records `{id, name{en,jp}, kind, forSeg,
+  outboundRequired, returnRequired}` — rod sets, jig case, coolers, ice, food crates, the medkit,
+  cash box, W/N/K/M outbound luggage and W/N/Y/S return luggage. Load-day tasks carry custody
   (packed → trucked → in hold → aboard); Pack & Sail mirrors it home.
+- Yamate/Saito's return-only luggage enters at the Day-6 roster boundary, never aboard the Day-0
+  departure. The exchange transport and handoff are unresolved external facts surfaced by
+  `criticalAssumptions`, not invented schedule data or Score deductions.
 - **`carryState(plan)`** — a pure, RNG-free function folding the ordered segments' `daySchedule` outcomes
   into item availability per segment. Downstream binding uses the EXISTING `neededResources` field: a task
   needing an item that never made the ship stalls (`waitinfo`-style) or reworks — the same visible language
@@ -39,15 +52,16 @@ plans the WHOLE journey:
 
 ## 3. Named guests & the care roster (V1 core + V2 surface)
 
-- **`plan.guests`**: 13 entries, WORLD.md-consistent. The **4 VIPs** (Nagatani, Kadou + the two most senior
-  rotation guests per WORLD.md §3) carry needs: `starlink` (register on THEIR phone, paid via the **company
+- **`plan.guests`**: 13-entry master hosted catalog plus `guestRotations`. The outbound `voyageCare`
+  cohort is explicitly **Watanabe, Nagatani, Kadou, Maeda**; they carry needs: `starlink` (register on THEIR phone, paid via the **company
   credit card** — a new `bl_card` budget envelope with approver + payMethod) and `escort` (each ship meal
-  window). The other 9 stay light (name + party only).
-- **`overrides.buddies` `{guestId: pid}`** — assigning a buddy auto-instantiates that VIP's voyage tasks
-  (registration in a fixed purser-desk window; lunch/dinner escorts) assigned to the buddy. No buddy → the
+  window). Day presence comes from an explicit campaign day, never the broad Ops segment or global `vip` alias.
+- **`overrides.buddies` `{guestId: pid}`** — assigning a buddy auto-instantiates that care guest's four
+  voyage tasks (registration in a fixed purser-desk window; lunch, dinner, and next-morning breakfast
+  escorts) assigned to the buddy. No buddy → the
   tasks are unstaffed (existing machinery prices it); a buddy double-booked at a window → overload/idle; no
-  card authority → the money gate fails. One organizer may buddy at most 2 VIPs (bijection-ish guard).
-- **V2 surface:** a **care shelf** on the command tray — the 4 VIP guest cards, handed to organizer pawns in
+  card authority → the money gate fails. One organizer may buddy at most 2 care guests (bijection-ish guard).
+- **V2 surface:** a **care shelf** on the command tray — the 4 outbound-care guest cards, handed to organizer pawns in
   the same grammar ("you hand things to people"); the All-settings fallback gets a buddy card (selects).
 - **Ship map = data:** the voyage segment defines its own stations (Hold · Cabins · Dining saloon · Deck ·
   Purser's desk) positioned over the water — the existing over-water rendering already puts crews aboard
@@ -57,12 +71,12 @@ plans the WHOLE journey:
 
 The §3 derivation rules of `2026-07-10-scoring-rubric-v1-design.md` absorb the new content unchanged
 (sockets from neededInfo, lanes per role, flag tables for the new gates: sailing-time boarding gate, hold
-manifest check, card authority, per-VIP starlink+escort quality checks, cabin list socket). **Targets** for
+manifest check, card authority, per-care-guest Starlink/escort quality checks, cabin list socket). **Targets** for
 the re-packed matrix (exact frozen values land at integration and are pinned in verify, like PINS):
 frame ~12 · load ~11 · voyage ~12 · arrival ~12 · ops ~14 · **fishday ~30 (must stay the heaviest)** ·
 return ~9 = **100**; Information stays the heaviest dimension. Grade gate, clean rule, riskable pricing
 unchanged. **Seed gaps** extend the ladder: load ships with the jig case never assigned to the truck run +
-the cabin list unshared; voyage ships with 2 VIP buddies unassigned + the card authority missing.
+the cabin list unshared; voyage ships with 2 outbound-care buddies unassigned + the card authority missing.
 **`fixHandoffs` must remain the strictly largest single jump** (the thesis) — verified at integration.
 
 ## 5. Sound (V3 — `sound.js`, the one completeness item)

@@ -7,7 +7,7 @@
 <meta name="description" content="Rehearse a project before you run it: set roles, authority, info, budget and report routes, press Run, and watch where people stall. Fix the gaps, re-run toward 100. Bilingual EN/JP.">
 <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body class="screen-intro">
 <div class="wrap">
 
   <!-- ============ HEADER ============ -->
@@ -38,39 +38,47 @@
   </div>
 
   <!-- ============ LEARNING CONTRACT ============ -->
-  <section class="learning-hub card" id="learning-hub" aria-labelledby="mission-title">
-    <div class="mission-copy">
-      <div class="learning-kicker" data-i18n="missionKicker"></div>
-      <h2 id="mission-title" data-i18n="missionTitle"></h2>
-      <p data-i18n="missionRole"></p>
-      <div class="mission-outcomes" role="list" aria-label="Learning mission outcomes">
-        <span role="listitem" data-i18n="missionOutcomeSafe"></span>
-        <span role="listitem" data-i18n="missionOutcomeCare"></span>
-        <span role="listitem" data-i18n="missionOutcomeTrust"></span>
-        <span role="listitem" data-i18n="missionOutcomeLearn"></span>
+  <details class="learning-hub card" id="learning-hub">
+    <summary class="learning-hub-summary">
+      <span class="learning-summary-copy">
+        <strong data-i18n="learningHubSummary"></strong>
+      </span>
+      <span class="learning-summary-meta"><span id="learning-summary-level"></span><span class="disclosure-caret" aria-hidden="true">▾</span></span>
+    </summary>
+    <div class="learning-hub-body">
+      <div class="mission-copy">
+        <div class="learning-kicker" data-i18n="missionKicker"></div>
+        <h2 id="mission-title" data-i18n="missionTitle"></h2>
+        <p data-i18n="missionRole"></p>
+        <div class="mission-outcomes" role="list" aria-label="Learning mission outcomes">
+          <span role="listitem" data-i18n="missionOutcomeSafe"></span>
+          <span role="listitem" data-i18n="missionOutcomeCare"></span>
+          <span role="listitem" data-i18n="missionOutcomeTrust"></span>
+          <span role="listitem" data-i18n="missionOutcomeLearn"></span>
+        </div>
       </div>
-    </div>
-    <div class="learning-controls">
-      <div class="learning-level-label" id="learning-level-label" data-i18n="learningLevelLabel"></div>
-      <div class="learning-levels" id="learning-levels" role="group" aria-labelledby="learning-level-label">
-        <button type="button" data-level="learn" data-i18n="levelLearn"></button>
-        <button type="button" data-level="practice" data-i18n="levelPractice"></button>
-        <button type="button" data-level="challenge" data-i18n="levelChallenge"></button>
+      <div class="learning-controls">
+        <div class="learning-level-label" id="learning-level-label" data-i18n="learningLevelLabel"></div>
+        <div class="learning-levels" id="learning-levels" role="group" aria-labelledby="learning-level-label" aria-describedby="learning-level-desc">
+          <button type="button" data-level="learn" data-i18n="levelLearn"></button>
+          <button type="button" data-level="practice" data-i18n="levelPractice"></button>
+          <button type="button" data-level="challenge" data-i18n="levelChallenge"></button>
+        </div>
+        <p class="learning-level-desc" id="learning-level-desc"></p>
+        <div class="scenario-chip hidden" id="scenario-chip" role="status"></div>
       </div>
-      <p class="learning-level-desc" id="learning-level-desc"></p>
-      <div class="scenario-chip hidden" id="scenario-chip" role="status"></div>
+      <details class="attempt-history" id="attempt-history-wrap">
+        <summary data-i18n="attemptHistoryTitle"></summary>
+        <div id="attempt-history"></div>
+      </details>
     </div>
-    <details class="attempt-history" id="attempt-history-wrap">
-      <summary data-i18n="attemptHistoryTitle"></summary>
-      <div id="attempt-history"></div>
-    </details>
-  </section>
+  </details>
 
   <!-- ============ INTRO / CAST (onboarding) ============ -->
   <!-- §W4 cold-open vignette: the hero shows the game in ~15s on the real stage renderer.
        #vig-stage's canvas + loop are created by bootVignette() and DESTROYED by killVignette()
        (never merely hidden) — the caption strip carries the three spec lines + the mini rail row. -->
-  <section id="intro" class="hidden">
+  <section id="intro">
     <div class="introwrap">
       <div class="intro-hero">
         <div class="intro-kicker" data-i18n="introKicker"></div>
@@ -85,17 +93,18 @@
         </div>
         <div class="intro-cta">
           <button class="btn primary lg" id="intro-start" data-i18n="introStart"></button>
-          <button class="btn ghost" id="vig-skip" data-i18n="vgSkip"></button>
-          <button class="btn ghost" id="intro-how-btn" data-i18n="introHowBtn"></button>
+          <button class="btn ghost" id="intro-plan" data-i18n="introPlan"></button>
         </div>
       </div>
-      <h2 class="intro-meet" data-i18n="introMeet"></h2>
-      <div id="intro-cast"></div>
+      <details class="intro-cast-details" id="intro-cast-wrap">
+        <summary class="intro-meet" data-i18n="introMeet"></summary>
+        <div id="intro-cast"></div>
+      </details>
     </div>
   </section>
 
   <!-- ============ SETUP ============ -->
-  <section id="setup">
+  <section id="setup" class="hidden">
     <div class="setup-main">
 
     <!-- §1/§2 PLAN STAGE — setup becomes stage-first: the pre-dawn harbor + a command tray of
@@ -110,7 +119,10 @@
       </div>
       <!-- Visible keyboard equivalent for the code-native canvas pawns. app.js
            populates compact crew-inspection buttons and the localized label. -->
-      <div class="plan-roster" id="plan-roster" role="group"></div>
+      <details class="plan-roster-details" id="plan-roster-details">
+        <summary data-i18n="planRosterSummary"></summary>
+        <div class="plan-roster" id="plan-roster" role="group"></div>
+      </details>
       <div class="cmd-tray" id="cmd-tray" role="group">
         <div class="tray-hint" id="tray-hint">
           <span id="tray-hint-txt"></span>
@@ -129,9 +141,9 @@
     </div>
 
     <!-- §4 "All settings" — the Phase-1 receipt rows, org, resources & spend cards remain COMPLETE
-         here (collapsed by default ≥1180px; anything the tray does, the fallback can do). -->
-    <div class="all-settings" id="all-settings">
-      <button class="all-settings-toggle" id="all-settings-toggle" type="button" aria-expanded="true" aria-controls="all-settings-body">
+         here, collapsed by default; anything the tray does, the fallback can do. -->
+    <div class="all-settings collapsed" id="all-settings">
+      <button class="all-settings-toggle" id="all-settings-toggle" type="button" aria-expanded="false" aria-controls="all-settings-body">
         <span data-i18n="allSettings"></span><span class="as-caret" aria-hidden="true">▾</span>
       </button>
       <div class="all-settings-body" id="all-settings-body">
@@ -215,7 +227,10 @@
          the desktop grid pins it as the sticky right-hand column at ≥1180px. -->
     <aside class="setup-rail" id="rail-setup">
       <div class="card railcard">
-        <div class="rail" id="rail-body"></div>
+        <details class="setup-score-details" id="setup-score-details">
+          <summary data-i18n="setupScoreSummary"></summary>
+          <div class="rail" id="rail-body"></div>
+        </details>
         <button class="btn primary" id="launch" data-i18n="launchBtn"></button>
       </div>
     </aside>
@@ -241,14 +256,15 @@
       </div>
       <!-- Canvas pawns must not create an invisible 11-button tab run. app.js can
            remove inert when it supplies an equivalent visible keyboard roster. -->
-      <div id="stage-roster" class="sr-only" aria-live="polite"></div>
+      <div id="stage-roster" class="sr-only"></div>
 
       <!-- LIVE MODE dock: cold-open briefing → freeze prompt → spotlight one-question fix → result -->
-      <div class="live-dock hidden" id="live-dock" aria-live="polite">
-        <div class="ld-panel" id="ld-brief"></div>
-        <div class="ld-panel" id="ld-prompt"></div>
-        <div class="ld-panel" id="ld-spot"></div>
-        <div class="ld-panel" id="ld-result"></div>
+      <div class="sr-only" id="live-status" role="status" aria-live="polite" aria-atomic="true"></div>
+      <div class="live-dock hidden" id="live-dock">
+        <div class="ld-panel" id="ld-brief" tabindex="-1"></div>
+        <div class="ld-panel" id="ld-prompt" tabindex="-1"></div>
+        <div class="ld-panel" id="ld-spot" tabindex="-1"></div>
+        <div class="ld-panel" id="ld-result" tabindex="-1"></div>
       </div>
 
       <div class="legend" id="legend"></div>
@@ -321,23 +337,34 @@
     </div>
     <div class="card report">
       <div class="grade-wrap">
-        <div class="muted" data-i18n="gradeLbl"></div>
+        <div class="muted" id="r-grade-label" data-i18n="gradeLbl"></div>
         <div class="grade" id="r-grade">B</div>
         <div class="r-badge" id="r-badge"></div>
         <div class="verdict" id="r-verdict"></div>
       </div>
       <div class="conds" id="r-conds"></div>
+      <div class="report-takeaway hidden" id="learning-takeaway"></div>
     </div>
-    <div class="card railcard"><div class="rail" id="rail-report"></div></div>
-    <div class="card learning-debrief-card" id="learning-debrief-card">
-      <h2 data-i18n="debriefTitle"></h2>
-      <div id="learning-debrief"></div>
-    </div>
-    <div class="card"><h2 id="ledger-title"></h2>
-      <div class="tag" style="margin:-6px 0 12px;"><a href="rubric.html" target="_blank" rel="noopener" data-i18n="rubricLink"></a></div>
-      <div class="ledger" id="ledger"></div></div>
-    <div class="card"><h2 data-i18n="fixpackTitle"></h2><div class="tag" data-i18n="fixpackHint" style="margin:-6px 0 12px;"></div><div class="fixpack" id="fixpack"></div></div>
-    <div class="card"><h2 data-i18n="individualsTitle"></h2><div class="indivwrap"><table class="indiv" id="individuals"></table></div></div>
+    <details class="card report-disclosure" id="report-score-details">
+      <summary data-i18n="reportScoreSummary"></summary>
+      <div class="report-disclosure-body"><div class="rail" id="rail-report"></div></div>
+    </details>
+    <details class="card learning-debrief-card report-disclosure" id="learning-debrief-card">
+      <summary data-i18n="debriefTitle"></summary>
+      <div class="report-disclosure-body" id="learning-debrief"></div>
+    </details>
+    <details class="card report-disclosure" id="report-ledger-details">
+      <summary id="ledger-title"></summary>
+      <div class="report-disclosure-body">
+        <div class="tag" style="margin:0 0 12px;"><a href="rubric.html" target="_blank" rel="noopener" data-i18n="rubricLink"></a></div>
+        <div class="ledger" id="ledger"></div>
+      </div>
+    </details>
+    <div class="card"><h2 data-i18n="fixpackTitle"></h2><div class="fixpack" id="fixpack"></div></div>
+    <details class="card report-disclosure" id="report-individuals-details">
+      <summary data-i18n="individualsTitle"></summary>
+      <div class="report-disclosure-body"><div class="indivwrap"><table class="indiv" id="individuals"></table></div></div>
+    </details>
     <div style="display:flex;gap:8px;">
       <button class="btn" id="btn-tweak" style="flex:1;" data-i18n="editBtn"></button>
       <button class="btn primary" id="btn-again" style="flex:1;" data-i18n="againBtn"></button>
@@ -382,7 +409,7 @@
 </div>
 
 <!-- ============ PAWN INSPECTION POPOVER (W3 §3) — non-modal, anchored near a pawn ============ -->
-<div class="pawn-card hidden" id="pawn-card" role="dialog" aria-labelledby="pc-name" tabindex="-1"></div>
+<div class="pawn-card hidden" id="pawn-card" role="dialog" aria-labelledby="pc-name" tabindex="-1"><span class="sr-only" id="pc-name"></span></div>
 
 <!-- ============ TRAY TARGET PICKER (keyboard placement) ============ -->
 <div class="modal" id="pick-modal">

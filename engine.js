@@ -31,7 +31,7 @@
   // scoreDay, and score. B >= 75 · C >= 60 · else D.
   var GRADE_BANDS = { A: 90, B: 75, C: 60 };
 
-  // ---- fishday tunables (the representative fishing day runs on a minute clock) ----
+  // ---- fishday tunables (hour-block authoring; detailed rehearsal math stays minute-precise) ----
   var MIN_DT = 5;                // minutes per fine tick
   var DAY_START_MIN = 240;       // 04:00 — window opens (covers the 04:15 pre-dawn intelligence)
   var DAY_END_MIN = 1200;        // 20:00 — window closes
@@ -57,7 +57,7 @@
   // DAY_WINDOWS: the authoring window [openMin,closeMin] per segment (mirrors DAY_START_MIN/
   // DAY_END_MIN for fishday and DAY_HOUR_START/DAY_HOUR_END for the coarse days, unified).
   // AUTHORABLE: the segment ids the future deck→arrange→connect editor will cover.
-  var SNAP_MIN = { load: 30, voyage: 60, arrival: 60, ops: 60, return: 60, fishday: 15 };
+  var SNAP_MIN = { load: 30, voyage: 60, arrival: 60, ops: 60, return: 60, fishday: 60 };
   // Authoritative outbound anchors supplied by the trip owner. Breakfast has NO confirmed
   // time; 08:00 below is only the left edge of the rehearsal canvas and is never exposed as
   // a fact (the breakfast task carries timeStatus:'unknown'). Hotel departure and the
@@ -205,7 +205,7 @@
     { id: 'arrival', phaseEn: 'Day 1 · Arrival', routePhaseEn: 'Day 1 · Chichijima transfer to Hahajima', name: L('Day 1 · Chichijima transfer → Hahajima/Hinata', '1日目・父島乗換→母島／ひなた'),
       routeLegIds: ['out-chichijima-transfer', 'out-interisland', 'out-hinata'], sceneIds: ['chichijima-transfer', 'interisland-ferry', 'hahajima-hinata'] },
     { id: 'ops',     phaseEn: 'Days 2–9 · Daily operations',  name: L('Days 2–9 · Operations', '2〜9日目・運営') },
-    { id: 'fishday', phaseEn: 'Day 3 · Fishing day',          name: L('Day 3 · Fishing day (minute-level)', '3日目・代表釣行日（分刻み）') },
+    { id: 'fishday', phaseEn: 'Day 3 · Fishing day',          name: L('Day 3 · Fishing day (hour blocks)', '3日目・代表釣行日（時間単位）') },
     { id: 'return',  phaseEn: 'Day 10 · Return & shipping', routePhaseEn: 'Day 10 · Return route (inferred)', name: L('Day 10 · Reverse return route (timetable unconfirmed)', '10日目・逆順の帰路（時刻未確認）'),
       routeLegIds: ['return-hinata', 'return-interisland', 'return-chichijima-transfer', 'return-ogasawara-maru', 'return-takeshiba'],
       sceneIds: ['hahajima-hinata', 'interisland-ferry', 'chichijima-transfer', 'ogasawara-maru', 'takeshiba-terminal'], inferred: true }
@@ -363,8 +363,8 @@
         // Voyage additions (spec §2/§3), all inert on days that don't use them:
         //   carries[]  — manifest item ids this task moves (custody legs + Pack & Sail mirror)
         //   custody    — an OUTBOUND custody leg (packed→transferred to Takeshiba→in hold); carryState folds these
-        //   care       — careGuestId: a per-VIP care task (starlink/escort); exempt from exec lanes,
-        //                priced by the per-VIP care atom; buddies auto-staff + re-home ownerRoleId
+        //   care       — careGuestId: a per-outbound-guest care task (starlink/escort); exempt from exec lanes,
+        //                priced by the per-guest care atom; buddies auto-staff + re-home ownerRoleId
         //   flex       — exempt from exec-lane pricing (see FD)
         carries: o.carries ? o.carries.slice() : [], custody: !!o.custody,
         transferCustody: !!o.transferCustody, returnCustody: !!o.returnCustody,
@@ -439,20 +439,24 @@
     // complete with the spec-§4 seed gaps; the W2a content wave enriches (decoys,
     // richer rosters).
     // =========================================================================
-    // 13 named guests (WORLD.md §2/§3). The 4 VIPs = Nagatani + Kadou (the external
-    // counterparties the whole trip courts) + the two most senior rotation guests by
-    // WORLD.md §2 seniority (Watanabe (head) → Yamate). Kanji only where WORLD.md
-    // confirms it (渡邊 / 角谷); other guests stay katakana pending the owner's kanji
-    // pass (WORLD.md §8). Natsuki (cameraman) is the conscious 14th-person omission —
-    // the engine models exactly GUESTS = 13.
-    function GD(id, en, jp, vip, party) { return { id: id, name: L(en, jp), vip: !!vip, party: party }; }
+    // 13 named guest records (WORLD.md §2/§3). This is the master hosted/non-duty
+    // catalog, NOT a claim that every named record is a main guest on every day. The
+    // four-person main-guest waves live in guestRotations below. `voyageCare` marks the
+    // Day-0 outbound cohort whose Starlink/meal-escort tasks are scored; `vip` remains a
+    // compatibility alias for older consumers and must never be used as a day roster.
+    // Kanji appears only where WORLD.md confirms it (渡邊 / 角谷); other guests stay
+    // katakana pending the owner's kanji pass. Natsuki (cameraman) remains outside the
+    // 13-record compatibility catalog until the physical headcount is reconciled.
+    function GD(id, en, jp, voyageCare, party) {
+      return { id: id, name: L(en, jp), voyageCare: !!voyageCare, vip: !!voyageCare, party: party };
+    }
     var guests = [
+      GD('gd_watanabe', 'Watanabe', '渡邊',     true,  'aegis'),
       GD('gd_nagatani', 'Nagatani', 'ナガタニ', true,  'external'),
       GD('gd_kadou',    'Kadou',    '角谷',     true,  'external'),
-      GD('gd_watanabe', 'Watanabe', '渡邊',     true,  'aegis'),
-      GD('gd_yamate',   'Yamate',   'ヤマテ',   true,  'aegis'),
+      GD('gd_maeda',    'Maeda',    'マエダ',   true,  'aegis'),
+      GD('gd_yamate',   'Yamate',   'ヤマテ',   false, 'aegis'),
       GD('gd_saito',    'Saito',    'サイトウ', false, 'aegis'),
-      GD('gd_maeda',    'Maeda',    'マエダ',   false, 'aegis'),
       GD('gd_nobuaki',  'Nobuaki',  'ノブアキ', false, 'aegis'),
       GD('gd_shimura',  'Shimura',  'シムラ',   false, 'aegis'),
       GD('gd_tamaya',   'Tamaya',   'タマヤ',   false, 'aegis'),
@@ -461,11 +465,22 @@
       GD('gd_miki',     'Miki',     'ミキ',     false, 'aegis'),
       GD('gd_megu',     'Megu',     'メグ',     false, 'aegis')
     ];
+    // Owner-facing campaign days are inclusive. The formal program is Days 1–10;
+    // the simulator additionally models Day 0 Tokyo staging and departure.
+    var guestRotations = [
+      { id: 'days-0-5', startDay: 0, endDay: 5,
+        guestIds: ['gd_watanabe', 'gd_nagatani', 'gd_kadou', 'gd_maeda'] },
+      { id: 'days-6-10', startDay: 6, endDay: 10,
+        guestIds: ['gd_watanabe', 'gd_nagatani', 'gd_yamate', 'gd_saito'] }
+    ];
     // The physical manifest (spec §2). resourceId binds an item to the EXISTING
     // neededResources tokens downstream: a resource with no manifest item is never
     // carry-bound (inert — 'boat', 'storage', 'keys', …), and a task needing a bound
     // resource stalls (手待ち-style) in any segment where a backing item is 'missing'.
-    function MI(id, en, jp, kind, resourceId, forSeg, returnRequired) { return { id: id, name: L(en, jp), kind: kind, resourceId: resourceId, forSeg: forSeg, returnRequired: returnRequired !== false }; }
+    function MI(id, en, jp, kind, resourceId, forSeg, returnRequired, outboundRequired) {
+      return { id: id, name: L(en, jp), kind: kind, resourceId: resourceId, forSeg: forSeg,
+        outboundRequired: outboundRequired !== false, returnRequired: returnRequired !== false };
+    }
     var manifest = [
       MI('mi_rods',       'Rod sets ×6',           '竿セット×6',             'gear',    'tackle',  'fishday'),
       MI('mi_jigcase',    'Jig case (60–100 g)',   'ジグケース（60〜100g）', 'gear',    'jigs',    'fishday'),
@@ -474,12 +489,14 @@
       MI('mi_foodcrates', 'Food crates',           '食材ケース',             'food',    'food',    'ops', false),
       MI('mi_medkit',     'Medkit',                '救急セット',             'safety',  'medkit',  'ops'),
       MI('mi_cashbox',    'Cash box',              '現金ボックス',           'money',   'cash',    'return'),
-      MI('mi_lug_gd_nagatani', "Nagatani's luggage", 'ナガタニ様の荷物',     'luggage', 'luggage', 'voyage'),
-      MI('mi_lug_gd_kadou',    "Kadou's luggage",    '角谷様の荷物',         'luggage', 'luggage', 'voyage'),
       MI('mi_lug_gd_watanabe', "Watanabe's luggage", '渡邊様の荷物',         'luggage', 'luggage', 'voyage'),
-      MI('mi_lug_gd_yamate',   "Yamate's luggage",   'ヤマテ様の荷物',       'luggage', 'luggage', 'voyage')
+      MI('mi_lug_gd_nagatani', "Nagatani's luggage", 'ナガタニ様の荷物',     'luggage', 'luggage', 'voyage'),
+      MI('mi_lug_gd_kadou',    "Kadou's luggage",    '角谷様の荷物',         'luggage', 'luggage', 'voyage', false),
+      MI('mi_lug_gd_maeda',    "Maeda's luggage",    'マエダ様の荷物',       'luggage', 'luggage', 'voyage', false),
+      MI('mi_lug_gd_yamate',   "Yamate's return luggage", 'ヤマテ様の帰路荷物', 'luggage', 'luggage', 'return', true, false),
+      MI('mi_lug_gd_saito',    "Saito's return luggage",  'サイトウ様の帰路荷物', 'luggage', 'luggage', 'return', true, false)
     ];
-    var ALL_ITEMS = manifest.map(function (m) { return m.id; });
+    var OUTBOUND_ITEMS = manifest.filter(function (m) { return m.outboundRequired; }).map(function (m) { return m.id; });
     var RETURN_ITEMS = manifest.filter(function (m) { return m.returnRequired; }).map(function (m) { return m.id; });
     // The Chichijima ship change is a second, explicit custody chain. It is added only
     // after the manifest exists so every physical item can be checked off at disembark,
@@ -487,8 +504,8 @@
     var transferTaskIds = { hd_a_disembark: 1, hd_a_transfer: 1, hd_a_board: 1, hd_a_cross: 1, hd_a_checkin: 1 };
     arrivalReqTasks.forEach(function (t) {
       if (transferTaskIds[t.id]) {
-        t.transferCustody = true; t.carries = ALL_ITEMS.slice();
-        if (arrivalCanonPlacement[t.id]) arrivalCanonPlacement[t.id].carries = ALL_ITEMS.slice();
+        t.transferCustody = true; t.carries = OUTBOUND_ITEMS.slice();
+        if (arrivalCanonPlacement[t.id]) arrivalCanonPlacement[t.id].carries = OUTBOUND_ITEMS.slice();
       }
     });
     // --- Day 0 · TOKYO HOTEL → TAKESHIBA (confirmed 10:00 departure / 11:00 sailing) ---
@@ -499,13 +516,13 @@
       HD('hd_l_breakfast', 'Breakfast at the nearby Tokyo hotel (time not confirmed)', '東京の近隣ホテルで朝食（時刻未確認）', 'mess', 'owner', ['p01'], 480, 60,
         { flex: true, guestFacing: true, routeLegId: 'out-breakfast', sceneId: 'tokyo-hotel', timeStatus: 'unknown', timeKnown: false }),
       HD('hd_l_pack',      'Check luggage and the physical manifest at the Tokyo hotel', '東京のホテルで荷物・積荷の現物照合', 'command', 'logi', ['p06'], 480, 60,
-        { produces: ['ic_manifest'], custody: true, carries: ALL_ITEMS, moneyCheck: 1, routeLegId: 'out-breakfast', sceneId: 'tokyo-hotel', timeStatus: 'unknown', timeKnown: false }),
+        { produces: ['ic_manifest'], custody: true, carries: OUTBOUND_ITEMS, moneyCheck: 1, routeLegId: 'out-breakfast', sceneId: 'tokyo-hotel', timeStatus: 'unknown', timeKnown: false }),
       HD('hd_l_cabins',    'Prepare the Ogasawara-maru cabin assignment list', 'おがさわら丸の船室割当リスト作成', 'command', 'pm', ['p02'], 480, 60,
         { produces: ['ic_cabins'], routeLegId: 'out-breakfast', sceneId: 'tokyo-hotel', timeStatus: 'unknown', timeKnown: false }),
       HD('hd_l_truck',     'Leave the hotel at 10:00 and transfer people/luggage to Takeshiba', '10:00ホテル出発・人員／荷物を竹芝へ移動', 'port', 'siteLead', ['p03'], HOTEL_DEPART_MIN, 30,
-        { deps: ['hd_l_pack'], info: ['ic_manifest'], custody: true, carries: ALL_ITEMS, routeLegId: 'out-hotel-takeshiba', fromSceneId: 'tokyo-hotel', toSceneId: 'takeshiba-terminal', sceneId: 'takeshiba-terminal', timeStatus: 'confirmed-start-only', timeKnown: false, confirmedStartMin: HOTEL_DEPART_MIN }),
+        { deps: ['hd_l_pack'], info: ['ic_manifest'], custody: true, carries: OUTBOUND_ITEMS, routeLegId: 'out-hotel-takeshiba', fromSceneId: 'tokyo-hotel', toSceneId: 'takeshiba-terminal', sceneId: 'takeshiba-terminal', timeStatus: 'confirmed-start-only', timeKnown: false, confirmedStartMin: HOTEL_DEPART_MIN }),
       HD('hd_l_hold',      'Takeshiba baggage handoff and Ogasawara-maru hold check', '竹芝で荷物引き渡し・おがさわら丸船倉照合', 'port', 'siteLead', ['p03'], 630, 30,
-        { deps: ['hd_l_truck'], info: ['ic_manifest'], custody: true, carries: ALL_ITEMS, diff: 3, safetyGate: 2, routeLegId: 'out-ogasawara-maru', sceneId: 'takeshiba-terminal', vesselId: 'ogasawara-maru', timeStatus: 'unknown-before-fixed-sailing', timeKnown: false }),
+        { deps: ['hd_l_truck'], info: ['ic_manifest'], custody: true, carries: OUTBOUND_ITEMS, diff: 3, safetyGate: 2, routeLegId: 'out-ogasawara-maru', sceneId: 'takeshiba-terminal', vesselId: 'ogasawara-maru', timeStatus: 'unknown-before-fixed-sailing', timeKnown: false }),
       HD('hd_l_headcount', 'Takeshiba boarding headcount before the 11:00 Ogasawara-maru sailing', 'おがさわら丸11:00出港前の竹芝乗船点呼', 'port', 'comms', ['p07'], 630, 30,
         { deps: ['hd_l_truck'], info: ['ic_cabins'], safetyGate: 2, routeLegId: 'out-ogasawara-maru', sceneId: 'takeshiba-terminal', vesselId: 'ogasawara-maru', timeStatus: 'unknown-before-fixed-sailing', timeKnown: false })
     ];
@@ -536,9 +553,9 @@
     // headcount idles past the fixed 11:00 sailing and the boarding gate fails on the seed.
     var loadHandoffs = [clone(loadCanonArrows[0])];
     // --- Day 0–1 · OGASAWARA-MARU (11:00 departure, about one day aboard) ---
-    // The 16 per-VIP care tasks (t_v_star_/t_v_esc_l_/t_v_esc_d_/t_v_esc_b_) ship UNSTAFFED; assigning a
+    // The 16 outbound-care tasks (t_v_star_/t_v_esc_l_/t_v_esc_d_/t_v_esc_b_) ship UNSTAFFED; assigning a
     // buddy (plan.buddies / overrides.buddies) auto-staffs them onto the buddy (mergePlan).
-    var vipStarMin = { gd_nagatani: 780, gd_watanabe: 840, gd_yamate: 900, gd_kadou: 960 };
+    var careStarMin = { gd_watanabe: 780, gd_nagatani: 840, gd_kadou: 900, gd_maeda: 960 };
     var voyageTasks = [
       HD('hd_v_luggage',   'Ogasawara-maru departure and luggage runs to cabins', 'おがさわら丸出港・手荷物を船室へ', 'cabins', 'logi', ['p06'], SAIL_MIN, 120,
         { info: ['ic_cabins'], res: ['luggage'], routeLegId: 'out-ogasawara-maru', sceneId: 'ogasawara-maru', vesselId: 'ogasawara-maru', timeStatus: 'confirmed-start-only', timeKnown: false, confirmedStartMin: SAIL_MIN }),
@@ -557,13 +574,13 @@
       HD('hd_v_dec_sternfish', 'Fishing off the stern underway', '航行中の船尾釣り',   'deck',   'specialist', [], 900, 60, { required: false, safetyFlag: true }),
       HD('hd_v_dec_karaoke',   'Saloon karaoke hour',            '船内カラオケ大会',   'dining', 'comms',      [], 960, 60, { required: false }),
       // W2a content: a third plausible-but-inert distraction, on the cabins station so the
-      // deck has one of each flavor (no VIP care task loses its lane, decoy debit only).
+      // deck has one of each flavor (no outbound-care task loses its lane, decoy debit only).
       HD('hd_v_dec_nap',       'Afternoon nap in the cabin',      '船室で昼寝',         'cabins', 'logi',       [], 780, 60, { required: false })
     ];
     guests.forEach(function (g) {
-      if (!g.vip) return;
+      if (!g.voyageCare) return;
       voyageTasks.push(
-        HD('t_v_star_' + g.id,  'Starlink registration — ' + g.name.en, 'スターリンク登録（' + g.name.jp + '様）', 'purser', 'pm', [], vipStarMin[g.id], 60, { care: g.id }),
+        HD('t_v_star_' + g.id,  'Starlink registration — ' + g.name.en, 'スターリンク登録（' + g.name.jp + '様）', 'purser', 'pm', [], careStarMin[g.id], 60, { care: g.id }),
         HD('t_v_esc_l_' + g.id, 'Lunch escort — ' + g.name.en,          '昼食エスコート（' + g.name.jp + '様）',   'dining', 'pm', [], 720, 60,  { care: g.id, guestFacing: true }),
         HD('t_v_esc_d_' + g.id, 'Dinner escort — ' + g.name.en,         '夕食エスコート（' + g.name.jp + '様）',   'dining', 'pm', [], 1080, 60, { care: g.id, guestFacing: true }),
         HD('t_v_esc_b_' + g.id, 'Next-morning breakfast escort — ' + g.name.en, '翌朝食エスコート（' + g.name.jp + '様）', 'dining', 'pm', [], 1860, 60,
@@ -593,6 +610,10 @@
                 'グループ会社横断メンバーが10日間共に生活し、釣り体験を通じて、安全かつ予算内で結束を深める。'),
         days: DAYS, location: L('Hahajima, Ogasawara (Hinata)', '小笠原・母島（ひなた）'), headcount: HEADCOUNT, staff: STAFF, guests: GUESTS, chefs: CHEFS,
         homeBaseStopId: 'hahajima-hinata',
+        // The owner confirmed WHO changes at the Day-6 boundary, but not how the two
+        // departing and two arriving guests (or their luggage) make that exchange.
+        // This stays outside rehearsal scoring and blocks only real-execution readiness.
+        guestRotationExchange: { day: 6, logisticsAttested: false },
         route: { outboundLegIds: ['out-breakfast', 'out-hotel-takeshiba', 'out-ogasawara-maru', 'out-chichijima-transfer', 'out-interisland', 'out-hinata'],
           returnLegIds: ['return-hinata', 'return-interisland', 'return-chichijima-transfer', 'return-ogasawara-maru', 'return-takeshiba'],
           returnConfirmed: false, returnStatus: 'inferred-reverse-route-timetable-unknown' },
@@ -669,7 +690,7 @@
         { id: 't12', name: L('Return-route headcount (reverse route inferred; timetable unconfirmed)', '帰路点呼（逆順ルートの推定・時刻未確認）'), station: 'port', phase: pR, ownerRoleId: 'comms', assignedIds: ['p07', 'p03'], startDay: 9, dur: 1, deps: ['t_ship'], difficulty: 2, neededResources: [], neededInfo: ['ic_return'], neededAuthority: null,
           routeLegId: 'return-hinata', sceneId: 'hahajima-hinata', inferred: true, timeStatus: 'unknown', timeKnown: false },
 
-        // --- Day 3 · THE representative fishing day, minute-level (§5.3, scores 100 as shipped-with-fixes) ---
+        // --- Day 3 · THE representative fishing day (hour-block authoring; detailed timing math retained) ---
         // PHASE 0 · pre-dawn intelligence (04:15–05:30)
         FD('t_f_food',       'Confirm supply & allergy list', '食材調達・アレルギー確認', 'finance', 'budgetLead', ['p04'], 255, 30, { produces: ['ic_food'] }),
         // Voyage repack: safety-gate prices trimmed (3/2/2 -> 2/1/1) so the fishday bucket lands ~30
@@ -777,7 +798,7 @@
           { id: 'bl_boat',      name: L('Boat charter', '船'), cap: 600000,  spent: 0, approverRoleId: 'budgetLead', payMethod: 'card', receiptRule: 'required' },
           { id: 'bl_tackle',    name: L('Gear / tackle', '道具'), cap: 200000, spent: 0, approverRoleId: 'logi',     payMethod: 'cash', receiptRule: 'photo' },
           { id: 'bl_onsite',    name: L('On-site / misc', '現地費'), cap: 300000, spent: 0, approverRoleId: 'siteLead', payMethod: 'cash', receiptRule: 'lenient' },
-          // Voyage §3: the company-card envelope the 4 VIP Starlink registrations draw on.
+          // Voyage §3: the company-card envelope the 4 outbound-care Starlink registrations draw on.
           { id: 'bl_card',      name: L('Company card / ship Wi-Fi', '会社カード・船上Wi-Fi'), cap: 100000, spent: 0, approverRoleId: null, payMethod: 'card', receiptRule: 'required' } // SEED GAP V2 (spec §4): no card authority
         ],
         reserve: 0,   // GAP F: no cash reserve
@@ -833,11 +854,12 @@
       // (chat +10 / board +30) would push late once Phase 2's daySchedule prices it.
       // ===========================================================================
 
-      // --- Voyage program: named guests, VIP buddies, and the physical manifest (spec §2/§3) ---
+      // --- Voyage program: named guests, outbound-care buddies, and the physical manifest (spec §2/§3) ---
       guests: guests,
-      // buddies {guestId: pid} — template default. SEED GAP V1 (spec §4): 2 of the 4 VIP buddies
+      guestRotations: guestRotations,
+      // buddies {guestId: pid} — template default. SEED GAP V1 (spec §4): 2 of the 4 care buddies
       // are unassigned — and they are Nagatani & Kadou, the counterparties the trip exists for.
-      buddies: { gd_watanabe: 'p01', gd_yamate: 'p04' },
+      buddies: { gd_watanabe: 'p01', gd_maeda: 'p04' },
       manifest: manifest,
       itinerary: clone(ITINERARY),
       physicalStops: clone(PHYSICAL_STOPS),
@@ -975,6 +997,115 @@
 
   // ---- accessors over a (merged) plan ----
   function byId(arr, id) { for (var i = 0; i < arr.length; i++) if (arr[i].id === id) return arr[i]; return null; }
+  function isOrganizerParticipant(plan, pid) {
+    var p = plan && plan.participants && byId(plan.participants, pid);
+    return !!(p && ['owner', 'pm', 'siteLead', 'budgetLead', 'safetyLead', 'logi', 'comms', 'specialist'].indexOf(p.roleId) >= 0);
+  }
+  // Resolve the four-person main/priority roster for an explicit owner-facing trip day.
+  // This intentionally does not infer a day from a broad segment (`ops` crosses the Day-6
+  // boundary) or from createSim's internal dayBase. Invalid/out-of-campaign days are empty.
+  function guestRosterForDay(plan, tripDay) {
+    if (!plan || !Array.isArray(plan.guests) || !Array.isArray(plan.guestRotations) ||
+        typeof tripDay !== 'number' || !isFinite(tripDay) || Math.floor(tripDay) !== tripDay) return [];
+    var wave = null, i, guest;
+    for (i = 0; i < plan.guestRotations.length; i++) {
+      var candidate = plan.guestRotations[i];
+      if (tripDay >= candidate.startDay && tripDay <= candidate.endDay) { wave = candidate; break; }
+    }
+    if (!wave || !Array.isArray(wave.guestIds)) return [];
+    var out = [];
+    for (i = 0; i < wave.guestIds.length; i++) {
+      guest = byId(plan.guests, wave.guestIds[i]);
+      if (guest) out.push(guest);
+    }
+    return out;
+  }
+  // Shared authoring quantizer. Hour-block Day 3 uses 60-minute steps while the
+  // deterministic rehearsal is free to retain finer evidence internally.
+  function snapAuthoringMinute(seg, minute, direction) {
+    var win = DAY_WINDOWS[seg], step = SNAP_MIN[seg] || 60;
+    if (!win || typeof minute !== 'number' || !isFinite(minute)) return null;
+    var units = (minute - win[0]) / step;
+    units = direction === 'ceil' ? Math.ceil(units) : (direction === 'floor' ? Math.floor(units) : Math.round(units));
+    return Math.max(win[0], Math.min(win[1], win[0] + units * step));
+  }
+  // Coarse editor projection for a detailed rehearsal task. Its start/end round
+  // outward to containing authoring blocks. The detailed
+  // template remains untouched until the player actually moves/resizes a block.
+  function authoringTaskBlock(seg, startMin, durMin) {
+    var win = DAY_WINDOWS[seg], step = SNAP_MIN[seg] || 60;
+    if (!win || typeof startMin !== 'number' || !isFinite(startMin) ||
+        typeof durMin !== 'number' || !isFinite(durMin) || durMin <= 0) return null;
+    var start = snapAuthoringMinute(seg, startMin, 'floor');
+    var end = snapAuthoringMinute(seg, startMin + durMin, 'ceil');
+    if (end <= start) end = Math.min(win[1], start + step);
+    var duration = end - start;
+    if (duration < step) {
+      start = Math.max(win[0], win[1] - step);
+      duration = win[1] - start;
+    }
+    return { startMin: start, durMin: duration, endMin: start + duration };
+  }
+  // Pure display layout for projected authoring blocks. A task belongs to the
+  // lane of its primary assignee (`assignedIds[0]`). Within each participant's
+  // lane, projected blocks are ordered deterministically and greedily placed on
+  // the lowest track whose previous half-open interval has ended.
+  function authoringLaneLayout(seg, tasks) {
+    if (!Array.isArray(tasks)) return [];
+    var groups = [], i, j, task, participantId, block, group;
+    for (i = 0; i < tasks.length; i++) {
+      task = tasks[i];
+      if (!task || !Array.isArray(task.assignedIds) || !task.assignedIds.length) continue;
+      block = authoringTaskBlock(seg, task.startMin, task.durMin);
+      if (!block) continue;
+      participantId = task.assignedIds[0];
+      group = null;
+      for (j = 0; j < groups.length; j++) if (groups[j].participantId === participantId) { group = groups[j]; break; }
+      if (!group) { group = { participantId: participantId, records: [] }; groups.push(group); }
+      group.records.push({ taskId: task.id, participantId: participantId,
+        startMin: block.startMin, durMin: block.durMin, endMin: block.endMin });
+    }
+    function cmpValue(a, b) {
+      var as = String(a), bs = String(b);
+      return as < bs ? -1 : (as > bs ? 1 : 0);
+    }
+    groups.sort(function (a, b) { return cmpValue(a.participantId, b.participantId); });
+    var out = [];
+    for (i = 0; i < groups.length; i++) {
+      group = groups[i];
+      group.records.sort(function (a, b) {
+        return a.startMin - b.startMin || a.endMin - b.endMin || cmpValue(a.taskId, b.taskId);
+      });
+      var trackEnds = [];
+      for (j = 0; j < group.records.length; j++) {
+        var record = group.records[j], track = 0;
+        while (track < trackEnds.length && trackEnds[track] > record.startMin) track++;
+        trackEnds[track] = record.endMin;
+        record.track = track;
+        out.push(record);
+      }
+    }
+    return out;
+  }
+  // Pure reducer shared by pointer and keyboard task editing. Boundary clamping lands
+  // only on whole blocks, so an action never becomes a partial sub-block move.
+  function editAuthoringTaskBlock(seg, startMin, durMin, deltaMin, resize) {
+    var block = authoringTaskBlock(seg, startMin, durMin), win = DAY_WINDOWS[seg], step = SNAP_MIN[seg] || 60;
+    if (!block || !win || typeof deltaMin !== 'number' || !isFinite(deltaMin) || deltaMin % step !== 0) return block;
+    if (resize) {
+      var nextDur = Math.max(step, Math.min(win[1] - block.startMin, block.durMin + deltaMin));
+      return { startMin: block.startMin, durMin: nextDur, endMin: block.startMin + nextDur };
+    }
+    var nextStart = Math.max(win[0], Math.min(win[1] - block.durMin, block.startMin + deltaMin));
+    return { startMin: nextStart, durMin: block.durMin, endMin: nextStart + block.durMin };
+  }
+  // Manual or automatically re-clamped sends use the same day-level authoring grid
+  // and can never precede the producer's detailed completion time.
+  function authoringSendMinute(seg, requestedMin, producerFinishMin) {
+    if (typeof producerFinishMin !== 'number' || !isFinite(producerFinishMin)) return null;
+    var requested = typeof requestedMin === 'number' && isFinite(requestedMin) ? requestedMin : producerFinishMin;
+    return snapAuthoringMinute(seg, Math.max(requested, producerFinishMin), 'ceil');
+  }
   function lineById(plan, id) { return byId(plan.budget.lines, id); }
   function loadOf(plan, pid) { var n = 0; for (var i = 0; i < plan.tasks.length; i++) if (plan.tasks[i].assignedIds.indexOf(pid) >= 0) n++; return n; }
 
@@ -1066,29 +1197,33 @@
         remapAssignees(dseg.tasks.filter(function (t) { return !(placedIds[t.id] && placedIds[t.id].assignedIds); }), seatRemap);
       }
     }
-    // ---- Voyage §3: VIP buddies. plan.buddies {guestId: pid} (template seeds 2 of the 4 VIPs);
+    // ---- Voyage §3: outbound-care buddies. plan.buddies {guestId: pid} (template seeds 2 of the 4);
     // overrides.buddies assigns (pid) or clears (null) per guest. Assigning a buddy AUTO-INSTANTIATES
-    // that VIP's three voyage care tasks onto the buddy: assignedIds = [pid] and ownerRoleId re-homed
+    // that guest's four voyage care tasks onto the buddy: assignedIds = [pid] and ownerRoleId re-homed
     // to the buddy's CURRENT role, so ANY organizer may hold the duty without a misassignment.
     // Runs LAST (after the seats pass) so participant.roleId is final — buddies are person-ids, not
     // seats, so they never remap. Guards: only the 8 organizer pids are accepted; one organizer may
-    // buddy at most 2 VIPs (excess assignments are dropped deterministically in guest order);
-    // an unbuddied VIP's tasks stay unstaffed — the existing machinery prices that.
+    // buddy at most 2 care guests (excess assignments are dropped deterministically in guest order);
+    // an unbuddied care guest's tasks stay unstaffed — the existing machinery prices that.
     if (o.buddies && plan.buddies && plan.guests) for (k in o.buddies) {
       var bg = byId(plan.guests, k);
-      if (!bg || !bg.vip) continue;
+      if (!bg || !bg.voyageCare) continue;
       if (o.buddies[k] === null) delete plan.buddies[k];
       else plan.buddies[k] = o.buddies[k];
     }
     if (plan.buddies && plan.guests && plan.days && plan.days.voyage) {
       var vTasks = plan.days.voyage.tasks, roleOfPid = {}, buddyLoad = {}, bi, bj;
       for (bi = 0; bi < plan.participants.length; bi++) roleOfPid[plan.participants[bi].id] = plan.participants[bi].roleId;
+      // Care cards are authored only through the dedicated-buddy control. Discard any
+      // generic day-placement override first so hand-placing four different organizers
+      // cannot masquerade as one guest's continuous buddy relationship.
+      for (bi = 0; bi < vTasks.length; bi++) if (vTasks[bi].careGuestId) vTasks[bi].assignedIds = [];
       for (bi = 0; bi < plan.guests.length; bi++) {
-        var bGuest = plan.guests[bi]; if (!bGuest.vip) continue;
+        var bGuest = plan.guests[bi]; if (!bGuest.voyageCare) continue;
         var bPid = plan.buddies[bGuest.id];
-        if (!bPid || !SEAT_DEFAULT_PIDS[bPid]) continue;              // organizers (p01–p08) only
+        if (!bPid || !SEAT_DEFAULT_PIDS[bPid]) { delete plan.buddies[bGuest.id]; continue; } // organizers (p01–p08) only
         buddyLoad[bPid] = (buddyLoad[bPid] || 0) + 1;
-        if (buddyLoad[bPid] > 2) continue;                            // at most 2 VIPs per organizer
+        if (buddyLoad[bPid] > 2) { delete plan.buddies[bGuest.id]; continue; } // at most 2 care guests per organizer
         var bPre = ['t_v_star_', 't_v_esc_l_', 't_v_esc_d_', 't_v_esc_b_'];
         for (bj = 0; bj < bPre.length; bj++) {
           var bTask = byId(vTasks, bPre[bj] + bGuest.id);
@@ -1364,7 +1499,11 @@
     var carryByRes = null, carrySt = null;
     if (!(internalOpts && internalOpts.skipCarry) && seg !== 'load' && plan.manifest && plan.manifest.length) {
       var resMap = {}, needCarry = false, mri, mrj;
-      for (mri = 0; mri < plan.manifest.length; mri++) { var mIt = plan.manifest[mri]; (resMap[mIt.resourceId] = resMap[mIt.resourceId] || []).push(mIt.id); }
+      for (mri = 0; mri < plan.manifest.length; mri++) {
+        var mIt = plan.manifest[mri];
+        if (seg === 'return' ? mIt.returnRequired === false : mIt.outboundRequired === false) continue;
+        (resMap[mIt.resourceId] = resMap[mIt.resourceId] || []).push(mIt.id);
+      }
       for (mri = 0; mri < fds.length && !needCarry; mri++) { var mNr = fds[mri].neededResources || []; for (mrj = 0; mrj < mNr.length; mrj++) if (resMap[mNr[mrj]]) { needCarry = true; break; } }
       if (needCarry) { carryByRes = resMap; carrySt = carryState(plan); }   // carryState -> daySchedule(plan,'load') only; 'load' never consults carry, so recursion terminates
     }
@@ -1480,7 +1619,7 @@
       var at = allSeg[i], placed = isPlaced(at);
       if (at.required !== false && !placed) unplacedRequired.push(at.id);
       if (at.required === false && placed) decoysPlaced.push(at.id);
-      // careGuestId tasks are exempt from misassignment — ANY organizer may buddy a VIP (Voyage §3;
+      // careGuestId tasks are exempt from misassignment — ANY organizer may buddy a care guest (Voyage §3;
       // the buddies merge re-homes ownerRoleId anyway, this guards direct deck placements too)
       if (placed && !at.careGuestId) for (j = 0; j < at.assignedIds.length; j++) { var prid = partRole[at.assignedIds[j]]; if (prid && prid !== at.ownerRoleId) { misassigned.push(at.id); break; } }
     }
@@ -1521,8 +1660,12 @@
     }
     return gaps;
   }
-  function manifestChainGaps(plan) { return custodyGaps(plan, 'load', 'custody', plan.manifest || []); }
-  function manifestTransferGaps(plan) { return custodyGaps(plan, 'arrival', 'transferCustody', plan.manifest || []); }
+  function manifestChainGaps(plan) {
+    return custodyGaps(plan, 'load', 'custody', (plan.manifest || []).filter(function (m) { return m.outboundRequired !== false; }));
+  }
+  function manifestTransferGaps(plan) {
+    return custodyGaps(plan, 'arrival', 'transferCustody', (plan.manifest || []).filter(function (m) { return m.outboundRequired !== false; }));
+  }
   function manifestReturnGaps(plan) {
     var returnItems = (plan.manifest || []).filter(function (m) { return m.returnRequired !== false; });
     return custodyGaps(plan, 'return', 'returnCustody', returnItems);
@@ -1551,14 +1694,20 @@
   function carryState(plan) {
     var out = {}, items = plan.manifest || [], i;
     if (!items.length) return out;
+    var outboundItems = items.filter(function (m) { return m.outboundRequired !== false; });
     var returnItems = items.filter(function (m) { return m.returnRequired !== false; });
-    var loadSt = custodyStageState(plan, 'load', 'custody', items, SAIL_MIN);
-    var transferSt = custodyStageState(plan, 'arrival', 'transferCustody', items, null);
+    var loadSt = custodyStageState(plan, 'load', 'custody', outboundItems, SAIL_MIN);
+    var transferSt = custodyStageState(plan, 'arrival', 'transferCustody', outboundItems, null);
     var returnSt = custodyStageState(plan, 'return', 'returnCustody', returnItems, null);
     function combine(a, b) { return a === 'missing' || b === 'missing' ? 'missing' : (a === 'late' || b === 'late' ? 'late' : 'aboard'); }
     for (i = 0; i < items.length; i++) {
-      var it = items[i], longHaul = loadSt[it.id] || 'missing';
-      var hahajima = combine(longHaul, transferSt[it.id] || 'missing');
+      var it = items[i];
+      if (it.outboundRequired === false) {
+        out[it.id] = { load: 'not-applicable', voyage: 'not-applicable', arrival: 'not-applicable',
+          ops: 'joins-day-6', fishday: 'not-applicable', 'return': returnSt[it.id] || 'missing' };
+        continue;
+      }
+      var longHaul = loadSt[it.id] || 'missing', hahajima = combine(longHaul, transferSt[it.id] || 'missing');
       var ret = it.returnRequired === false ? 'not-required' : combine(hahajima, returnSt[it.id] || 'missing');
       out[it.id] = { load: longHaul, voyage: longHaul, arrival: hahajima, ops: hahajima, fishday: hahajima, 'return': ret };
     }
@@ -1787,10 +1936,10 @@
     else for (i = 0; i < dd.handoffs.length; i++) hoff[dd.handoffs[i].id] = { channel: 'faceToFace' };
     var o = { days: {} }; o.days[seg] = { handoffs: hoff };
     if (dd.canonPlacement) o.days[seg].placement = clone(dd.canonPlacement);
-    // Voyage §3: authoring the ship day canonically = the 4 VIP buddies (one distinct organizer
+    // Voyage §3: authoring the ship day canonically = the 4 outbound-care buddies (one distinct organizer
     // each, staggered purser windows already in the template) + the company-card authority.
     if (seg === 'voyage') {
-      o.buddies = { gd_nagatani: 'p02', gd_kadou: 'p07', gd_watanabe: 'p01', gd_yamate: 'p04' };
+      o.buddies = { gd_watanabe: 'p01', gd_nagatani: 'p02', gd_kadou: 'p07', gd_maeda: 'p04' };
       o.budget = { lines: { bl_card: { approverRoleId: 'budgetLead', payMethod: 'card' } } };
     }
     return o;
@@ -2502,8 +2651,8 @@
     for (i = 0; i < reqTasks.length; i++) {
       var t = reqTasks[i];
       if (t.safetyGate) { out.push(tripSafetyGateAtom(bucket, plan, seg, t, tmplDur, ds)); }
-      // Voyage §3.3 amendments: flex standbys and per-VIP care tasks are exempt from exec-lane
-      // pricing (care tasks are priced by the per-VIP care atoms below; flex is deliberately free)
+      // Voyage §3.3 amendments: flex standbys and per-guest care tasks are exempt from exec-lane
+      // pricing (care tasks are priced by the per-guest care atoms below; flex is deliberately free)
       else if (!t.flex && !t.careGuestId) {
         if (!laneTasks[t.ownerRoleId]) { laneTasks[t.ownerRoleId] = []; laneOrder.push(t.ownerRoleId); }
         laneTasks[t.ownerRoleId].push(t.id);
@@ -2521,13 +2670,13 @@
     // 5. fishday computed quality gates (cookblock/allergy) — no owning single task.
     if (seg === 'fishday') out = out.concat(tripFishdayQualityGates(plan, tmplDur, ds));
 
-    // 5b. voyage computed atoms (Voyage §3/§4): one 1-pt CARE atom per VIP guest — earned iff all
-    // all of the VIP's care tasks (starlink + lunch/dinner/next-morning breakfast escorts) are staffed at template floor
+    // 5b. voyage computed atoms (Voyage §3/§4): one 1-pt CARE atom per outbound care guest — earned iff all
+    // of that guest's care tasks (starlink + lunch/dinner/next-morning breakfast escorts) are staffed at template floor
     // (the worst task decides, like a collapsed socket). A DOUBLE-BOOKED buddy is deliberately NOT
     // billed here — spec §3 maps it to "overload/idle", i.e. the generic per-person overlap
     // machinery (overbookMin / OVERLOAD readiness / efficiency), never a second Score row. The id
-    // is task-homed on the VIP's starlink task (the constitution's convention for derivable ids);
-    // itemRef carries the guest + all three task ids for the ledger.
+    // is task-homed on the guest's starlink task (the constitution's convention for derivable ids);
+    // itemRef carries the guest + all four task ids for the ledger.
     if (seg === 'voyage') {
       var careBy = {}, careOrder = [], liveById = {};
       for (i = 0; i < liveTasks.length; i++) liveById[liveTasks[i].id] = liveTasks[i];
@@ -2539,9 +2688,12 @@
       }
       for (i = 0; i < careOrder.length; i++) {
         var gid = careOrder[i], cTids = careBy[gid], cOk = true, cSt = 'ok', cj;
+        var cBuddy = plan.buddies && plan.buddies[gid];
+        if (!cBuddy || !isOrganizerParticipant(plan, cBuddy)) { cOk = false; cSt = 'missing'; }
         for (cj = 0; cj < cTids.length && cOk; cj++) {
           var cLive = liveById[cTids[cj]], cFloor = tmplDur[cTids[cj]];
           if (!cLive || !isPlaced(cLive)) { cOk = false; cSt = 'missing'; }
+          else if (cLive.assignedIds.length !== 1 || cLive.assignedIds[0] !== cBuddy) { cOk = false; cSt = 'broken'; }
           else if (typeof cFloor === 'number' && cLive.durMin < cFloor) { cOk = false; cSt = 'compressed'; }
         }
         out.push({ id: 'voyage_quality_t_v_star_' + gid, bucket: 'voyage', dimension: 'quality',
@@ -2591,10 +2743,14 @@
       rawTotal += a.earned;
     }
     var total = Math.max(0, Math.min(100, Math.round(rawTotal)));
-    // clean = every atom at max AND no live classic detector — the one legacy check without an
-    // atom home (return logistics staffing) must still withhold the A ("zero known gaps").
+    // clean = every atom at max AND no known modeled gap. Classic detectors and the
+    // item-level custody chains include gaps that do not each own a separately weighted atom;
+    // either still withholds the A under the "zero known gaps" rule.
+    var custodyClean = manifestChainGaps(plan).length === 0 && manifestTransferGaps(plan).length === 0 &&
+      manifestReturnGaps(plan).length === 0;
+    var readinessClean = AUTHORABLE.every(function (seg) { return dayReadiness(plan, seg).length === 0; });
     var clean = atoms.every(function (a) { return a.maxPts > 0 ? a.earned === a.maxPts : a.earned === 0; }) &&
-      detect(plan).length === 0;
+      detect(plan).length === 0 && custodyClean && readinessClean;
     var withheldA = total >= GRADE_BANDS.A && !clean;
     var grade = (total >= GRADE_BANDS.A && clean) ? 'A' : (total >= GRADE_BANDS.B ? 'B' : (total >= GRADE_BANDS.C ? 'C' : 'D'));
     return { total: total, grade: grade, gate: { clean: clean, withheldA: withheldA },
@@ -2622,6 +2778,7 @@
     var longHaul = byId(legs, 'out-ogasawara-maru');
     var inter = byId(legs, 'out-interisland');
     var interVessel = byId(vessels, 'interisland-vessel');
+    var exchange = plan.project && plan.project.guestRotationExchange;
     var returnLegs = legs.filter(function (x) { return x.direction === 'return'; });
     var returnConfirmed = !!(plan.project && plan.project.route && plan.project.route.returnConfirmed) && returnLegs.length > 0 &&
       returnLegs.every(function (x) {
@@ -2644,6 +2801,11 @@
           !!inter && typeof inter.departMin === 'number' && isFinite(inter.departMin),
         ['out-ogasawara-maru', 'out-chichijima-transfer', 'out-interisland'],
         ['out-ogasawara-maru.arriveMin', 'out-interisland.departMin']),
+      assumption('day-6-guest-exchange',
+        'Obtain owner attestation for the Day-6 guest exchange route, timing, and luggage handoff',
+        '6日目のゲスト交代ルート・時刻・荷物引継ぎについて主催者確認を得る',
+        !!exchange && exchange.day === 6 && exchange.logisticsAttested === true,
+        [], ['project.guestRotationExchange.logisticsAttested']),
       assumption('return-timetable', 'Confirm the complete return timetable', '帰路全体の時刻表を確認',
         returnConfirmed,
         returnLegs.map(function (x) { return x.id; }), ['project.route.returnConfirmed', 'return.*.departMin|arriveMin'])
@@ -2690,6 +2852,10 @@
     // Physical route model: factual outbound chain + explicitly inferred reverse return.
     PHYSICAL_STOPS: PHYSICAL_STOPS, VESSELS: VESSELS, ITINERARY: ITINERARY,
     physicalStop: physicalStop, vessel: vessel, itineraryLeg: itineraryLeg,
+    guestRosterForDay: guestRosterForDay, snapAuthoringMinute: snapAuthoringMinute,
+    authoringTaskBlock: authoringTaskBlock, authoringLaneLayout: authoringLaneLayout,
+    editAuthoringTaskBlock: editAuthoringTaskBlock,
+    authoringSendMinute: authoringSendMinute,
     HOTEL_DEPART_MIN: HOTEL_DEPART_MIN, SAIL_MIN: SAIL_MIN,
     VOYAGE_APPROX_MIN: VOYAGE_APPROX_MIN, VOYAGE_END_MIN: VOYAGE_END_MIN,
     routeSceneId: routeSceneId, routeState: routeState,

@@ -13,9 +13,9 @@ travels. The mission is larger than a clean schedule: bring all 24 people home s
 the hosted guests, strengthen the relationship, and help the team learn without blaming a person
 for a system-design failure.
 
-**New — the representative fishing day (Day 3, minute-level).** The heart of the game is the
+**New — the representative fishing day (Day 3, whole-hour block planning).** The heart of the game is the
 **temporal information axis**: information is only useful if it reaches *the right person
-before their task starts*. On the fishday editor you re-time task blocks on per-person lanes
+before their task starts*. On the fishday editor you arrange task blocks on a **whole-hour grid** across per-person lanes
 and **draw every information handoff as an arrow** (who → whom, sent when, on which channel —
 face-to-face +0 · radio +1 · phone +2 · chat +10 · notice board +30 minutes). An arrow that
 was **never drawn** makes the crew guess (wrong fish → the galley reworks dinner 🔁); an arrow
@@ -30,16 +30,22 @@ member — what they hold, what they wait on — and optionally hand a card over
 **10:00**, transfers to Takeshiba, and boards the **Ogasawara-maru** for its confirmed
 **11:00** departure. The long-haul crossing takes about one day to Chichijima. There the
 group changes to a separate inter-island vessel—whose name and connection times are left
-explicitly unconfirmed—for the final leg to Hahajima and Hinata. The 4 main guests each need
-a dedicated buddy aboard to register Starlink on their phone via the company credit card and
-escort them to ship meals. Custody mistakes **carry over across both ship handovers**: a jig
+explicitly unconfirmed—for the final leg to Hahajima and Hinata. The outbound main guests are
+**Watanabe, Nagatani, Kadou, and Maeda**; each needs a dedicated buddy aboard during Days 0–1 for
+four care tasks: Starlink registration on their phone via the company credit card, lunch escort,
+dinner escort, and next-morning breakfast escort. Custody mistakes **carry over across both ship handovers**: a jig
 case omitted in Tokyo or lost at the Chichijima transfer stalls the fishing-day gear check.
-The return rehearsal uses the reverse route, clearly labeled as an inference with no claimed
-timetable. There's also an
+The Day-6 roster exchange is known by name, but its route, timing, and luggage handoff are still
+unconfirmed. The return rehearsal uses the reverse route, clearly labeled as an inference with no
+claimed timetable. There's also an
 ambient **sound layer** (surf, wind, an engine hum aboard, a freeze bell, the hanko *thock*)
 behind a 🔊 header toggle — muted by default, and the game never depends on it.
 The stage follows six physical identities: Tokyo hotel → Takeshiba terminal → Ogasawara-maru →
 Chichijima transfer → unnamed inter-island vessel → Hahajima/Hinata.
+
+The main-guest rotation is explicit and inclusive: **Days 0–5 — Watanabe, Nagatani, Kadou,
+Maeda; Days 6–10 — Watanabe, Nagatani, Yamate, Saito.** This four-person priority roster is
+separate from the existing 13-person hosted-guest planning/headcount envelope.
 
 > 止まったキャラクターは、失敗した社員ではない。止まった場所こそが、計画を直すべき場所である。
 > The stalled character isn't a failed employee — the place they stalled is the place to fix the plan.
@@ -64,9 +70,9 @@ fully offline. / **`index.html`** をブラウザで開くだけ。ビルド・�
    at-sea communications outage and opens Fishing Day with one phone relay that needs a feasible
    fallback; leaving Challenge restores the underlying normal plan unchanged.
 2. **Read the plan** — the Ogasawara event is pre-built (canvas, org & roles, 10-day timeline).
-   The team is **8 AIBOS organizers + 3 contracted chefs** who run it, hosting **13 group-company guests**.
+   The team is **8 AIBOS organizers + 3 chefs/cooking staff** who run it, with **13 hosted guest records** in the planning envelope.
 3. **Choose a day** — rehearse **Day 0 (hotel → Takeshiba)**, **Days 0–1 (Ogasawara-maru)**,
-   **Day 1 (Chichijima transfer → Hahajima/Hinata)**, **Days 2–9 (Operations)**, **Day 3 (Fishing day, minute-level)**,
+   **Day 1 (Chichijima transfer → Hahajima/Hinata)**, **Days 2–9 (Operations)**, **Day 3 (Fishing day, whole-hour blocks)**,
    or **Day 10 (Return)** one at a time, or run the **whole trip**.
 4. **Close the gaps** — the demo opens gappy on purpose: **7 classic frame gaps** (ferry-time
    sharing, safety abort-authority, meals budget authority, illness report route, site-lead
@@ -76,7 +82,7 @@ fully offline. / **`index.html`** をブラウザで開くだけ。ビルド・�
    tackle-list arrow sent late on a slow chat channel.
 5. **Predict, then run** — Practice and Challenge ask for the expected root cause and evidence from
    the plan. Watch the site map; gaps make crews pile up at a zone and show the reason.
-   The fishing day runs minute-by-minute with checkpoint pauses for inspect / intervene.
+   Fishing Day is authored in whole-hour blocks; its deterministic rehearsal retains detailed wait and delivery evidence and pauses at checkpoints for inspect / intervene.
 6. **Review and explain** — compare the prediction with the first modeled evidence, explain why a
    repair addresses the causal chain, and name where the pattern could transfer to another project.
    The report also shows the day's grade (its slice of the trip-wide 100), the itemized **Score Ledger**,
@@ -110,10 +116,10 @@ The same 100 points slice two ways, both exact:
 |---|---|---|
 | Trip frame | 11 | 旅行全体の枠 |
 | Load & Board (Day 0, Tokyo) | 10 | 積込・乗船 |
-| Ship Day (Day 0, aboard) | 11 | 船上 |
+| Outbound Voyage (Days 0–1, aboard) | 11 | 船上 |
 | Arrival (Day 1) | 12 | 到着日 |
 | Operations (Days 2–9) | 13 | 運営日 |
-| Fishing day (Day 3, minute-level) | 34 | 釣行日 |
+| Fishing day (Day 3, whole-hour blocks) | 34 | 釣行日 |
 | Return — Pack & Sail (Day 10) | 9 | 帰着日 |
 
 | Dimension (what) | Max | 観点 |
@@ -128,22 +134,24 @@ The same 100 points slice two ways, both exact:
 Fishing day is the heaviest bucket and Information the heaviest dimension — clocked information,
 not raw task completion, is this game's thesis, so it's priced that way.
 
-**Grade gate.** `A` requires **total ≥ 90 AND clean** — *clean* means every atom sits at its max
-and no classic problem detector is still live. Score ≥ 90 with one surviving gap shows its true
+**Grade gate.** `A` requires **total ≥ 90 AND clean** — *clean* means every atom sits at its max,
+no classic problem detector is live, and no authorable-day readiness gap remains (including custody
+or overload). Score ≥ 90 with one surviving gap shows its true
 number with the A withheld, e.g. `97 · B — an A requires zero known gaps.` There's no hidden cap
 anymore — the number on screen is the number you earned.
 
 **Two headlines, deliberately different questions.** **Score** (`scoreTrip`) asks *is the plan
 sound* — causes, plan decisions. **Efficiency** (`tripEfficiency`) asks *does it waste anyone's
-time* — effects, wasted minutes across the four modeled days. One fault (a late info arrow) can
+time* — effects, wasted minutes across the six modeled campaign segments. One fault (a late info arrow) can
 dock both — the Score row, because information has a clock, and Efficiency, because of the idle
 minutes it caused — but never twice inside a single number.
 
 There is a third, deliberately separate question: **is the real trip ready to execute?** A
 `100 / A / clean` plan completes the modeled rehearsal, but it is not real-world ready while
 critical owner-supplied facts remain unconfirmed: the Tokyo-hotel breakfast time, the inter-island
-vessel identity, the Chichijima connection timetable, and the return timetable. These facts do not
-invent score deductions; `executionReadiness(plan)` reports them beside the rehearsal result.
+vessel identity, the Chichijima connection timetable, the Day-6 guest-exchange route/timing/luggage
+handoff, and the return timetable. These facts do not invent score deductions;
+`executionReadiness(plan)` reports them beside the rehearsal result.
 
 The report renders an itemized **Score Ledger**: bucket → dimension → atom, each row a name, a
 status chip (OK / Missing / Late / Partial 部分点 / Broken / Overlap / Compressed / Decoy), a
@@ -175,7 +183,7 @@ OgasawaraSim/
 ```
 
 `engine.js` is deterministic (seeded RNG) and runs in the browser **and** Node, so the
-teaching curve is **headless-verified**: `node verify.js` (385 checks) pins the atom count (99),
+teaching curve is **headless-verified**: `node verify.js` (431/431 checks passed) pins the atom count (99),
 both matrix axes (bucket totals 11/10/11/12/13/**34**/9 across frame · load · voyage · arrival ·
 ops · **fishing day** · return, dimension totals **37**/29/21/7/5/1 for info/exec/safety/quality/
 money/people), that earned atoms always sum to the shown total, the exact seed scores below, a
@@ -187,8 +195,9 @@ communications-outage scenario. Verified seed curve:
 
 ```
 gappy plan                          D    52 /100   trip efficiency  86%
-  bucket earned → frame 0 · load 5 · voyage 8 · arrival 6 · ops 11 · fishday 15 · return 8
-  … classic fixes + authoring the coarse days raise it step by step, monotonically …
+  bucket earned → frame 0 · load 5 · voyage 8 · arrival 5 · ops 11 · fishday 15 · return 8
+  +applyDayFix(Arrival)             +7
+  … classic fixes + authoring the other coarse days raise it step by step, monotonically …
 +fixHandoffs (draw every fishing-  +16 — the single largest jump of any individual fix
  day information arrow)
 canonical (every classic fix +      A   100 /100   clean · trip efficiency 100%
@@ -196,7 +205,7 @@ canonical (every classic fix +      A   100 /100   clean · trip efficiency 100%
 ```
 
 `engine.js` は決定的（シード乱数）でブラウザでも Node でも動き、学びの曲線を `node verify.js`
-（385チェック）で検証済み：ギャップだらけの計画は52点・D（旅程効率86%）、情報の矢印を描く修正
+（431/431チェック合格）で検証済み：ギャップだらけの計画は52点・D（旅程効率86%）、情報の矢印を描く修正
 （+fixHandoffs）が単独最大の+16点、全修正で100点・A・clean（旅程効率100%）。同一シードで
 同一結果を再現。
 
@@ -206,7 +215,7 @@ canonical (every classic fix +      A   100 /100   clean · trip efficiency 100%
 This is the original simulation MVP plus its **Teaching MVP** learning layer: the fishday temporal layer
 (CLAUDE.md §12) and the whole-trip **scoreTrip** ledger (CLAUDE.md §23): the guided Ogasawara
 rehearsal, eight problem detectors mapped to character behaviors, all six campaign segments authorable
-(hour-level Load/Voyage/Arrival/Ops/Return, minute-level Fishing day with the timeline + info-arrow editor),
+(with Day 3 on a whole-hour grid in the shared timeline + info-arrow editor),
 six route-aware physical scenes plus a Whole Trip overview, checkpoints with intervene, trip Efficiency %, the 99-atom
 Score Ledger, the Learn/Practice/Challenge curriculum, prediction/debrief/history, execution-readiness
 contract, channel feasibility, and one deterministic communications-outage challenge.

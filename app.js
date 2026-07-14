@@ -38,7 +38,8 @@
           scenario: x.scenario === 'comms-outage' ? 'comms-outage' : 'normal', score: clamp(Number(x.score) || 0, 0, 100),
           grade: typeof x.grade === 'string' ? x.grade.slice(0, 2) : '', gapCount: Math.max(0, Math.min(999, Number(x.gapCount) || 0)), actualCause: cause,
           prediction: pc ? { cause: pc, rationale: String(x.prediction.rationale || '').slice(0, 240), createdAt: Number(x.prediction.createdAt || x.prediction.at) || 0 } : null,
-          evidence: Array.isArray(x.evidence) ? x.evidence.slice(0, 3) : [], buckets: x.buckets && typeof x.buckets === 'object' ? x.buckets : {},
+          evidence: Array.isArray(x.evidence) ? x.evidence.slice(0, 3) : [], observedRepair: x.observedRepair === true,
+          buckets: x.buckets && typeof x.buckets === 'object' ? x.buckets : {},
           unresolvedAssumptions: Array.isArray(x.unresolvedAssumptions) ? x.unresolvedAssumptions.slice(0, 20).map(function (v) { return String(v).slice(0, 80); }) : [],
           reflection: { why: String(x.reflection && x.reflection.why || '').slice(0, 400), transfer: String(x.reflection && x.reflection.transfer || '').slice(0, 400) } };
       });
@@ -98,17 +99,20 @@
     return true;
   }
   function orgSeatReset() { orgOv = { owner: 'p01', pm: 'p02', siteLead: 'p03', budgetLead: 'p04', safetyLead: 'p05', logi: 'p06', comms: 'p07', specialist: 'p08' }; }
-  // Voyage §3 VIP buddies: overrides.buddies {guestId: pid|null}. Empty = template default
+  // Voyage §3 outbound-care buddies: overrides.buddies {guestId: pid|null}. Empty = template default
   // (byte-identical-default invariant, mirrors orgOv/mcOv — an untouched care shelf adds NOTHING
   // to cfg.overrides). Person-based (pid), so a buddy composes with a seat swap: the SAME person
   // still escorts the VIP after the seats move. mergePlan re-homes the auto-instantiated care
   // tasks onto the buddy and enforces the 2-VIP-per-organizer cap; the UI rejects before writing.
   var buddyOv = {};
   function buddyReset() { buddyOv = {}; }
-  // VIP care count on a merged plan: how many other VIPs (≠ exceptGid) a person already buddies.
+  function isVoyageCareGuest(g) {
+    return !!(g && (typeof g.voyageCare === 'boolean' ? g.voyageCare : g.vip));
+  }
+  // Outbound-care count on a merged plan: how many other care guests (≠ exceptGid) a person already buddies.
   function buddyLoadOf(plan, pid, exceptGid) {
     var n = 0, gs = plan.guests || [];
-    for (var i = 0; i < gs.length; i++) if (gs[i].vip && gs[i].id !== exceptGid && plan.buddies[gs[i].id] === pid) n++;
+    for (var i = 0; i < gs.length; i++) if (isVoyageCareGuest(gs[i]) && gs[i].id !== exceptGid && plan.buddies[gs[i].id] === pid) n++;
     return n;
   }
   // §20 authorable-days editor state — ONE deck→arrange→connect override store for all four
@@ -250,6 +254,15 @@
       var on = b.dataset.level === learningLevel; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on ? 'true' : 'false');
     });
     var desc = $('learning-level-desc'); if (desc) desc.textContent = T()['level' + learningLevel.charAt(0).toUpperCase() + learningLevel.slice(1) + 'Desc'];
+    // The compact learning disclosure (when present) echoes the selected level in
+    // its summary, so the collapsed control still communicates the active rules.
+    // Support both the agreed id and a data-hook while the HTML/CSS landing is
+    // integrated in parallel.
+    var summaryLevel = $('learning-summary-level') || $('learning-level-summary');
+    if (summaryLevel) summaryLevel.textContent = learningLevelLabel(learningLevel);
+    document.querySelectorAll('[data-learning-summary-level]').forEach(function (el) {
+      el.textContent = learningLevelLabel(learningLevel);
+    });
     var chip = $('scenario-chip');
     if (chip) {
       chip.classList.toggle('hidden', learningLevel !== 'challenge');
@@ -325,7 +338,10 @@
     killReportStage();                                               // ...and the report-stage rAF (§S3; renderReport re-boots it)
     if (name !== 'report') rsStampKey = null;                        // leaving the report re-arms the hanko thock for the NEXT report
     if (typeof closeDayDrawer === 'function') closeDayDrawer();      // the drawer worker asked for a clean reset when leaving setup
-    for (i = 0; i < screens.length; i++) $(screens[i]).classList.toggle('hidden', screens[i] !== name);
+    for (i = 0; i < screens.length; i++) {
+      $(screens[i]).classList.toggle('hidden', screens[i] !== name);
+      document.body.classList.toggle('screen-' + screens[i], screens[i] === name);
+    }
     if (name !== 'run') $('live-dock').classList.add('hidden');      // the live dock only ever shows INSIDE run (callers show it)
     if (name !== 'run' && window.PRS_SOUND) window.PRS_SOUND.ambient(null);   // ambient bed stop, run-exit (sound.js §W3)
     document.body.classList.toggle('running', name === 'run');
@@ -391,14 +407,14 @@
     });
   }
 
-  // Voyage §3 — the All-settings fallback for the care shelf: one <select> per VIP over the 8
+  // Voyage §3 — the All-settings fallback for the care shelf: one <select> per outbound care guest over the 8
   // organizers (+ "none"), writing the SAME overrides.buddies as the tray. The cap is enforced in
   // the change handler (a 3rd VIP on one organizer is rejected + reverted), mirroring the tray.
   function buildBuddyCard() {
     var box = $('buddy-card'); if (!box) return;
     var t = T(), plan = currentPlan();
     var ttl = $('buddy-title'); if (ttl) ttl.textContent = t.gdBuddyLbl;
-    var vips = (plan.guests || []).filter(function (g) { return g.vip; });
+    var vips = (plan.guests || []).filter(isVoyageCareGuest);
     var orgs = plan.participants.filter(function (p) { return SEAT_ROLES.indexOf(p.roleId) >= 0; });
     box.innerHTML = vips.map(function (g) {
       var bpid = plan.buddies[g.id] || '';
@@ -436,7 +452,23 @@
       return '<div class="tl-stage ' + seg + (daySel === 'all' || daySel === seg ? ' sel' : '') + '">' +
         '<div class="tl-h">' + dayLabel(seg) + '</div>' + chips + '</div>';
     }).join('');
-    box.innerHTML = '<div class="tl-rail">' + rail + '</div><div class="tl-blocks">' + blocks + '</div>';
+    var segRange = { load: [0, 0], voyage: [0, 1], arrival: [1, 1], ops: [2, days - 1], fishday: [3, 3], 'return': [days, days], all: [0, days] };
+    var focus = segRange[daySel] || [0, 10];
+    var rotations = (plan.guestRotations || []).map(function (wave) {
+      var roster = typeof P.guestRosterForDay === 'function' ? P.guestRosterForDay(plan, wave.startDay) : [];
+      var active = wave.endDay >= focus[0] && wave.startDay <= focus[1];
+      var period = T().gdRotationDays(wave.startDay, wave.endDay);
+      var rosterText = roster.map(function (g) { return nm(g.name); }).join(', ');
+      return '<div class="tl-guest-wave' + (active ? ' sel' : '') + '" role="group" aria-label="' + period + ': ' + rosterText +
+        (active ? ' · ' + T().gdRotationRelevant : '') + '"' + (active ? ' aria-current="true"' : '') +
+        ' data-start-day="' + wave.startDay + '" data-end-day="' + wave.endDay + '">' +
+        '<span class="tl-guest-days">' + T().gdRotationDays(wave.startDay, wave.endDay) + '</span>' +
+        (active ? '<em class="tl-guest-current">' + T().gdRotationRelevant + '</em>' : '') +
+        '<span class="tl-guest-names">' + roster.map(function (g) { return '<span>' + nm(g.name) + '</span>'; }).join('') + '</span></div>';
+    }).join('');
+    var guestRotation = rotations ? '<div class="tl-guest-rotation"><div class="tl-guest-heading">' + T().gdRotationTitle +
+      '<small>' + T().gdRotationNote(plan.project.guests) + '</small></div><div class="tl-guest-waves">' + rotations + '</div></div>' : '';
+    box.innerHTML = '<div class="tl-rail">' + rail + '</div>' + guestRotation + '<div class="tl-blocks">' + blocks + '</div>';
   }
 
   function roleOpts(val, allowNone) {
@@ -657,11 +689,12 @@
 
   // =========================================================================
   // DAY EDITOR — ONE deck→arrange→connect editor for all four day tabs (§20).
-  // Fishday keeps its per-participant minute-level authoring exactly as before;
+  // Fishing Day uses per-participant hour-block authoring; detailed rehearsal evidence
+  // remains minute-precise so dependency waits and communication latency stay measurable.
   // Arrival/Ops/Return now share the identical renderer + drag/wire machinery,
   // reading P.tasksForSeg/P.handoffsForSeg and writing dayOv[seg] (§20.3).
   // =========================================================================
-  var PXM = 0.8, FD_T0 = P.DAY_START_MIN, FD_T1 = P.DAY_END_MIN, LANE_H = 40, LBL_W = 108, RULER_H = 26;
+  var PXM = 0.8, FD_T0 = P.DAY_START_MIN, FD_T1 = P.DAY_END_MIN, LANE_H = 40, LBL_W = 108, RULER_H = 26, FD_TRACK_PITCH = 28;
   var fdDrag = null, fdWire = null, fdGhost = null, arrowEdit = null, arrowEditSeg = null, placingChip = null, fdUid = 1;
   // AoE-style resource-tick: float a "+N" over the projection when a fix raises the score
   function floatDelta(host, txt, cls) {
@@ -669,17 +702,70 @@
     var f = document.createElement('span'); f.className = 'score-float ' + (cls || 'up'); f.textContent = txt;
     host.appendChild(f); setTimeout(function () { if (f.parentNode) f.parentNode.removeChild(f); }, 1000);
   }
-  // per-seg authoring window + placement snap (§20.1: fishday 15 min, others 60)
+  // per-seg authoring window + placement snap (§20.1: Fishing Day is now literal 60-minute steps)
   function segWin(seg) { return P.DAY_WINDOWS[seg] || [P.DAY_START_MIN, P.DAY_END_MIN]; }
   function segSnap(seg) { return P.SNAP_MIN[seg] || 60; }
+  function snapAuthMinute(seg, minute, direction) {
+    if (typeof P.snapAuthoringMinute === 'function') return P.snapAuthoringMinute(seg, minute, direction);
+    var win = segWin(seg), sn = segSnap(seg), u = (minute - win[0]) / sn;
+    u = direction === 'ceil' ? Math.ceil(u) : (direction === 'floor' ? Math.floor(u) : Math.round(u));
+    return clamp(win[0] + u * sn, win[0], win[1]);
+  }
+  function authoringBlock(seg, task) {
+    if (seg === 'fishday' && typeof P.authoringTaskBlock === 'function') {
+      return P.authoringTaskBlock(seg, task.startMin, task.durMin);
+    }
+    return { startMin: task.startMin, durMin: task.durMin, endMin: task.startMin + task.durMin };
+  }
+  function editAuthoringBlock(seg, startMin, durMin, deltaMin, resize) {
+    if (typeof P.editAuthoringTaskBlock === 'function') return P.editAuthoringTaskBlock(seg, startMin, durMin, deltaMin, resize);
+    var win = segWin(seg), sn = segSnap(seg), next = resize ? durMin + deltaMin : startMin + deltaMin;
+    if ((resize && (next < sn || startMin + next > win[1])) || (!resize && (next < win[0] || next + durMin > win[1]))) {
+      return { startMin: startMin, durMin: durMin, endMin: startMin + durMin };
+    }
+    return resize ? { startMin: startMin, durMin: next, endMin: startMin + next } :
+      { startMin: next, durMin: durMin, endMin: next + durMin };
+  }
+  function authoringSend(seg, requestedMin, producerFinishMin) {
+    if (typeof P.authoringSendMinute === 'function') return P.authoringSendMinute(seg, requestedMin, producerFinishMin);
+    var requested = typeof requestedMin === 'number' && isFinite(requestedMin) ? requestedMin : producerFinishMin;
+    return snapAuthMinute(seg, Math.max(requested, producerFinishMin), 'ceil');
+  }
+  function authoringTimeText(seg, task) {
+    var block = authoringBlock(seg, task);
+    return seg === 'fishday' && block ? hhmm(block.startMin) + '–' + hhmm(block.endMin) : taskTimeText(task);
+  }
   function fdX(min) { var w = segWin(daySel); return LBL_W + (min - w[0]) * PXM; }
   function fdMin(x) { var w = segWin(daySel), sn = segSnap(daySel); return clamp(Math.round(((x - LBL_W) / PXM + w[0]) / sn) * sn, w[0], w[1]); }
   function cardOwnerOf(plan, cid) { var c = byId(plan.infoCards, cid); return c ? c.ownerRoleId : null; }
   // fishday-only producer lookup (Live mode's gap flow depends on this exact — plan.tasks, day==='fishday' — shape)
   function producerOf(plan, cid) { for (var i = 0; i < plan.tasks.length; i++) { var t = plan.tasks[i]; if (t.day === 'fishday' && (t.produces || []).indexOf(cid) >= 0) return t; } return null; }
-  function fdBlockGeo(plan, tk) {
+  // Day 3 projects detailed tasks onto whole hours, so formerly adjacent tasks can
+  // occupy the same horizontal interval. Give every deterministic helper track a
+  // real 28px row (26px card + 2px gap), growing only that participant's lane.
+  // Other days retain their exact fixed 40px lane geometry.
+  function authoringLanes(seg, tasks, participants) {
+    var geo = { byTask: Object.create(null), maxTrack: Object.create(null), byParticipant: Object.create(null), byIndex: [], bottom: RULER_H };
+    if (seg === 'fishday' && typeof P.authoringLaneLayout === 'function') {
+      P.authoringLaneLayout(seg, tasks).forEach(function (rec) {
+        geo.byTask[rec.taskId] = rec;
+        geo.maxTrack[rec.participantId] = Math.max(geo.maxTrack[rec.participantId] || 0, rec.track);
+      });
+    }
+    (participants || []).forEach(function (pp, i) {
+      var maxTrack = seg === 'fishday' ? (geo.maxTrack[pp.id] || 0) : 0;
+      var lane = { top: geo.bottom, height: LANE_H + maxTrack * FD_TRACK_PITCH, maxTrack: maxTrack };
+      geo.byParticipant[pp.id] = lane; geo.byIndex[i] = lane; geo.bottom += lane.height;
+    });
+    return geo;
+  }
+  function fdBlockGeo(plan, tk, laneGeo) {
     var lane = 0; plan.participants.forEach(function (pp, i) { if (pp.id === tk.assignedIds[0]) lane = i; });
-    return { x: fdX(tk.startMin), w: Math.max(10, tk.durMin * PXM), y: RULER_H + lane * LANE_H + 7 };
+    var block = authoringBlock(daySel, tk);
+    var row = laneGeo && laneGeo.byIndex[lane];
+    var laneTop = row ? row.top : RULER_H + lane * LANE_H;
+    var rec = laneGeo && laneGeo.byTask[tk.id], track = daySel === 'fishday' && rec ? rec.track : 0;
+    return { x: fdX(block.startMin), w: Math.max(10, block.durMin * PXM), y: laneTop + 7 + track * FD_TRACK_PITCH };
   }
 
   // ---- seg-scoped info-flow lens (mirrors engine.js's resolveSendMin/staticArrival/infoArrival,
@@ -771,10 +857,23 @@
     card.classList.remove('hidden');
     var seg = daySel, t0 = T(), plan = currentPlan();
     var segT = P.tasksForSeg(plan, seg), segH = P.handoffsForSeg(plan, seg), fd = P.daySchedule(plan, seg);
-    if (seg === 'fishday') { $('fd-title').textContent = t0.fdTitle; $('fd-hint').textContent = t0.fdHint; }
+    var laneGeo = authoringLanes(seg, segT, plan.participants);
+    var rotationInline = '';
+    if (plan.guestRotations && typeof P.guestRosterForDay === 'function') {
+      var focusDays = seg === 'load' ? [0, 0] : (seg === 'voyage' ? [0, 1] : (seg === 'arrival' ? [1, 1] :
+        (seg === 'fishday' ? [3, 3] : (seg === 'return' ? [plan.project.days, plan.project.days] : [2, plan.project.days - 1]))));
+      var rotationParts = plan.guestRotations.filter(function (wave) {
+        return wave.endDay >= focusDays[0] && wave.startDay <= focusDays[1];
+      }).map(function (wave) {
+        var names = P.guestRosterForDay(plan, wave.startDay).map(function (g) { return nm(g.name); }).join(', ');
+        return t0.gdRotationDays(wave.startDay, wave.endDay) + ': ' + names;
+      });
+      if (rotationParts.length) rotationInline = ' · ' + t0.gdRotationInline(rotationParts.join(' / '));
+    }
+    if (seg === 'fishday') { $('fd-title').textContent = t0.fdTitle; $('fd-hint').textContent = t0.fdHint + rotationInline; }
     else {
       $('fd-title').textContent = t0.dayGridTitle(dayLabel(seg));
-      $('fd-hint').textContent = t0.dayGridHint + (segmentHasUnconfirmedTimes(plan, seg) ? ' · ' + t0.routeTimeUnknown : '');
+      $('fd-hint').textContent = t0.dayGridHint + (segmentHasUnconfirmedTimes(plan, seg) ? ' · ' + t0.routeTimeUnknown : '') + rotationInline;
     }
     $('fd-arrows-lbl').textContent = t0.fdArrowsLbl;
     // Reset the button's visual AND the real armed flag (dataset.armed) on every repaint, or an
@@ -787,20 +886,20 @@
     }
     buildDeck();
     var win = segWin(seg), lanes = plan.participants;
-    var W = fdX(win[1]) + 16, H = RULER_H + lanes.length * LANE_H + 6, html = '';
+    var W = fdX(win[1]) + 16, H = laneGeo.bottom + 6, html = '';
     var unknownBasis = segmentHasUnconfirmedTimes(plan, seg);
     for (var m = win[0]; m <= win[1]; m += 60) {
       var tickLabel = unknownBasis ? (m === win[0] ? t0.routeClockAssumption : '+' + Math.round((m - win[0]) / 60) + 'h') : hhmm(m);
       html += '<div class="fd-tick" style="left:' + fdX(m) + 'px">' + tickLabel + '</div>';
     }
     lanes.forEach(function (pp, i) {
-      var rr = P.role(pp.roleId), top = RULER_H + i * LANE_H;
-      html += '<div class="fd-lane" style="top:' + top + 'px;width:' + W + 'px"></div>' +
-        '<div class="fd-lbl" style="top:' + top + 'px"><span class="fd-lbl-ic" style="background:' + rr.color + '">' + rr.icon + '</span>' + nm(pp.name) + '</div>';
+      var rr = P.role(pp.roleId), row = laneGeo.byIndex[i], top = row.top, height = row.height;
+      html += '<div class="fd-lane" style="top:' + top + 'px;width:' + W + 'px;height:' + height + 'px"></div>' +
+        '<div class="fd-lbl" style="top:' + top + 'px;height:' + height + 'px"><span class="fd-lbl-ic" style="background:' + rr.color + '">' + rr.icon + '</span>' + nm(pp.name) + '</div>';
     });
     segT.forEach(function (tk) {
       if (!tk.assignedIds.length) return;                  // unplaced tasks live in the deck, not the canvas
-      var g = fdBlockGeo(plan, tk), e = fd.byTask[tk.id];
+      var g = fdBlockGeo(plan, tk, laneGeo), e = fd.byTask[tk.id];
       var sock = '';
       (tk.neededInfo || []).forEach(function (cid, si) {
         if (cardOwnerOf(plan, cid) === tk.ownerRoleId) return;
@@ -810,8 +909,8 @@
       });
       var port = (tk.produces || []).length ? '<span class="fd-port" data-task="' + tk.id + '" data-card="' + tk.produces[0] + '" title="○ ' + nm(byId(plan.infoCards, tk.produces[0]).name) + '"></span>' : '';
       var multi = tk.assignedIds.length > 1 ? '<i class="fd-x">×' + tk.assignedIds.length + '</i>' : '';
-      html += '<div class="fd-block' + (g.w < 60 ? ' sm' : '') + (!learningHidesExact() && e && e.wrongFish ? ' wf' : '') + (taskTimeUnconfirmed(tk) ? ' time-unknown' : '') + '" tabindex="0" data-task="' + tk.id + '" style="left:' + g.x + 'px;top:' + g.y + 'px;width:' + g.w + 'px" title="' + nm(tk.name) + ' · ' + taskTimeText(tk) + '">' +
-        sock + '<span class="fd-bname">' + P.station(tk.station).icon + (g.w >= 60 ? ' ' + nm(tk.name) : '') + '</span>' + multi + port + '<span class="fd-rsz"></span></div>';
+      html += '<div class="fd-block' + (g.w < 45 ? ' sm' : '') + (!learningHidesExact() && e && e.wrongFish ? ' wf' : '') + (taskTimeUnconfirmed(tk) ? ' time-unknown' : '') + '" tabindex="0" data-task="' + tk.id + '" style="left:' + g.x + 'px;top:' + g.y + 'px;width:' + g.w + 'px" title="' + nm(tk.name) + ' · ' + authoringTimeText(seg, tk) + '">' +
+        sock + '<span class="fd-bname">' + P.station(tk.station).icon + (g.w >= 45 ? ' ' + nm(tk.name) : '') + '</span>' + multi + port + '<span class="fd-rsz"></span></div>';
     });
     var box = $('fd-canvas');
     box.style.width = W + 'px'; box.style.height = H + 'px';
@@ -819,24 +918,24 @@
     // keep the lane labels pinned if the timeline is already panned
     var sc2 = $('fd-scroll');
     if (sc2 && sc2.scrollLeft) box.querySelectorAll('.fd-lbl').forEach(function (lb) { lb.style.transform = 'translateX(' + sc2.scrollLeft + 'px)'; });
-    drawFdArrows(plan, seg);
+    drawFdArrows(plan, seg, laneGeo);
     buildFdArrowList(plan, seg);
     buildFdReady(plan, fd, seg);
     if (placingChip) renderDropSlots();                    // keep the tap-to-place slots visible across repaints
   }
 
-  function arrowEnds(plan, seg, h) {
+  function arrowEnds(plan, seg, h, laneGeo) {
     var segT = P.tasksForSeg(plan, seg), from = byId(segT, h.fromTaskId), to = byId(segT, h.toTaskId);
     if (!from || !to || !from.assignedIds.length || !to.assignedIds.length) return null;
-    var gf = fdBlockGeo(plan, from), gt = fdBlockGeo(plan, to);
+    var gf = fdBlockGeo(plan, from, laneGeo), gt = fdBlockGeo(plan, to, laneGeo);
     var si = 0; (to.neededInfo || []).forEach(function (cid, i2) { if (cid === h.cardId) si = i2; });
     return { x1: gf.x + gf.w + 8, y1: gf.y + 13, x2: gt.x - 6, y2: gt.y + si * 11 + 6 };
   }
-  function drawFdArrows(plan, seg) {
+  function drawFdArrows(plan, seg, laneGeo) {
     var svg = $('fd-arrows'); if (!svg) return;
     var s = '', segT = P.tasksForSeg(plan, seg), segH = P.handoffsForSeg(plan, seg);
     segH.forEach(function (h) {
-      var e = arrowEnds(plan, seg, h); if (!e) return;
+      var e = arrowEnds(plan, seg, h, laneGeo); if (!e) return;
       var to = byId(segT, h.toTaskId), sa = feasibleArrivalInSeg(plan, seg, segT, h);
       var late = sa == null || sa > to.startMin;
       var mx = (e.x1 + e.x2) / 2;
@@ -885,8 +984,10 @@
       else if (h.type === 'MISASSIGNED') chips.push(chip(h.type, t.rhMisassigned(tn(h.taskId))));
       else if (h.type === 'CARRY_GAP') chips.push(chip(h.type, t.rhCarryGap(mn(h.itemId))));
     });
+    var visible = chips.slice(0, 3), rest = chips.slice(3);
     $('fd-ready').innerHTML = '<span class="pr-lbl">' + t.fdReadyLbl + '</span>' +
-      (chips.length ? chips.slice(0, 8).join('') + (chips.length > 8 ? '<span class="pr-item bad">+' + (chips.length - 8) + '</span>' : '')
+      (chips.length ? visible.join('') + (rest.length ? '<details class="pr-more"><summary>' + t.fdMoreIssues(rest.length) +
+        '</summary><div class="pr-more-body">' + rest.join('') + '</div></details>' : '')
                     : '<span class="pr-item ok">' + t.fdReadyOk + '</span>');
     // §W1: the per-day projection line moved into the ledger rail (renderRail('setup') — the day's
     // bucket row IS the projection); updatePlanUI repaints it in the same pass as this ready-check.
@@ -970,7 +1071,8 @@
     var blk = ev.target.closest('.fd-block'); if (!blk) return;
     var plan = currentPlan(), segT = P.tasksForSeg(plan, daySel), tk = byId(segT, blk.dataset.task); if (!tk) return;
     var resize = !!ev.target.closest('.fd-rsz');
-    fdDrag = { taskId: tk.id, el: blk, pid: ev.pointerId, resize: resize, x0: ev.clientX, startMin: tk.startMin, durMin: tk.durMin, assignedIds: tk.assignedIds.slice() };
+    var authored = authoringBlock(daySel, tk);
+    fdDrag = { taskId: tk.id, el: blk, pid: ev.pointerId, resize: resize, x0: ev.clientX, startMin: authored.startMin, durMin: authored.durMin, assignedIds: tk.assignedIds.slice() };
     blk.setPointerCapture && blk.setPointerCapture(ev.pointerId);
     ev.preventDefault();
   }
@@ -1014,13 +1116,14 @@
     if (!fdDrag) return;
     if (fdDrag.pid != null && ev.pointerId !== fdDrag.pid) return;
     if (ev.pointerType === 'mouse' && ev.buttons === 0) { fdDrag = null; paintSetup(); return; }  // self-heal a stuck drag
-    var sn = segSnap(daySel), win2 = segWin(daySel);
+    var sn = segSnap(daySel);
     var dMin = Math.round((ev.clientX - fdDrag.x0) / PXM / sn) * sn;
+    var edited = editAuthoringBlock(daySel, fdDrag.startMin, fdDrag.durMin, dMin, fdDrag.resize);
     if (fdDrag.resize) {
-      var nd = clamp(fdDrag.durMin + dMin, sn, win2[1] - fdDrag.startMin);
+      var nd = edited.durMin;
       fdDrag.el.style.width = Math.max(10, nd * PXM) + 'px'; fdDrag.newDur = nd;
     } else {
-      var ns = clamp(fdDrag.startMin + dMin, win2[0], win2[1] - fdDrag.durMin);
+      var ns = edited.startMin;
       fdDrag.el.style.left = fdX(ns) + 'px'; fdDrag.newStart = ns;
       fdDrag.el.classList.toggle('over-deck', isOverDeck(ev));   // about to drop back onto the deck (unplace)
     }
@@ -1047,7 +1150,9 @@
     segH.forEach(function (h) {
       if (h.fromTaskId !== taskId || !h.trigger || h.trigger.type !== 'atMinute') return;
       var pa = seg === 'fishday' ? producedAt(plan, h) : producedAtSeg(segT, h);
-      if (h.trigger.value < pa) dayOv[seg].handoffs[h.id] = Object.assign({}, h, { trigger: { type: 'atMinute', value: pa } });
+      var authoredSend = authoringSend(seg, h.trigger.value, pa);
+      if (authoredSend !== h.trigger.value) dayOv[seg].handoffs[h.id] = Object.assign({}, h,
+        { trigger: { type: 'atMinute', value: authoredSend } });
     });
   }
   function fdPointerUp(ev) {
@@ -1155,13 +1260,16 @@
     }).join('');
     var feas = handoffFeasibility(plan, h, seg);
     var arr = feas.ok ? arrivalInSeg(segT, h) : null, needBy = to ? to.startMin : 0, late = arr == null || arr > needBy;
+    var authorMin = authoringSend(seg, minSend, minSend);
+    var authorSeed = typeof sendMin === 'number' && isFinite(sendMin) ? sendMin : needBy;
+    var authorValue = authoringSend(seg, authorSeed, minSend);
     var unknownClock = taskTimeUnconfirmed(from) || taskTimeUnconfirmed(to);
     $('ar-body').innerHTML =
       (unknownClock ? '<div class="ar-note">' + t.routeTimeUnknown + '</div>' : '') +
       '<div class="ar-row"><span class="dt-h">' + t.arTrigger + '</span>' +
         '<select class="ar-sel" id="ar-trig"><option value="onTaskDone"' + (trigDone ? ' selected' : '') + '>' + t.arTrigDone + (from ? ' — ' + nm(from.name) : '') + '</option>' +
         '<option value="atMinute"' + (!trigDone ? ' selected' : '') + '>' + t.arTrigAt + '</option></select>' +
-        '<input class="ar-time" id="ar-time" type="time" step="300" min="' + hhmm(minSend) + '" value="' + hhmm(sendMin == null ? needBy : Math.max(sendMin, minSend)) + '"' + (trigDone ? ' disabled' : '') + '></div>' +
+        '<input class="ar-time" id="ar-time" type="time" step="' + (segSnap(seg) * 60) + '" min="' + hhmm(authorMin) + '" value="' + hhmm(authorValue) + '"' + (trigDone ? ' disabled' : '') + '></div>' +
       '<div class="ar-row"><span class="dt-h">' + t.arChannel + '</span><select class="ar-sel" id="ar-ch">' + chOpts + '</select></div>' +
       (learningHidesExact() ? '<div class="ar-note">' + t.learningProjectionHidden + '</div>' : '<div class="ar-arrive ' + (late ? 'late' : 'ok') + '">' + (unknownClock ? t.routeTimeUnconfirmedShort : (arr == null ? '—' : (late ? t.arriveLate(hhmm(arr), arr - needBy) : t.arriveOk(hhmm(arr))))) + ' <span class="muted2">(' + (to ? nm(to.name) + ' ' + (unknownClock ? t.routeClockAssumption : hhmm(needBy)) : '') + ')</span></div>') +
       '<div class="ar-feasibility' + (!learningHidesExact() && !feas.ok ? ' bad' : '') + '" id="ar-feasibility">' + (learningHidesExact() ? t.feasibilityUntested : feasibilityText(feas.reason)) + '</div>' +
@@ -1179,7 +1287,7 @@
     if (trig === 'onTaskDone') patch.trigger = { type: 'onTaskDone', taskId: h.fromTaskId };
     else {
       var mm = tv ? (parseInt(tv.slice(0, 2), 10) * 60 + parseInt(tv.slice(3, 5), 10)) : h.trigger.value || 0;
-      mm = Math.max(mm, producedAtSeg(segT, h));           // a card can't be sent before it exists
+      mm = authoringSend(seg, mm, producedAtSeg(segT, h)); // can't precede production; obeys this day's blocks
       patch.trigger = { type: 'atMinute', value: mm };
     }
     var candidate = Object.assign({}, h, patch), feas = handoffFeasibility(plan, candidate, seg);
@@ -2257,9 +2365,9 @@
   }
 
   // §21.4 offscreen a11y roster: the canvas stage draws the 11 duty-holders with no DOM, so a
-  // screen-reader loses the crew entirely. Mirror their name/role/state into a visually-hidden,
-  // aria-live=polite list. Read-only (no sim writes); rebuilt only when the text actually changes
-  // so the live region doesn't thrash on every tick.
+  // screen-reader loses the crew entirely. Mirror their name/role/state into a visually-hidden
+  // reference list. It is deliberately NOT a live region: #live-status owns concise phase
+  // announcements, while this complete roster remains available on demand without interrupting.
   function updateStageRoster(s) {
     var el = $('stage-roster'); if (!el) return;
     var t = T();
@@ -2810,10 +2918,16 @@
     if (n > 0) return T().rehearsalFactsPending(n);
     return rr.realExecutionReady ? T().realExecutionReady : T().rehearsalComplete;
   }
-  function appendAssumptionCondition(plan) {
-    var rr = executionReadiness(plan), n = rr.unresolvedCount == null ? ((rr.unresolved || []).length) : rr.unresolvedCount;
+  function appendAssumptionCondition(plan, compact) {
+    var rr = executionReadiness(plan), unresolved = rr.unresolved || [];
+    var n = rr.unresolvedCount == null ? unresolved.length : rr.unresolvedCount;
     if (!n) return;
     $('r-conds').insertAdjacentHTML('beforeend', '<span class="cond unmet">' + T().assumptionsPending(n) + '</span>');
+    if (compact) return;
+    unresolved.forEach(function (assumption) {
+      var label = assumption && assumption.label ? nm(assumption.label) : (assumption && assumption.id) || '—';
+      $('r-conds').insertAdjacentHTML('beforeend', '<span class="cond unmet assumption">' + T().assumptionPendingItem(label) + '</span>');
+    });
   }
 
   function evidenceCause(atom) {
@@ -2885,9 +2999,21 @@
     }
     if (res._learningAttempt) return res._learningAttempt;
     var run = res._learningSnapshot.run, actual = classifyEvidence(plan, trip, res);
+    // Guided Live repairs its gap before the report is created. Preserve the
+    // evidence the learner actually observed so a clean final plan does not
+    // erase the causal lesson and report only “no modeled gap.”
+    if (run.observed && run.observed.cause && run.observed.item) {
+      actual = { cause: run.observed.cause, count: 1, items: [run.observed.item] };
+    }
+    var lessonScore = trip.total, lessonGrade = trip.grade;
+    if (run.observed && (res.segment || run.segment) === 'fishday' && typeof P.scoreDay === 'function') {
+      var observedDayScore = P.scoreDay(plan, 'fishday');
+      lessonScore = observedDayScore.score; lessonGrade = observedDayScore.grade;
+    }
     var attempt = { id: run.id, at: run.at, level: run.level, segment: res.segment || run.segment || 'all', seed: run.seed,
       scenario: (plan && plan.scenarioId) || run.scenario || 'normal', prediction: run.prediction || null,
-      score: trip.total, grade: trip.grade, gapCount: actual.count, actualCause: actual.cause, evidence: actual.items,
+      score: lessonScore, grade: lessonGrade, gapCount: actual.count, actualCause: actual.cause, evidence: actual.items,
+      observedRepair: !!run.observed,
       buckets: compactBucketScores(trip), unresolvedAssumptions: (res._learningSnapshot.readiness.unresolved || []).map(function (a) { return a.id; }),
       reflection: { why: '', transfer: '' } };
     res._learningAttempt = attempt;
@@ -2907,10 +3033,16 @@
     var box = $('learning-debrief'); if (!box) return;
     var attempt = ensureLearningAttempt(res, plan, trip), pred = attempt.prediction;
     var match = !!(pred && pred.cause === attempt.actualCause);
-    var evidence = attempt.evidence && attempt.evidence.length ? attempt.evidence.map(function (item) { return localizedEvidence(item, plan); }).join(' · ') : T().debriefEvidenceSummary(attempt.score, attempt.gapCount);
+    var takeaway = $('learning-takeaway');
+    if (takeaway) {
+      takeaway.textContent = T().debriefTakeaway(causeLabel(attempt.actualCause));
+      takeaway.classList.toggle('hidden', learningLevel !== 'learn');
+    }
+    var summary = attempt.observedRepair ? T().debriefRepairedSummary(attempt.score, attempt.gapCount) : T().debriefEvidenceSummary(attempt.score, attempt.gapCount);
+    var evidence = attempt.evidence && attempt.evidence.length ? attempt.evidence.map(function (item) { return localizedEvidence(item, plan); }).join(' · ') : summary;
     box.innerHTML = '<div class="debrief-compare"><div class="debrief-box"><small>' + T().debriefPrediction + '</small><b>' +
       (pred ? causeLabel(pred.cause) : T().debriefNoPrediction) + '</b>' + (pred ? '<p>' + esc(pred.rationale) + '</p>' : '') + '</div>' +
-      '<div class="debrief-box"><small>' + T().debriefActual + '</small><b>' + causeLabel(attempt.actualCause) + '</b><p>' + T().debriefEvidenceSummary(attempt.score, attempt.gapCount) + '</p></div></div>' +
+      '<div class="debrief-box"><small>' + T().debriefActual + '</small><b>' + causeLabel(attempt.actualCause) + '</b><p>' + summary + '</p></div></div>' +
       (pred ? '<div class="debrief-match ' + (match ? 'yes' : 'no') + '">' + (match ? T().debriefMatch : T().debriefMismatch) + '</div>' : '') +
       '<div class="debrief-evidence"><b>' + T().debriefEvidence + ':</b> ' + esc(evidence) + '</div>' +
       '<div class="debrief-form"><label>' + T().debriefWhyRepair + '<textarea id="debrief-why" maxlength="400">' + esc(attempt.reflection.why || '') + '</textarea></label>' +
@@ -2925,13 +3057,31 @@
     });
   }
 
+  var reportDisclosureResult = null;
+  function resetReportDisclosures(res) {
+    // A language rerender receives the same result object. Preserve disclosures
+    // the learner already opened instead of snapping the report closed again.
+    if (reportDisclosureResult === res) return;
+    reportDisclosureResult = res;
+    ['report-score-details', 'report-ledger-details', 'report-individuals-details'].forEach(function (id) {
+      var details = $(id); if (details) details.open = false;
+    });
+    // Guided play keeps the causal reflection available without placing another
+    // full card in the initial report scan. Advanced levels open it because the
+    // prediction/evidence comparison is part of their required learning loop.
+    var debrief = $('learning-debrief-card');
+    if (debrief) debrief.open = learningLevel !== 'learn';
+  }
+
   function renderReport(res) {
+    resetReportDisclosures(res);
     // the individuals table has no coarse-day analogue — hide its card for a coarse report, and
     // restore it for the animated fishday/whole-trip paths (idempotent either way).
     var indivCard = $('individuals').closest('.card');
     if (res.coarse) { if (indivCard) indivCard.classList.add('hidden'); renderDayReport(res); return; }
     if (indivCard) indivCard.classList.remove('hidden');
     var t = T(), sc = res.trip, day = res.day;
+    var guidedReport = appMode === 'live' && res.segment === 'fishday' && !res.wholeTrip;
     // §7.2 — the headline grade/score/verdict all come from the whole-trip ledger (scoreTrip) — one
     // currency across the trip. A single-day (fishday) run sees that day's SLICE of the trip 100 (the
     // day-slice line below); a whole-trip ('all') run sees the full total. The verdict reads ledger
@@ -2939,11 +3089,18 @@
     // the legacy per-run scorer (sc) for their own content — never its total/grade.
     var reportPlan = res._learningSnapshot ? res._learningSnapshot.plan : currentPlan();
     var trip = res._learningSnapshot ? res._learningSnapshot.trip : P.scoreTrip(reportPlan);
-    $('r-grade').textContent = trip.grade; $('r-grade').style.color = GRADE_COLOR[trip.grade];
+    var guidedDayScore = guidedReport ? P.scoreDay(reportPlan, 'fishday') : null;
+    var displayTrip = guidedReport ? Object.assign({}, trip, { total: guidedDayScore.score, grade: guidedDayScore.grade,
+      gate: { clean: guidedDayScore.clean, withheldA: false } }) : trip;
+    $('r-grade-label').textContent = guidedReport ? t.guidedGradeLbl : t.gradeLbl;
+    $('r-grade').textContent = displayTrip.grade; $('r-grade').style.color = GRADE_COLOR[displayTrip.grade];
     var authoredClean = !res.wholeTrip || !!res.authoredClean;
-    var perfect = trip.gate.clean && trip.grade === 'A' && authoredClean;
+    var perfect = guidedReport ? guidedDayScore.clean : (trip.gate.clean && trip.grade === 'A' && authoredClean);
     var badge = $('r-badge'); badge.textContent = perfect ? (day ? t.badgeDayClean : t.badgePerfect) : ''; badge.classList.toggle('show', perfect);
-    if (res.wholeTrip && !authoredClean) {
+    var guidedBucket = guidedReport ? trip.byBucket.fishday : null;
+    if (guidedReport) {
+      $('r-verdict').textContent = t.guidedReportVerdict(guidedBucket.earned, guidedBucket.maxPts, guidedDayScore.clean);
+    } else if (res.wholeTrip && !authoredClean) {
       $('r-verdict').textContent = trip.total + ' / 100 — ' + t.rIncomplete;
     } else if (trip.gate.withheldA) {
       $('r-verdict').textContent = t.gradeGateB(trip.total);
@@ -2952,9 +3109,14 @@
     } else {
       $('r-verdict').textContent = trip.total + ' / 100 — ' + (trip.gate.clean ? t.rDone : t.rIncomplete);
     }
-    var readinessVerdict = reportReadinessVerdict(reportPlan, perfect);
+    var readinessVerdict = guidedReport ? null : reportReadinessVerdict(reportPlan, perfect);
     if (readinessVerdict) $('r-verdict').textContent = trip.total + ' / 100 — ' + readinessVerdict;
-    if (day) {
+    if (guidedReport) {
+      $('r-conds').innerHTML = '<span class="cond ' + (guidedDayScore.clean ? 'met' : 'unmet') + '">' +
+        (guidedDayScore.clean ? '✓ ' : '✗ ') + t.dayTasksLine(day.tasksDone, day.tasksTotal) + '</span>' +
+        '<span class="cond ' + (guidedBucket.earned === guidedBucket.maxPts ? 'met' : 'unmet') + '">' +
+        t.daySliceLine(guidedBucket.earned, guidedBucket.maxPts, dayLabel('fishday')) + '</span>';
+    } else if (day) {
       $('r-conds').innerHTML = '<span class="cond ' + (day.clean ? 'met' : 'unmet') + '">' + (day.clean ? '✓' : '✗') + ' ' + t.dayTasksLine(day.tasksDone, day.tasksTotal) + '</span>';
       if (res.segment === 'fishday') {
         $('r-conds').innerHTML +=
@@ -2980,21 +3142,30 @@
           return '<span class="cond ' + (c.met ? 'met' : 'unmet') + '">' + (c.met ? '✓' : '✗') + ' ' + nm(c.text) + '</span>';
         }).join('');
     }
-    appendAssumptionCondition(reportPlan);
+    appendAssumptionCondition(reportPlan, guidedReport);
     // fix-pack: the rehearsed day's gaps (or all gaps for a whole-trip run)
     var fixes = day ? day.fixes : sc.fixes, authoredHints = [];
     if (res.wholeTrip) res.segmentResults.forEach(function (r) {
       r.readiness.forEach(function (h) { authoredHints.push({ segment: r.segment, hint: h }); });
     });
-    if (!fixes.length && !authoredHints.length) $('fixpack').innerHTML = '<div class="fix-clean">' + (day ? t.fixpackCleanDay(dayLabel(res.segment)) : t.fixpackClean) + '</div>';
-    else $('fixpack').innerHTML = fixes.map(function (f) {
-      return '<div class="fix-row sev-' + f.severity + '"><div class="fix-main"><div class="fix-title">' + (f.severity === 'high' ? '⛔ ' : '⚠️ ') + t['p_' + f.id + '_title'] + '</div>' +
-        '<div class="fix-body">' + t['p_' + f.id + '_fix'] + '</div></div>' +
-        '<button class="btn sm primary fix-apply" data-fix="' + f.fixId + '">' + t.applyFixBtn + '</button></div>';
-    }).join('') + authoredHints.map(function (x) {
-      return '<div class="fix-row"><div class="fix-main"><div class="fix-title">' + dayLabel(x.segment) + '</div>' +
-        '<div class="fix-body">' + readinessText(reportPlan, x.segment, x.hint) + '</div></div></div>';
-    }).join('');
+    if (guidedReport) {
+      $('fixpack').innerHTML = guidedDayScore.clean
+        ? '<div class="fix-clean">' + t.fixpackCleanDay(dayLabel('fishday')) + '</div>'
+        : '<div class="fix-row sev-high"><div class="fix-main"><div class="fix-title">⚠️ ' + t.guidedFixTitle + '</div>' +
+          '<div class="fix-body">' + t.guidedFixBody + '</div></div>' +
+          '<button class="btn sm primary guided-retry">' + t.guidedRetry + '</button></div>';
+    } else if (!fixes.length && !authoredHints.length) {
+      $('fixpack').innerHTML = '<div class="fix-clean">' + (day ? t.fixpackCleanDay(dayLabel(res.segment)) : t.fixpackClean) + '</div>';
+    } else {
+      $('fixpack').innerHTML = fixes.map(function (f) {
+        return '<div class="fix-row sev-' + f.severity + '"><div class="fix-main"><div class="fix-title">' + (f.severity === 'high' ? '⛔ ' : '⚠️ ') + t['p_' + f.id + '_title'] + '</div>' +
+          '<div class="fix-body">' + t['p_' + f.id + '_fix'] + '</div></div>' +
+          '<button class="btn sm primary fix-apply" data-fix="' + f.fixId + '">' + t.applyFixBtn + '</button></div>';
+      }).join('') + authoredHints.map(function (x) {
+        return '<div class="fix-row"><div class="fix-main"><div class="fix-title">' + dayLabel(x.segment) + '</div>' +
+          '<div class="fix-body">' + readinessText(reportPlan, x.segment, x.hint) + '</div></div></div>';
+      }).join('');
+    }
     // individuals table
     var head = ['ivName', 'ivAction', 'ivDecision', 'ivLoad', 'ivFatigue', 'ivCoop', 'ivContribution'];
     var th = '<tr>' + head.map(function (h) { return '<th>' + t[h] + '</th>'; }).join('') + '</tr>';
@@ -3006,7 +3177,7 @@
     $('individuals').innerHTML = th + rows;
     renderRail('report', trip);
     renderLedger(trip, res.segment, reportPlan);
-    bootReportStage(res, trip);   // §S3 report-on-stage: the harbor at dusk above the cards
+    bootReportStage(res, displayTrip);   // guided report stamps its Day-3 result; full reports stamp the trip
     renderLearningDebrief(res, reportPlan, trip);
   }
 
@@ -3015,6 +3186,7 @@
   // whole-trip report renders into (renderReport branches to this for res.coarse).
   function renderDayReport(res) {
     var t = T(), seg = res.segment, plan = res._learningSnapshot ? res._learningSnapshot.plan : currentPlan();
+    $('r-grade-label').textContent = t.gradeLbl;
     var hints = P.dayReadiness(plan, seg), ds = P.daySchedule(plan, seg);
     // §7.2 — headline grade/score/verdict come from the whole-trip ledger (scoreTrip); the day's own
     // efficiency chips come from that day's daySchedule (§7.3); the fix-list is dayReadiness. scoreDay's
@@ -3080,16 +3252,16 @@
   }
 
   function applyFixAndRerun(fixId) {
+    // Guided reports teach one controlled handoff. Re-enter that same decision;
+    // applying the broad legacy fix would remove it and create a long run with
+    // nothing left for the learner to do.
+    if (appMode === 'live') { startLive(); return; }
     if (fixId && fixed.hasOwnProperty(fixId)) {
       fixed[fixId] = true;
       if (fixId === 'fixHandoffs') fdClearFixConflicts();
       mcClearFixConflicts(fixId);
     }
-    if (appMode === 'live') {           // stay in the live experience — never drop into a checkpoint-style run
-      liveState = liveState || { fixes: 0, addressed: {}, phase: 'brief', currentGap: null, result: null };
-      daySel = 'fishday';
-      launchLive();
-    } else launch();
+    launch();
   }
 
   // =========================================================================
@@ -3699,10 +3871,17 @@
       if (m === 'live' && $('run').classList.contains('hidden')) enterMode('live');
       else if (m === 'morning' && $('setup').classList.contains('hidden')) enterMode('morning');
     });
-    $('cast-open').addEventListener('click', function () { showIntro(false); });   // reopen -> Replay poster, never autoplay (§W4)
+    $('cast-open').addEventListener('click', function () { showIntro(false, true); });   // reopen directly on the lazy cast catalog
     $('intro-start').addEventListener('click', startFromIntro);
-    $('vig-skip').addEventListener('click', vigSkip);
-    $('intro-how-btn').addEventListener('click', function () { modalOpening('rules-modal'); $('rules-modal').classList.add('show'); $('rules-close').focus(); });
+    var introPlan = $('intro-plan');
+    if (introPlan) introPlan.addEventListener('click', planFromIntro);
+    var introCastWrap = $('intro-cast-wrap') || document.querySelector('.intro-cast-details');
+    if (introCastWrap) introCastWrap.addEventListener('toggle', function () {
+      renderIntro();
+    });
+    var vigSkipBtn = $('vig-skip'); if (vigSkipBtn) vigSkipBtn.addEventListener('click', vigSkip);
+    var introHow = $('intro-how-btn');
+    if (introHow) introHow.addEventListener('click', function () { modalOpening('rules-modal'); $('rules-modal').classList.add('show'); $('rules-close').focus(); });
     $('rules-open').addEventListener('click', function () { modalOpening('rules-modal'); $('rules-modal').classList.add('show'); $('rules-close').focus(); });
     $('rules-close').addEventListener('click', function () { $('rules-modal').classList.remove('show'); modalClosed(); });
     $('rules-modal').addEventListener('click', function (e) { if (e.target === $('rules-modal')) { $('rules-modal').classList.remove('show'); modalClosed(); } });
@@ -3882,8 +4061,10 @@
     $('pick-close').addEventListener('click', closePicker);
     $('pick-modal').addEventListener('click', function (e) { if (e.target === $('pick-modal')) closePicker(); });
 
-    // §4 "All settings" collapsible: collapsed by default ≥1180px, expanded below
-    if (window.innerWidth >= 1180) { $('all-settings').classList.add('collapsed'); $('all-settings-toggle').setAttribute('aria-expanded', 'false'); }
+    // §4 "All settings" is an optional expert surface at every viewport width.
+    // Mobile should not open on a wall of settings merely because it is narrow.
+    $('all-settings').classList.add('collapsed');
+    $('all-settings-toggle').setAttribute('aria-expanded', 'false');
     $('all-settings-toggle').addEventListener('click', function () {
       var as = $('all-settings'), open = as.classList.toggle('collapsed');
       this.setAttribute('aria-expanded', open ? 'false' : 'true');
@@ -4027,6 +4208,7 @@
     $('detail-modal').addEventListener('click', function (e) { if (e.target === $('detail-modal')) closeDetail(); });
 
     $('fixpack').addEventListener('click', function (e) {
+      if (e.target.closest('.guided-retry')) { startLive(); return; }
       var b = e.target.closest('.fix-apply'); if (b) { applyFixAndRerun(b.dataset.fix); return; }
       if (e.target.closest('#btn-day-autofix')) applyDayFixAndRerun();
     });
@@ -4075,9 +4257,10 @@
       if (el.classList.contains('fd-block') && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
         e.preventDefault();
         var plan = currentPlan(), segT = P.tasksForSeg(plan, daySel), tk = byId(segT, el.dataset.task); if (!tk) return;
-        var sn = segSnap(daySel), win = segWin(daySel), d = e.key === 'ArrowLeft' ? -sn : sn;
-        if (e.shiftKey) writeMove(tk.id, tk.startMin, clamp(tk.durMin + d, sn, win[1] - tk.startMin), tk.assignedIds);
-        else writeMove(tk.id, clamp(tk.startMin + d, win[0], win[1] - tk.durMin), tk.durMin, tk.assignedIds);
+        var sn = segSnap(daySel), d = e.key === 'ArrowLeft' ? -sn : sn;
+        var authored = authoringBlock(daySel, tk), edited = editAuthoringBlock(daySel, authored.startMin, authored.durMin, d, e.shiftKey);
+        if (edited.startMin === authored.startMin && edited.durMin === authored.durMin) return;
+        writeMove(tk.id, edited.startMin, edited.durMin, tk.assignedIds);
         reclampArrows(tk.id);
         paintSetup();
         var nb = document.querySelector('.fd-block[data-task="' + tk.id + '"]'); if (nb) nb.focus();
@@ -4113,7 +4296,18 @@
   // pre-sound, so the live puzzle is purely the temporal information axis.
   // =========================================================================
   var LIVE_CH = ['board', 'chat', 'radio', 'faceToFace'];
-  function ldPanel(id) { ['ld-brief', 'ld-prompt', 'ld-spot', 'ld-result'].forEach(function (p) { var e = $(p); if (e) e.classList.toggle('on', p === id); }); }
+  function ldPanel(id) {
+    ['ld-brief', 'ld-prompt', 'ld-spot', 'ld-result'].forEach(function (p) { var e = $(p); if (e) e.classList.toggle('on', p === id); });
+    document.body.classList.toggle('live-decision', id === 'ld-spot');
+    // Announce only the concise phase headline/body. The interactive dock itself
+    // is deliberately not live, so focusing a channel does not repeat the whole
+    // control tree through assistive technology.
+    var panel = $(id), status = $('live-status');
+    if (panel && status) {
+      var h = panel.querySelector('h3'), p = panel.querySelector('p');
+      status.textContent = [h && h.textContent, p && p.textContent].filter(Boolean).join(' ');
+    }
+  }
   function closeModals() {
     var active = document.activeElement;
     var activeModal = active && active.closest ? active.closest('#detail-modal.show,#inspect-modal.show,#arrow-modal.show,#rules-modal.show,#pick-modal.show,#prediction-modal.show') : null;
@@ -4127,6 +4321,7 @@
   }
   function clearStationTints() { var ns = document.querySelectorAll('#stations .station'); for (var ci = 0; ci < ns.length; ci++) ns[ci].classList.remove('terr-green', 'terr-amber', 'terr-red'); stageTint = null; }
   function chIcon(ch) { return { board: '📋', chat: '💬', radio: '📻', phone: '📞', faceToFace: '🤝' }[ch] || '•'; }
+  function channelPace(min, t) { return min === 0 ? t.chImmediate : (min <= 2 ? t.chFast : (min <= 10 ? t.chShortDelay : t.chSlow)); }
   function personName(task) { var pid = task.assignedIds[0], p = pid && byId(currentPlan().participants, pid); return p ? nm(p.name) : nm(P.role(task.ownerRoleId).name); }
 
   // the Morning-authored plan survives a Live detour: snapshot on the way in, restore on the way back
@@ -4165,6 +4360,11 @@
   }
   function renderIntro() {
     var box = $('intro-cast'); if (!box) return;
+    var wrap = $('intro-cast-wrap') || document.querySelector('.intro-cast-details');
+    // The cast is reference material, not an opening requirement. Build its
+    // eleven cards only while the disclosure is open, and release the DOM again
+    // when it closes. A page without the new disclosure keeps the cast dormant.
+    if (!wrap || !wrap.open) { box.innerHTML = ''; return; }
     var t = T(), parts = P.mergePlan({ seed: 1, overrides: {} }).participants;
     var aibos = parts.filter(function (p) { return p.company !== 'co_chef'; });
     var chefs = parts.filter(function (p) { return p.company === 'co_chef'; });
@@ -4175,19 +4375,51 @@
         '<div class="castgrid">' + chefs.map(castCard).join('') + '</div></div>' +
       '<div class="guestcard"><div class="gc-ic" aria-hidden="true">👥</div><div class="gc-txt"><b>' + t.introGuestsT + '</b><p>' + t.introGuestsB + '</p></div></div>';
   }
-  // auto === true (first load only) autoplays the vignette; the Cast-button reopen
-  // gets a Replay ▶ poster instead (spec §5 returning-player behavior)
-  function showIntro(auto) {
+  // The current shell always passes auto=false: opening a link and reopening
+  // the Cast both get a stable poster instead of unsolicited motion.
+  function showIntro(auto, openCast) {
     if (timer) { clearInterval(timer); timer = null; }
     stopAnim(); closeModals();
+    var castWrap = $('intro-cast-wrap') || document.querySelector('.intro-cast-details');
+    if (castWrap) castWrap.open = openCast === true;
     renderIntro();
     enterScreen('intro');
     if (auto !== true) vigLastFinal = false;   // a fresh cast-reopen offers the beat-1 poster
     bootVignette(auto === true);
     if (window.scrollTo) window.scrollTo(0, 0);
-    var s = $('intro-start'); if (s) s.focus();
+    var target = openCast === true ? document.querySelector('.intro-meet') : $('intro-start');
+    if (target) target.focus();
   }
-  function startFromIntro() { killVignette(); markIntroSeen(); $('intro').classList.add('hidden'); enterMode(learningLevel === 'learn' ? 'live' : 'morning'); }
+  function setIntroLearningLevel() {
+    // The guided CTA always starts from the fully supported Learn rules. The
+    // separate planner route preserves the learner's selected level.
+    learningLevel = 'learn'; learningObserved = false; pendingPrediction = null; activeLearningRun = null;
+    try { localStorage.setItem(LEARNING_LEVEL_KEY, learningLevel); } catch (e) { }
+    renderLearningChrome();
+  }
+  function startFromIntro() {
+    killVignette(); markIntroSeen(); setIntroLearningLevel();
+    $('intro').classList.add('hidden'); enterMode('live');
+  }
+  function collapsePlanningExtras() {
+    var score = $('setup-score-details'); if (score) score.open = false;
+    var settings = $('all-settings'); if (settings) settings.classList.add('collapsed');
+    var toggle = $('all-settings-toggle'); if (toggle) toggle.setAttribute('aria-expanded', 'false');
+  }
+  function focusPlannerHome() {
+    var target = document.querySelector('.day-btn.on') || $('launch');
+    if (target) { try { target.focus({ preventScroll: true }); } catch (e) { target.focus(); } }
+  }
+  function planFromIntro() {
+    killVignette(); markIntroSeen();
+    // The full planner respects the learner's persisted level and opens at the
+    // first campaign chapter. Every later day and the whole-trip view remain in
+    // the day rail, but the first workspace no longer dumps all chapters at once.
+    daySel = learningLevel === 'challenge' ? 'fishday' : 'load';
+    collapsePlanningExtras();
+    $('intro').classList.add('hidden'); enterMode('morning');
+    focusPlannerHome();
+  }
 
   // =========================================================================
   // §W4 COLD-OPEN VIGNETTE — a ~15s scripted, deterministic mini-run on the
@@ -4213,7 +4445,7 @@
     gap: null, gapPid: null, gapState: null, gapTint: null,
     phase: '', last: 0, lastTick: 0, ticks: 0, promptAt: 0, fixAt: 0, holdMin: 0,
     w: 0, h: 0, sc: 1 };
-  var vigLastAuto = true;              // last boot mode, so a language switch re-boots into the same face
+  var vigLastAuto = false;             // links and shell re-renders stay on a still poster
   var vigLastFinal = false;            // which poster face a non-autoplay boot restores (skip = the final one)
 
   // the Live config, scoped to the vignette (startLive's fixed[] pattern: every
@@ -4506,8 +4738,8 @@
     }
     VIG.sim = null;                                       // nothing live to keep — stills are done
   }
-  // static poster + Replay ▶: final=true (Skip) shows the fixed end-state + caption 3;
-  // final=false (Cast-button reopen) shows the beat-1 harbor + caption 1
+  // Static poster: final=true shows the fixed end-state + caption 3; otherwise
+  // show the pre-gap beat-1 poster. No rAF and no competing demo control.
   function vigPoster(final) {
     var host = $('vig-stage'); if (!host) return;
     vigBuildData();
@@ -4520,11 +4752,6 @@
     if (final && still.trip2) { VIG.trip2 = still.trip2; vigRailRow(true, false); }
     PRS_STAGE.scene(VIG.ctx, VIG.sim, 1, vigView(true, false));
     VIG.phase = 'poster';
-    var rp = document.createElement('button'); rp.type = 'button';
-    rp.className = 'btn primary vig-replay'; rp.id = 'vig-replay';
-    rp.textContent = T().vgReplay;
-    rp.addEventListener('click', function () { bootVignette(true); });   // full boot: re-shows Skip + sets the re-boot mode
-    host.appendChild(rp);
   }
   function vigSkip() {
     if ($('intro').classList.contains('hidden')) return;
@@ -4533,7 +4760,7 @@
     killVignette();
     if (RM.matches) { vigStills(); return; }              // nothing to skip under RM — re-render the stills
     vigPoster(true);
-    var sk = $('vig-skip'); if (sk) sk.classList.add('hidden');   // a poster has nothing left to skip (Replay re-shows it)
+    var sk = $('vig-skip'); if (sk) sk.classList.add('hidden');
   }
   function bootVignette(autoplay) {
     killVignette();
@@ -4607,6 +4834,9 @@
     { det: 'handoffTiming', ic: '🎣', key: 'objSatchel',   drag: false, opens: 'fishday' }
   ];
   var TRAY_OBJ_BY_DET = {}; TRAY_OBJ.forEach(function (o) { TRAY_OBJ_BY_DET[o.det] = o; });
+  function trayObjectInScope(o) {
+    return daySel === 'all' || !!(o && DET_SEG[o.det] && DET_SEG[o.det].indexOf(daySel) >= 0);
+  }
   // static single-role targets; 'info' (ferry) is read from the engine fix (ferryTargetRoles)
   var TRAY_TARGET_ROLE = { safety: ['safetyLead'], budgetAuth: ['budgetLead'], report: ['safetyLead'],
     fatigue: ['siteLead'], returnLogi: ['logi'] };
@@ -4702,7 +4932,7 @@
     box.innerHTML = PSTG.sim.participants.map(function (p) {
       var held = '';
       TRAY_OBJ.forEach(function (o) {
-        if (o.drag && fixed[DET_FIX[o.det]] && tokenPidFor(o.det) === p.id) held += '<span class="plan-roster-token" aria-hidden="true">' + o.ic + '</span>';
+        if (trayObjectInScope(o) && o.drag && fixed[DET_FIX[o.det]] && tokenPidFor(o.det) === p.id) held += '<span class="plan-roster-token" aria-hidden="true">' + o.ic + '</span>';
       });
       return '<button type="button" class="plan-roster-person" data-pid="' + p.id + '" aria-label="' +
         nm(p.name) + ' · ' + nm(P.role(p.roleId).name) + '">' + P.role(p.roleId).icon + '<span>' + nm(p.name) + '</span>' + held + '</button>';
@@ -4793,7 +5023,7 @@
       (jp && jp !== nm(p.name) ? '<span class="pc-jp">' + jp + '</span>' : '') +
       '<span class="pc-role">' + rr.icon + ' ' + nm(rr.name) + '</span></div></div>';
     var held = [];
-    TRAY_OBJ.forEach(function (o) { if (fixed[DET_FIX[o.det]] && tokenPidFor(o.det) === p.id) held.push(o.ic + ' ' + t[o.key]); });
+    TRAY_OBJ.forEach(function (o) { if (trayObjectInScope(o) && fixed[DET_FIX[o.det]] && tokenPidFor(o.det) === p.id) held.push(o.ic + ' ' + t[o.key]); });
     var duty = '<div class="pc-duty">' + (t['duty_' + p.roleId] || '') + '</div>';
     var note = '<div class="pc-note">' + t.planSeat(nm(rr.name)) + '</div>';
     var holds = held.length && !learningHidesExact() ? '<div class="pc-sec"><span class="pc-h">' + t.trayTitle + '</span><div class="ins-cards">' +
@@ -4835,15 +5065,22 @@
   }
 
   // ---- the tray view (pure function of fixed[]/orgOv) ----
-  function unresolvedCount() { var n = 0; TRAY_OBJ.forEach(function (o) { if (!fixed[DET_FIX[o.det]]) n++; }); return n; }
+  function unresolvedCount(objects) { var n = 0; (objects || TRAY_OBJ).forEach(function (o) { if (!fixed[DET_FIX[o.det]]) n++; }); return n; }
   function renderTray() {
     var t = T(), box = $('tray-objs'); if (!box) return;
+    if (traySel && ((traySel.kind === 'obj' && !trayObjectInScope(TRAY_OBJ_BY_DET[traySel.det])) ||
+        (traySel.kind === 'duty' && daySel !== 'all') ||
+        (traySel.kind === 'care' && daySel !== 'all' && daySel !== 'load' && daySel !== 'voyage'))) {
+      traySel = null;
+      var stageWrap = $('plan-stage-wrap'); if (stageWrap) stageWrap.classList.remove('placing');
+    }
     // grammar hint (dismissible once)
     var hint = $('tray-hint'), hx = $('tray-hint-x'), htx = $('tray-hint-txt');
     if (hint) hint.classList.toggle('hidden', trayHintSeen());
     if (htx) htx.textContent = t.grammarHint;
     if (hx) hx.setAttribute('aria-label', t.trayHintClose);
-    var objs = TRAY_OBJ.map(function (o) {
+    var scopedObjects = TRAY_OBJ.filter(trayObjectInScope);
+    var objs = scopedObjects.map(function (o) {
       var on = fixed[DET_FIX[o.det]];
       if (o.drag && on) return '';   // placed draggable objects live at a pawn as a token, not in the tray
       var extra = '';
@@ -4855,30 +5092,31 @@
         (on ? '<span class="to-done">✓</span>' : '') + '</button>';
     }).join('');
     var plan = currentPlan();
-    var duties = SEAT_ROLES.map(function (rid) {
+    var duties = daySel === 'all' ? SEAT_ROLES.map(function (rid) {
       var rr = P.role(rid), holder = plan.roles[rid] && plan.roles[rid].holder ? byId(plan.participants, plan.roles[rid].holder) : null;
       var cls = 'tray-duty' + (traySel && traySel.kind === 'duty' && traySel.role === rid ? ' sel' : '');
       return '<button type="button" class="' + cls + '" data-role="' + rid + '" aria-label="' + nm(rr.name) + ' · ' + (holder ? nm(holder.name) : '') + '">' +
         '<span class="td-ic" style="background:' + rr.color + '">' + rr.icon + '</span><span class="td-nm">' + nm(rr.name) + '</span></button>';
-    }).join('');
+    }).join('') : '';
+    var care = (daySel === 'all' || daySel === 'load' || daySel === 'voyage') ? careShelfHtml(plan, t) : '';
     box.innerHTML =
-      '<div class="tray-count">' + t.trayCount(unresolvedCount()) + '</div>' +
+      (scopedObjects.length ? '<div class="tray-count">' + t.trayCount(unresolvedCount(scopedObjects)) + '</div>' : '') +
       '<div class="tray-row tray-decisions">' + objs + '</div>' +
       '<div class="tray-row tray-dutychips">' + duties + '</div>' +
-      careShelfHtml(plan, t);
+      care;
   }
-  // Voyage §3 — the VIP CARE SHELF: the 4 VIP guest cards in the same grammar as duty chips.
+  // Voyage §3 — outbound care shelf: the four Day-0 care guests in the same grammar as duty chips.
   // An UNASSIGNED card is drag/tap-tap/keyboard-picker onto ORGANIZER pawns only; an ASSIGNED
   // card shows its buddy and is click-to-unassign. Cards never become tokens (they stay in the
   // shelf as the VIP roster) — the shelf header counts the still-unbuddied VIPs (gdCount).
   var CARE_IC = '🎩';
   function unbuddiedVips(plan) {
     var n = 0, gs = plan.guests || [];
-    for (var i = 0; i < gs.length; i++) if (gs[i].vip && !plan.buddies[gs[i].id]) n++;
+    for (var i = 0; i < gs.length; i++) if (isVoyageCareGuest(gs[i]) && !plan.buddies[gs[i].id]) n++;
     return n;
   }
   function careShelfHtml(plan, t) {
-    var vips = (plan.guests || []).filter(function (g) { return g.vip; });
+    var vips = (plan.guests || []).filter(isVoyageCareGuest);
     if (!vips.length) return '';
     var cards = vips.map(function (g) {
       var bpid = plan.buddies[g.id], buddy = bpid ? byId(plan.participants, bpid) : null, assigned = !!buddy;
@@ -4913,7 +5151,7 @@
     // tokens — one per placed draggable object, at its anchor pawn's feet
     var placed = {};
     TRAY_OBJ.forEach(function (o) {
-      if (!o.drag || !fixed[DET_FIX[o.det]]) return;
+      if (!trayObjectInScope(o) || !o.drag || !fixed[DET_FIX[o.det]]) return;
       var pid2 = tokenPidFor(o.det); if (!pid2) return;
       placed[o.det] = pid2;
       var p = byId(PSTG.sim.participants, pid2), tk = tokens.querySelector('.plan-token[data-det="' + o.det + '"]');
@@ -5120,6 +5358,9 @@
     if (m === 'live' && learningLevel !== 'learn') m = 'morning';
     var was = appMode;
     appMode = m;
+    ['live', 'morning'].forEach(function (mode) {
+      document.body.classList.toggle('mode-' + mode, mode === m);
+    });
     killVignette();                                               // §W4 lifecycle: the vignette dies with the intro (enterScreen repeats this; idempotent)
     $('mode-live').classList.toggle('on', m === 'live');
     $('mode-morning').classList.toggle('on', m === 'morning');
@@ -5140,8 +5381,13 @@
   function startLive() {
     activeLearningRun = null; pendingPrediction = null;
     wholeRun = null;
-    for (var k in fixed) fixed[k] = true; fixed.fixHandoffs = false;   // classic decisions sound; the arrows are the puzzle
+    // Guided Live is one complete, legible lesson: start from the canonical
+    // fishing-day handoff graph and intentionally remove only h_food. Repairing
+    // that early socket therefore completes the tutorial instead of opening a
+    // procession of unrelated text prompts.
+    for (var k in fixed) fixed[k] = true;
     fdReset(); mcReset(); buddyReset(); daySel = 'fishday'; placingChip = null;
+    dayOv.fishday.handoffs.h_food = null;
     // Live is carry-canonical: the Load day ships everything aboard so the fishday puzzle is purely
     // the information arrows — otherwise the seeded jig-case custody gap idles the gear check 60 min
     // and the win gate (fishday bucket full + dinner 18:00) is unreachable no matter what the player
@@ -5160,6 +5406,8 @@
     if (!activeLearningRun) activeLearningRun = newLearningRun(sim.cfg && sim.cfg.seed, 'fishday');
     if (window.PRS_SOUND) window.PRS_SOUND.ambient('fishday', sim.clockMin, mapProfileFor(sim).id);   // ambient bed start, run-enter
     paused = false; livePausedForFix = false; document.body.classList.add('running');
+    dashboardOpen = false;
+    $('runwrap').classList.add('drawer-closed');
     closeModals(); speedMult = 2; document.querySelectorAll('.spd').forEach(function (x) { x.classList.toggle('on', x.getAttribute('data-spd') === '2'); });
     enterScreen('run');
     $('figs').innerHTML = ''; $('banner').classList.remove('show'); $('live-dock').classList.remove('hidden');
@@ -5169,6 +5417,7 @@
     buildMotes(sim);
     renderSim(sim); if (RM.matches) drawRunOnce(); else startAnim();
     liveState.phase = 'brief'; renderLivePanel();
+    try { $('ld-brief').focus({ preventScroll: true }); } catch (e) { $('ld-brief').focus(); }
     runFn = liveStep; if (timer) clearInterval(timer); timer = setInterval(liveStep, tickMs());
   }
 
@@ -5235,10 +5484,20 @@
   // open a whole cluster (spec §5): freeze once, present its cards in sequence. cl = { key, gaps, startMin }.
   function openGap(cl) {
     liveState.currentCluster = cl; liveState.clusterIdx = 0;
-    liveState.currentGap = cl.gaps[0]; liveState.phase = 'prompt';
+    liveState.currentGap = cl.gaps[0]; liveState.phase = 'spot';
+    if (activeLearningRun && !activeLearningRun.observed) {
+      var observedGap = liveState.currentGap;
+      activeLearningRun.observed = {
+        cause: observedGap.kind === 'late' ? 'late-info' : 'missing-info',
+        item: { kind: 'hint', segment: 'fishday', type: observedGap.kind === 'late' ? 'ARROW_LATE' : 'MISSING_ARROW',
+          taskId: observedGap.taskId, cardId: observedGap.cardId }
+      };
+    }
     paintGapFocus(liveState.currentGap);
     camPunchGap(liveState.currentGap);            // §3 auto-cinematic: punch in on the stalled pawn
-    renderLivePanel(true);
+    renderLivePanel();
+    var firstChannel = $('ld-opts') && $('ld-opts').querySelector('.ld-opt');
+    if (firstChannel) firstChannel.focus();        // direct-to-decision remains keyboard complete
   }
   // move to the next un-addressed card in the frozen cluster, or resume the run when the cluster is done
   function advanceCluster() {
@@ -5256,6 +5515,18 @@
       livePausedForFix = false; liveState.phase = 'brief';
       liveState.currentGap = null; liveState.currentCluster = null;
       renderLivePanel();
+      try { $('ld-brief').focus({ preventScroll: true }); } catch (e) { $('ld-brief').focus(); }
+      // The guided lesson has no second decision. Let the repaired pawn move for
+      // one visible beat, then resolve the clean schedule immediately instead of
+      // making the learner watch the remaining simulated day in real time.
+      if (!nextLiveGap()) {
+        document.body.classList.add('live-decision');
+        clearFinishTimer();
+        finishTimer = setTimeout(function () {
+          finishTimer = null;
+          if (liveState && liveState.phase === 'brief' && appMode === 'live' && !$('run').classList.contains('hidden')) liveFinish();
+        }, 1600);
+      }
     }
   }
 
@@ -5275,26 +5546,26 @@
       ldPanel('ld-prompt');
       if (focusPrompt) $('ld-fix').focus();    // the game paused FOR the player — hand them the control
     } else if (liveState.phase === 'spot') { renderSpot(); }
-    else if (liveState.phase === 'result') { renderResult(); }
+    else if (liveState.phase === 'result') { renderResult(false); }
   }
 
   function renderSpot() {
     var t = T(), g = liveState.currentGap, plan = currentPlan(), to = byId(plan.tasks, g.taskId), from = producerOf(plan, g.cardId), card = byId(plan.infoCards, g.cardId);
-    var cname = nm(card.name).split('：')[0].split(':')[0], sendMin = from ? from.startMin + from.durMin : to.startMin;
+    var cname = nm(card.name).split('：')[0].split(':')[0];
     var chips = LIVE_CH.map(function (ch) {
-      var arr = sendMin + (P.CHANNELS[ch] || 0), onTime = arr <= to.startMin;
-      var ev = evaluateLiveChannel(g, ch); onTime = onTime && ev.feas.ok;
-      return '<button class="ld-opt ' + (onTime ? 'fast' : 'slow') + '" type="button" data-ch="' + ch + '">' +
-        '<span class="oc">' + chIcon(ch) + ' ' + t['ch' + ch.charAt(0).toUpperCase() + ch.slice(1)] + '</span>' +
-        '<span class="lat">+' + (P.CHANNELS[ch] || 0) + t.chMin + '</span>' +
-        '<span class="verdict">' + (ev.feas.ok ? (onTime ? t.vInTime : t.vTooLate) : feasibilityText(ev.feas.reason)) + '</span></button>';
+      var latency = P.CHANNELS[ch] || 0;
+      var channelName = t['ch' + ch.charAt(0).toUpperCase() + ch.slice(1)];
+      var pace = channelPace(latency, t);
+      return '<button class="ld-opt" type="button" data-ch="' + ch + '" aria-label="' + esc(t.channelOptionAria(channelName, pace)) + '">' +
+        '<span class="oc">' + chIcon(ch) + ' ' + channelName + '</span>' +
+        '<span class="lat">' + pace + '</span></button>';
     }).join('');
     var cl = liveState.currentCluster, step = (cl && cl.gaps.length > 1) ? '<span class="ld-step">' + t.spotStep(liveState.clusterIdx + 1, cl.gaps.length) + '</span>' : '';
     $('ld-spot').innerHTML =
       '<div class="ld-spot-head">' + step + '<h3>' + t.spotTitle(cname) + '</h3><p class="ld-sub">' +
       t.spotSub(from ? personName(from) : nm(P.role('chef').name), personName(to), hhmm(to.startMin)) + '</p></div>' +
       '<div class="ld-opts" id="ld-opts">' + chips + '</div>' +
-      '<div class="ld-preview" id="ld-preview"><span class="pv-lbl">' + t.pvLbl + '</span><span id="ld-pv-txt">' + t.spotHover + '</span><span class="pv-slice" id="ld-pv-slice"></span></div>';
+      '<div class="ld-preview" id="ld-preview"><span class="pv-lbl">' + t.pvLbl + '</span><span id="ld-pv-txt">' + t.spotHover + '</span></div>';
     var opts = $('ld-opts');
     opts.querySelectorAll('.ld-opt').forEach(function (b) {
       var ch = b.dataset.ch;
@@ -5341,11 +5612,7 @@
     var pv = $('ld-preview'), txt = $('ld-pv-txt');
     onTime = onTime && ev.feas.ok;
     pv.className = 'ld-preview ' + (onTime ? 'fast' : 'slow');
-    txt.textContent = ev.feas.ok ? (onTime ? t.spotOnTime(hhmm(arr)) : (assume ? t.spotLateWrong(hhmm(arr), arr - to.startMin) : t.spotLateIdle(hhmm(arr), arr - to.startMin))) : feasibilityText(ev.feas.reason);
-    // §7.1: the blast-radius preview shows the projected Fishing-Day SLICE of the trip 100 for this
-    // hypothetical channel choice (run scoreTrip on the merged hypothetical plan) — ledger currency.
-    var slice = $('ld-pv-slice'), fb = P.scoreTrip(plan2).byBucket.fishday;
-    if (slice) slice.textContent = t.daySliceLine(fb.earned, fb.maxPts, dayLabel('fishday'));
+    txt.textContent = ev.feas.ok ? (onTime ? t.spotOnTime() : (assume ? t.spotLateWrong() : t.spotLateIdle())) : feasibilityText(ev.feas.reason);
     var old = pv.querySelector('.ld-send'); if (old) old.remove();
     if (persist && ev.feas.ok) {
       var b = document.createElement('button'); b.className = 'btn primary ld-send'; b.type = 'button';
@@ -5406,24 +5673,44 @@
     advanceCluster();
   }
 
+  function finalizeGuidedAttempt() {
+    if (!liveState || !sim) return null;
+    if (liveState.completedResult) return liveState.completedResult;
+    var completed = { trip: P.score(sim), day: P.daySummary(sim), segment: 'fishday' };
+    ensureLearningAttempt(completed, currentPlan(), P.scoreTrip(currentPlan()));
+    liveState.completedResult = completed;
+    return completed;
+  }
+
   function liveFinish() {
     if (timer) { clearInterval(timer); timer = null; }
+    // The guided UI ends after the recovery beat, but the deterministic engine
+    // still resolves the remaining schedule instantly so report evidence and
+    // task-completion counts describe the whole day, not a 05:00 snapshot.
+    var settleGuard = 0;
+    while (sim && !sim.finished && settleGuard++ < 500) {
+      if (sim.paused) { sim.paused = false; sim.checkpoint = null; }
+      P.tick(sim);
+    }
+    if (sim) renderSim(sim);
     camReleaseSafe(0);                            // §3 safety: no punch-in survives into the result/report
     // §7.1: win = the Fishing-Day bucket is fully earned in the ledger AND dinner is served by 18:00.
     var trip = P.scoreTrip(currentPlan()), fd = P.fishdaySchedule(currentPlan()), fb = trip.byBucket.fishday;
     var win = fb.earned === fb.maxPts && (fd.dinnerMin == null || fd.dinnerMin <= 1080);
     liveState.phase = 'result'; liveState.result = { win: win, trip: trip, fd: fd };
-    renderResult();
+    finalizeGuidedAttempt();
+    renderResult(true);
     if (win && !anim.fanfared) { anim.fanfared = true; fireFanfare(); }   // one beat only — 18:00 already fired it on a clean serve
   }
 
-  function renderResult() {
+  function renderResult(focusAction) {
     var t = T(), r = liveState.result, el = $('ld-result'); if (!r) return;
     if (r.win) {
       var fb = r.trip.byBucket.fishday;
       el.className = 'ld-panel result win';
       el.innerHTML = '<div class="ld-txt"><h3>' + t.resWinT + '</h3><p>' + t.resWinP2(fb.earned, fb.maxPts) + '</p></div>' +
-        '<div class="ld-actions"><button class="btn primary" id="ld-rerun">' + t.ldRerun + '</button><button class="btn ghost" id="ld-report">' + t.ldReport + '</button></div>';
+        '<div class="ld-actions"><button class="btn primary" id="ld-continue">' + t.ldContinue + '</button>' +
+        '<button class="btn ghost" id="ld-report">' + t.ldReport + '</button><button class="btn ghost" id="ld-rerun">' + t.ldRerun + '</button></div>';
     } else {
       var fd = r.fd, g = (fd.missing[0] || fd.late[0]), gapText, pl = currentPlan();
       if (g) gapText = '“' + nm(byId(pl.infoCards, g.cardId).name).split('：')[0].split(':')[0] + '” → “' + nm(byId(pl.tasks, g.taskId).name) + '”';
@@ -5434,13 +5721,26 @@
     }
     $('ld-rerun').addEventListener('click', startLive);
     $('ld-report').addEventListener('click', liveToReport);
+    var next = $('ld-continue'); if (next) next.addEventListener('click', continueFromGuided);
     ldPanel('ld-result');
+    if (focusAction) {
+      var primary = next || $('ld-rerun');
+      if (primary) { try { primary.focus({ preventScroll: true }); } catch (e) { primary.focus(); } }
+    }
+  }
+
+  function continueFromGuided() {
+    enterMode('morning');
+    daySel = 'load';
+    collapsePlanningExtras();
+    paintSetup();
+    focusPlannerHome();
   }
 
   function liveToReport() {
     stopAnim(); if (timer) { clearInterval(timer); timer = null; }
     clearFinishTimer(); livePausedForFix = false;
-    lastResult = { trip: P.score(sim), day: P.daySummary(sim), segment: 'fishday' };
+    lastResult = finalizeGuidedAttempt() || { trip: P.score(sim), day: P.daySummary(sim), segment: 'fishday' };
     enterScreen('report');
     renderReport(lastResult);
     focusReportScreen();
@@ -5448,6 +5748,8 @@
 
   // ---- init ----
   bind(); applyLang();
-  // first-time players land on the graphic cast intro; returning players (localStorage) go straight in.
-  if (introSeen()) enterMode(learningLevel === 'learn' ? 'live' : 'morning'); else showIntro(true);   // first load autoplays the vignette (§W4)
+  // Every link open lands on a stable home. Nothing begins moving and no
+  // rehearsal starts until the player explicitly chooses Guided Live or the
+  // full planning surface; prior local state must never surprise-launch a run.
+  showIntro(false);
 })();
