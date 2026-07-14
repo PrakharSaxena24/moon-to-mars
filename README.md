@@ -153,7 +153,7 @@ OgasawaraSim/
 ```
 
 `engine.js` is deterministic (seeded RNG) and runs in the browser **and** Node, so the
-teaching curve is **headless-verified**: `node verify.js` (356 checks) pins the atom count (99),
+teaching curve is **headless-verified**: `node verify.js` (360 checks) pins the atom count (99),
 both matrix axes (bucket totals 11/10/11/12/13/**34**/9 across frame · load · voyage · arrival ·
 ops · **fishing day** · return, dimension totals **37**/29/21/7/5/1 for info/exec/safety/quality/
 money/people), that earned atoms always sum to the shown total, the exact seed scores below, a
@@ -173,7 +173,7 @@ canonical (every classic fix +      A   100 /100   clean · trip efficiency 100%
 ```
 
 `engine.js` は決定的（シード乱数）でブラウザでも Node でも動き、学びの曲線を `node verify.js`
-（356チェック）で検証済み：ギャップだらけの計画は52点・D（旅程効率86%）、情報の矢印を描く修正
+（360チェック）で検証済み：ギャップだらけの計画は52点・D（旅程効率86%）、情報の矢印を描く修正
 （+fixHandoffs）が単独最大の+16点、全修正で100点・A・clean（旅程効率100%）。同一シードで
 同一結果を再現。
 

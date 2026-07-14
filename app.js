@@ -1167,7 +1167,7 @@
     'chichijima-transfer': { id: 'chichijima-transfer', family: 'island', stationSet: 'land', en: 'CHICHIJIMA TRANSFER', jp: '父島・乗り継ぎ' },
     'interisland-ferry':   { id: 'interisland-ferry', family: 'ship', stationSet: 'voyage', en: 'INTER-ISLAND VESSEL · NAME/TIMES UNCONFIRMED', jp: '島間船・船名／時刻未確認' },
     'hahajima-hinata':     { id: 'hahajima-hinata', family: 'island', stationSet: 'land', en: 'HAHAJIMA · HINATA', jp: '母島・ひなた' },
-    'route-overview':      { id: 'route-overview', family: 'route', stationSet: 'land', en: 'TOKYO → HAHAJIMA ROUTE', jp: '東京 → 母島 ルート' }
+    'route-overview':      { id: 'route-overview', family: 'overview', stationSet: 'overview', en: 'TOKYO → HAHAJIMA ROUTE', jp: '東京 → 母島 ルート' }
   };
   MAP_FALLBACK_PROFILES['tokyo-load'] = MAP_FALLBACK_PROFILES['tokyo-hotel'];
   MAP_FALLBACK_PROFILES['ship-outbound'] = MAP_FALLBACK_PROFILES['ogasawara-maru'];
@@ -1210,7 +1210,7 @@
     if (window.PRS_STAGE && typeof PRS_STAGE.domFlagsForScene === 'function') return PRS_STAGE.domFlagsForScene(s, mapViewFor(s, requested)) || {};
     var p = mapProfileFor(s, requested), id = p.id || '';
     return p.dom || {
-      water: p.family === 'ship' || id === 'hahajima-hinata' || id === 'chichijima-transfer',
+      water: p.family === 'ship' || id === 'takeshiba-terminal' || id === 'hahajima-hinata' || id === 'chichijima-transfer',
       seaLife: id === 'hahajima-hinata', localBoat: id === 'hahajima-hinata',
       guests: true, guestsRequired: id !== 'hahajima-hinata'
     };
@@ -1227,6 +1227,7 @@
   function mapStationsFor(s, requested) {
     if (window.PRS_STAGE && PRS_STAGE.stationsForScene) return PRS_STAGE.stationsForScene(s, mapViewFor(s, requested));
     var profile = mapProfileFor(s, requested);
+    if (profile.stationSet === 'overview') return [];
     return profile.stationSet === 'voyage' && P.VOYAGE_STATIONS ? P.VOYAGE_STATIONS : P.STATIONS;
   }
   function mapStationFor(id, s, requested) {
@@ -1350,7 +1351,7 @@
   function rebuildPaths() {
     var W = anim.w, H = anim.h, paths = $('paths'); paths.innerHTML = '';
     var profile = mapProfileFor(sim), flags = mapSceneFlags(sim), links = sceneLinksFor(sim);
-    if (profile.family === 'route' || flags.roads === false) return;
+    if (profile.family === 'route' || profile.family === 'overview' || flags.roads === false) return;
     links.forEach(function (e) {
       var a = mapStationFor(e[0], sim), b = mapStationFor(e[1], sim);
       var ax = a.x * W, ay = a.y * H, bx = b.x * W, by = b.y * H;
@@ -1415,7 +1416,7 @@
       });
     }
     var map = $('sitemap');
-    map.classList.remove('scene-tokyo', 'scene-ship', 'scene-island');
+    map.classList.remove('scene-tokyo', 'scene-ship', 'scene-island', 'scene-overview', 'scene-route');
     map.classList.add('scene-' + profile.family);
     map.setAttribute('data-scene', profile.id);
     map.setAttribute('role', 'region');
@@ -1763,6 +1764,17 @@
     anim.raf = null; anim.running = false;
     drawingRunOnce = false;
   }
+  // DOM fallback passenger targets mirror the Canvas scene composition. The
+  // engine's island wander coordinates remain untouched; only the presentation
+  // target changes so hotel guests stay indoors and terminal guests stay off
+  // the bay/skyline.
+  function guestTargetForScene(profile, actor, index, gs) {
+    if (profile.id === 'tokyo-hotel') return { x: 0.13 + (index % 5) * 0.073, y: 0.50 + Math.floor(index / 5) * 0.12 };
+    if (profile.id === 'takeshiba-terminal') return { x: 0.24 + (index % 5) * 0.066, y: 0.43 + Math.floor(index / 5) * 0.13 };
+    if (profile.id === 'chichijima-transfer') return { x: 0.16 + (index % 5) * 0.074, y: 0.42 + Math.floor(index / 5) * 0.14 };
+    if (profile.family === 'ship') return { x: 0.61 + (index % 5) * 0.062, y: 0.40 + Math.floor(index / 5) * 0.145 };
+    return { x: gs.cast ? gs.homeX : actor.x, y: gs.cast ? gs.homeY : actor.y };
+  }
   function frame(ts) {
     if (!anim || !anim.running) return;
     if ($('run').classList.contains('hidden')) { anim.running = false; return; }
@@ -1787,10 +1799,10 @@
       // hush + freeze near a stalled duty-holder
       var seed = (sim.cfg && sim.cfg.seed) || 1;
       if (!anim.acts || ts - anim.actsAt > 66) { anim.acts = P.ambientActors(seed, phase); anim.actsAt = ts; }
-      var acts = anim.acts, hot = anim.hotPts || [];
+      var acts = anim.acts, hot = anim.hotPts || [], guestProfile = mapProfileFor(sim);
       for (var a = 0; a < acts.length; a++) {
         var g = acts[a], gs = anim.guest[g.id]; if (!gs || !gs.el) continue;
-        var gx = gs.cast ? gs.homeX : g.x, gy = gs.cast ? gs.homeY : g.y;
+        var gp = guestTargetForScene(guestProfile, g, a, gs), gx = gp.x, gy = gp.y;
         var hush = false, nx = gs.cx / anim.w, ny = gs.cy / anim.h;
         for (var h = 0; h < hot.length; h++) { var dxg = nx - hot[h].x, dyg = ny - hot[h].y; if (dxg * dxg + dyg * dyg < HUSH_R2) { hush = true; break; } }
         gs.el.classList.toggle('hushed', hush); gs.hushed = hush; gs.act = g.act;

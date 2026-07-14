@@ -1318,31 +1318,20 @@ function groundCacheKey(profile, w, h, dpr, sc) {
   return profile.id + (profile.id === 'route-overview' ? '|' + _lang : '') + '|' + w + 'x' + h + '@' + dpr + '/' + sc.toFixed(4);
 }
 function drawGround_tokyoStatic(gctx, w, h) {
-  drawGround_ellipseBase(gctx, w, h);
-  gctx.save();
-  drawGround_landPath(gctx, w, h);
-  gctx.clip();
+  // Takeshiba is an angular city waterfront, never the organic Hahajima land
+  // mass with a different colour. The right-hand harbor water is painted by
+  // drawSea(); this cached layer owns the skyline, terminal and paved apron.
+  var base = gctx.createLinearGradient(0, 0, w, h);
+  base.addColorStop(0, 'rgb(64,76,87)');
+  base.addColorStop(0.58, 'rgb(38,49,59)');
+  base.addColorStop(1, 'rgb(18,29,39)');
+  gctx.fillStyle = base; gctx.fillRect(0, 0, w, h);
 
-  // Cool paved loading yard instead of moss/contours. The diagonal grid reads
-  // as warehouse apron markings while retaining the washi/lacquer palette.
-  var yard = gctx.createLinearGradient(0, 0, w * 0.6, h);
-  yard.addColorStop(0, 'rgb(72,82,91)');
-  yard.addColorStop(0.55, 'rgb(51,61,70)');
-  yard.addColorStop(1, 'rgb(31,39,47)');
-  gctx.fillStyle = yard; gctx.fillRect(0, 0, w, h);
-  gctx.strokeStyle = rgba(PAL.washiWarm, 0.09); gctx.lineWidth = 1 * scale;
-  gctx.beginPath();
-  var gx, gy;
-  for (gx = -h; gx < w * 0.7; gx += 42 * scale) { gctx.moveTo(gx, h); gctx.lineTo(gx + h, 0); }
-  for (gy = 0; gy < h; gy += 54 * scale) { gctx.moveTo(0, gy); gctx.lineTo(w * 0.56, gy); }
-  gctx.stroke();
-
-  // Tokyo waterfront silhouette — deliberately graphic rather than literal,
-  // so it belongs to the established procedural map style.
+  // Dense, rectilinear Tokyo skyline behind the low passenger terminal.
   var buildings = [
-    [0.025,0.17,0.065,0.19], [0.095,0.11,0.052,0.25], [0.153,0.20,0.075,0.16],
-    [0.234,0.08,0.058,0.28], [0.298,0.15,0.086,0.21], [0.390,0.12,0.052,0.24],
-    [0.448,0.19,0.070,0.17]
+    [0.015,0.13,0.055,0.22], [0.076,0.08,0.050,0.27], [0.132,0.17,0.070,0.18],
+    [0.208,0.05,0.054,0.30], [0.268,0.12,0.082,0.23], [0.356,0.075,0.052,0.275],
+    [0.414,0.16,0.068,0.19], [0.488,0.10,0.058,0.25], [0.552,0.18,0.045,0.17]
   ];
   var i, b, bx, by, bw, bh;
   for (i = 0; i < buildings.length; i++) {
@@ -1357,44 +1346,111 @@ function drawGround_tokyoStatic(gctx, w, h) {
       for (wx = bx + 7 * scale; wx < bx + bw - 4 * scale; wx += 11 * scale) gctx.fillRect(wx, wy, 2 * scale, 2 * scale);
     }
   }
-  // A restrained red lattice tower makes Tokyo legible even at thumbnail size.
-  var tx = w * 0.19, tBase = h * 0.34, tTop = h * 0.045;
+  // A restrained red lattice tower keeps Tokyo legible at thumbnail size.
+  var tx = w * 0.105, tBase = h * 0.35, tTop = h * 0.035;
   gctx.strokeStyle = rgba(PAL.hanko, 0.88); gctx.lineWidth = 2.2 * scale;
   gctx.beginPath(); gctx.moveTo(tx - 18 * scale, tBase); gctx.lineTo(tx, tTop); gctx.lineTo(tx + 18 * scale, tBase); gctx.stroke();
   gctx.lineWidth = 1 * scale;
   for (i = 1; i <= 5; i++) { var ty = tTop + (tBase - tTop) * i / 6; var tw = 3 + 15 * i / 6; gctx.beginPath(); gctx.moveTo(tx - tw * scale, ty); gctx.lineTo(tx + tw * scale, ty); gctx.stroke(); }
-  gctx.restore();
+
+  // Broad concrete apron. Its hard edge is intentionally vertical/stepped;
+  // drawSea_tokyoQuay repeats that geometry above the water layer.
+  var apron = gctx.createLinearGradient(0, h * 0.30, w * 0.62, h);
+  apron.addColorStop(0, 'rgb(91,101,108)'); apron.addColorStop(0.58, 'rgb(62,72,80)'); apron.addColorStop(1, 'rgb(41,51,59)');
+  gctx.fillStyle = apron;
+  gctx.beginPath(); gctx.moveTo(0, h * 0.29); gctx.lineTo(w * 0.61, h * 0.29); gctx.lineTo(w * 0.61, h * 0.44);
+  gctx.lineTo(w * 0.53, h * 0.52); gctx.lineTo(w * 0.53, h); gctx.lineTo(0, h); gctx.closePath(); gctx.fill();
+
+  // Passenger terminal: long, low glass hall with a cantilevered boarding canopy.
+  var hallX = w * 0.12, hallY = h * 0.25, hallW = w * 0.37, hallH = h * 0.23;
+  gctx.fillStyle = rgba(PAL.indigoDeep, 0.97); gctx.fillRect(hallX, hallY, hallW, hallH);
+  gctx.fillStyle = rgba(PAL.seaGlint, 0.31);
+  for (i = 0; i < 8; i++) gctx.fillRect(hallX + hallW * (0.035 + i * 0.12), hallY + hallH * 0.24, hallW * 0.075, hallH * 0.48);
+  gctx.fillStyle = rgba(PAL.washiWarm, 0.82); gctx.fillRect(hallX - 8 * scale, hallY - 7 * scale, hallW + 16 * scale, 8 * scale);
+  gctx.fillStyle = rgba(PAL.hanko, 0.76); gctx.fillRect(hallX + hallW * 0.08, hallY + hallH * 0.82, hallW * 0.22, 3 * scale);
+  gctx.font = '800 ' + Math.round(10 * scale) + 'px system-ui,sans-serif';
+  gctx.textAlign = 'left'; gctx.textBaseline = 'bottom'; gctx.fillStyle = rgba(PAL.washi, 0.78);
+  gctx.fillText('TAKESHIBA', hallX + 9 * scale, hallY - 10 * scale);
+  // Canopy/gangway approach from the hall toward the berth.
+  gctx.fillStyle = rgba(PAL.washiWarm, 0.34);
+  gctx.beginPath(); gctx.moveTo(w * 0.45, h * 0.39); gctx.lineTo(w * 0.60, h * 0.46); gctx.lineTo(w * 0.57, h * 0.52); gctx.lineTo(w * 0.43, h * 0.45); gctx.closePath(); gctx.fill();
+
+  // Loading lanes and pedestrian markings read as city infrastructure, not island paths.
+  gctx.strokeStyle = rgba(PAL.washiWarm, 0.16); gctx.lineWidth = 1 * scale;
+  gctx.beginPath();
+  var gx, gy;
+  for (gy = h * 0.53; gy < h; gy += 52 * scale) { gctx.moveTo(0, gy); gctx.lineTo(w * 0.52, gy); }
+  for (gx = 18 * scale; gx < w * 0.52; gx += 58 * scale) { gctx.moveTo(gx, h * 0.50); gctx.lineTo(gx, h); }
+  gctx.stroke();
+  // Boulevard + zebra crossing at the landward edge.
+  gctx.fillStyle = rgba(PAL.shadow, 0.32); gctx.fillRect(0, h * 0.83, w * 0.52, h * 0.17);
+  gctx.strokeStyle = rgba(PAL.goldPale, 0.30); gctx.lineWidth = 1.5 * scale; gctx.setLineDash([18 * scale, 14 * scale]);
+  gctx.beginPath(); gctx.moveTo(0, h * 0.915); gctx.lineTo(w * 0.50, h * 0.915); gctx.stroke(); gctx.setLineDash([]);
+  gctx.fillStyle = rgba(PAL.washi, 0.34);
+  for (i = 0; i < 7; i++) gctx.fillRect(w * (0.055 + i * 0.025), h * 0.84, w * 0.012, h * 0.14);
+
+  // Two tiny luggage carts reinforce the boarding workflow without competing
+  // with the station discs or crew.
+  for (i = 0; i < 2; i++) {
+    var cartX = w * (0.39 + i * 0.055), cartY = h * (0.72 + i * 0.035);
+    gctx.fillStyle = rgba(PAL.hanko, 0.58); gctx.fillRect(cartX, cartY, 20 * scale, 9 * scale);
+    gctx.fillStyle = rgba(PAL.indigoDeep, 0.9); gctx.beginPath(); gctx.arc(cartX + 4 * scale, cartY + 11 * scale, 2 * scale, 0, 6.2832); gctx.arc(cartX + 17 * scale, cartY + 11 * scale, 2 * scale, 0, 6.2832); gctx.fill();
+  }
 
   paperTexture(gctx, w, h, 0.045);
 }
 
 function drawGround_hotelStatic(gctx, w, h) {
-  drawGround_ellipseBase(gctx, w, h);
+  // Warm, contained hotel interior overlooking a dense Tokyo street. No land
+  // contour, shoreline, cloud shadow or island texture is reused here.
   var floor = gctx.createLinearGradient(0, 0, w, h);
-  floor.addColorStop(0, 'rgb(72,76,82)'); floor.addColorStop(1, 'rgb(30,37,44)');
+  floor.addColorStop(0, 'rgb(92,76,69)'); floor.addColorStop(0.5, 'rgb(57,54,58)'); floor.addColorStop(1, 'rgb(27,35,43)');
   gctx.fillStyle = floor; gctx.fillRect(0, 0, w, h);
-  // A contained hotel floor plan: carpeted circulation, lobby, dining room,
-  // and room wing. It intentionally has no shoreline or pier geometry.
   gctx.save();
+  // Panoramic window and skyline on the right.
+  var wx0 = w * 0.60, wy0 = h * 0.075, ww = w * 0.35, wh = h * 0.66;
+  var win = gctx.createLinearGradient(0, wy0, 0, wy0 + wh);
+  win.addColorStop(0, 'rgb(45,68,86)'); win.addColorStop(0.62, 'rgb(38,52,66)'); win.addColorStop(1, 'rgb(21,30,40)');
+  gctx.fillStyle = win; gctx.fillRect(wx0, wy0, ww, wh);
+  var bh = [0.25,0.39,0.20,0.46,0.31,0.24,0.36];
+  for (var i = 0; i < bh.length; i++) {
+    var cbx = wx0 + ww * (0.045 + i * 0.132), cbw = ww * 0.10, cbh = wh * bh[i];
+    gctx.fillStyle = rgba(liftRGB(PAL.indigo, 8 + i * 2), 0.98); gctx.fillRect(cbx, wy0 + wh - cbh, cbw, cbh);
+    gctx.fillStyle = rgba(PAL.goldPale, 0.22);
+    for (var rw = wy0 + wh - cbh + 8 * scale; rw < wy0 + wh - 5 * scale; rw += 11 * scale) gctx.fillRect(cbx + 5 * scale, rw, Math.max(1, cbw - 10 * scale), 1.5 * scale);
+  }
+  gctx.strokeStyle = rgba(PAL.goldPale, 0.36); gctx.lineWidth = 3 * scale; gctx.strokeRect(wx0, wy0, ww, wh);
+  gctx.lineWidth = 1 * scale;
+  for (i = 1; i < 4; i++) { gctx.beginPath(); gctx.moveTo(wx0 + ww * i / 4, wy0); gctx.lineTo(wx0 + ww * i / 4, wy0 + wh); gctx.stroke(); }
+
+  // Guest-room wing with individual doors and warm sconces.
+  gctx.fillStyle = rgba(PAL.indigoDeep, 0.72); gctx.fillRect(w * 0.045, h * 0.43, w * 0.22, h * 0.48);
+  for (i = 0; i < 6; i++) {
+    var dx = w * (0.068 + (i % 3) * 0.064), dy = h * (0.51 + Math.floor(i / 3) * 0.20);
+    gctx.fillStyle = rgba(PAL.hanko, 0.58); gctx.fillRect(dx, dy, w * 0.043, h * 0.105);
+    radialGlow(gctx, dx + w * 0.021, dy - 4 * scale, 8 * scale, PAL.lantern, 0.14);
+  }
+
+  // Carpeted circulation links the three actual hotel work zones.
   gctx.strokeStyle = rgba(PAL.goldLeaf, 0.28); gctx.lineWidth = 18 * scale;
   gctx.lineCap = 'round';
   gctx.beginPath();
   gctx.moveTo(w * 0.16, h * 0.72); gctx.lineTo(w * 0.28, h * 0.44); gctx.lineTo(w * 0.43, h * 0.64);
   gctx.stroke();
-  gctx.lineWidth = 1.5 * scale; gctx.strokeStyle = rgba(PAL.goldPale, 0.42);
-  gctx.strokeRect(w * 0.055, h * 0.46, w * 0.22, h * 0.42);
-  gctx.strokeRect(w * 0.31, h * 0.48, w * 0.25, h * 0.34);
-  gctx.fillStyle = rgba(PAL.hanko, 0.65);
-  for (var i = 0; i < 6; i++) gctx.fillRect(w * (0.075 + (i % 3) * 0.062), h * (0.53 + Math.floor(i / 3) * 0.16), w * 0.042, h * 0.07);
-  // Tokyo skyline through a broad lobby window.
-  gctx.fillStyle = rgba(PAL.indigoDeep, 0.92); gctx.fillRect(w * 0.61, h * 0.10, w * 0.32, h * 0.58);
-  var bh = [0.23,0.34,0.18,0.40,0.29,0.20];
-  for (i = 0; i < bh.length; i++) {
-    gctx.fillStyle = rgba(liftRGB(PAL.indigo, 8 + i * 2), 0.96);
-    gctx.fillRect(w * (0.63 + i * 0.047), h * (0.64 - bh[i]), w * 0.036, h * bh[i]);
+  gctx.lineWidth = 1.5 * scale; gctx.strokeStyle = rgba(PAL.goldPale, 0.34);
+  gctx.strokeRect(w * 0.045, h * 0.43, w * 0.22, h * 0.48);
+
+  // Lobby desk, brass luggage cart and breakfast tables/buffet.
+  roundRect(gctx, w * 0.205, h * 0.35, w * 0.16, h * 0.075, 5 * scale);
+  gctx.fillStyle = rgba(PAL.washiWarm, 0.60); gctx.fill();
+  gctx.fillStyle = rgba(PAL.hanko, 0.62); gctx.fillRect(w * 0.34, h * 0.55, w * 0.19, h * 0.035);
+  for (i = 0; i < 3; i++) {
+    gctx.beginPath(); gctx.arc(w * (0.34 + i * 0.075), h * 0.70, 15 * scale, 0, 6.2832);
+    gctx.fillStyle = rgba(PAL.washiWarm, 0.20); gctx.fill();
   }
-  gctx.strokeStyle = rgba(PAL.goldPale, 0.32); gctx.lineWidth = 2 * scale;
-  gctx.strokeRect(w * 0.61, h * 0.10, w * 0.32, h * 0.58);
+  gctx.strokeStyle = rgba(PAL.goldPale, 0.62); gctx.lineWidth = 2 * scale;
+  gctx.beginPath(); gctx.moveTo(w * 0.18, h * 0.55); gctx.lineTo(w * 0.18, h * 0.66); gctx.lineTo(w * 0.225, h * 0.66); gctx.stroke();
+  gctx.fillStyle = rgba(PAL.hanko, 0.62); gctx.fillRect(w * 0.185, h * 0.58, w * 0.035, h * 0.07);
   gctx.restore();
   paperTexture(gctx, w, h, 0.045);
 }
@@ -1591,15 +1647,73 @@ function drawSea_oceanPath(ctx, w, h) {
   ctx.closePath();
 }
 
-// Tokyo replaces the island's sand/foam with a concrete quay. It must be
-// drawn AFTER the clipped harbor water, otherwise that water and the generic
-// foam pass paint over the seaward half of the pier.
+// Takeshiba replaces the island's sand/foam with a hard, stepped city quay,
+// passenger pier and moored Ogasawara-maru. This pass is deliberately drawn
+// AFTER the shared clipped harbor water: the angular concrete masks the old
+// organic shore composition without changing Hahajima's shoreline/shoreNX.
 function drawSea_tokyoQuay(ctx, w, h) {
-  ctx.save(); ctx.beginPath(); drawSea_traceShore(ctx, w, h);
-  ctx.strokeStyle = 'rgba(190,198,202,0.78)'; ctx.lineWidth = 18 * scale; ctx.stroke();
-  ctx.beginPath(); drawSea_traceShore(ctx, w, h);
-  ctx.strokeStyle = rgba(PAL.gold, 0.72); ctx.lineWidth = 2 * scale;
-  ctx.setLineDash([10 * scale, 8 * scale]); ctx.stroke();
+  ctx.save();
+
+  // Stepped concrete seawall: vertical north berth, diagonal corner, vertical
+  // south berth. Its wide fill fully conceals the island's curved foam line.
+  var concrete = ctx.createLinearGradient(w * 0.46, 0, w * 0.63, h);
+  concrete.addColorStop(0, 'rgba(158,166,170,.98)'); concrete.addColorStop(1, 'rgba(73,83,91,.98)');
+  ctx.fillStyle = concrete;
+  ctx.beginPath();
+  ctx.moveTo(w * 0.44, -2 * scale); ctx.lineTo(w * 0.615, -2 * scale); ctx.lineTo(w * 0.615, h * 0.43);
+  ctx.lineTo(w * 0.535, h * 0.515); ctx.lineTo(w * 0.535, h + 2 * scale); ctx.lineTo(w * 0.44, h + 2 * scale);
+  ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = 'rgba(214,220,221,.84)'; ctx.lineWidth = 4 * scale;
+  ctx.beginPath(); ctx.moveTo(w * 0.615, 0); ctx.lineTo(w * 0.615, h * 0.43); ctx.lineTo(w * 0.535, h * 0.515); ctx.lineTo(w * 0.535, h); ctx.stroke();
+  ctx.strokeStyle = rgba(PAL.gold, 0.72); ctx.lineWidth = 2 * scale; ctx.setLineDash([11 * scale, 8 * scale]);
+  ctx.beginPath(); ctx.moveTo(w * 0.595, 0); ctx.lineTo(w * 0.595, h * 0.42); ctx.lineTo(w * 0.515, h * 0.50); ctx.lineTo(w * 0.515, h); ctx.stroke(); ctx.setLineDash([]);
+
+  // Broad passenger pier and covered gangway point from the actual Takeshiba
+  // berth station toward the actual Ogasawara-maru boarding station.
+  var pier = ctx.createLinearGradient(w * 0.49, h * 0.48, w * 0.84, h * 0.70);
+  pier.addColorStop(0, 'rgba(181,187,188,.98)'); pier.addColorStop(1, 'rgba(87,98,104,.98)');
+  ctx.fillStyle = pier;
+  ctx.beginPath(); ctx.moveTo(w * 0.49, h * 0.485); ctx.lineTo(w * 0.845, h * 0.54);
+  ctx.lineTo(w * 0.825, h * 0.705); ctx.lineTo(w * 0.49, h * 0.625); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = rgba(PAL.rimWhite, 0.58); ctx.lineWidth = 2 * scale; ctx.stroke();
+  ctx.strokeStyle = rgba(PAL.goldPale, 0.46); ctx.lineWidth = 1.4 * scale; ctx.setLineDash([7 * scale, 7 * scale]);
+  ctx.beginPath(); ctx.moveTo(w * 0.52, h * 0.555); ctx.lineTo(w * 0.80, h * 0.61); ctx.stroke(); ctx.setLineDash([]);
+  // Bollards and safety lamps.
+  for (var bi = 0; bi < 5; bi++) {
+    var bpx = w * (0.545 + bi * 0.062), bpy = h * (0.615 + bi * 0.011);
+    ctx.beginPath(); ctx.arc(bpx, bpy, 3.2 * scale, 0, 6.2832); ctx.fillStyle = rgba(PAL.indigoDeep, 0.94); ctx.fill();
+    radialGlow(ctx, bpx, bpy - 3 * scale, 9 * scale, PAL.lantern, 0.10 + 0.10 * LIGHT.night);
+  }
+
+  // Moored long-haul ferry: white superstructure, navy hull and red funnel.
+  // It is intentionally partial at the right frame edge, reading as a large
+  // real ferry beside the terminal rather than the small boats on Hahajima.
+  ctx.beginPath();
+  ctx.moveTo(w * 0.735, h * 0.455); ctx.lineTo(w * 1.04, h * 0.405); ctx.lineTo(w * 1.04, h * 0.84);
+  ctx.lineTo(w * 0.79, h * 0.815); ctx.lineTo(w * 0.73, h * 0.665); ctx.closePath();
+  var hull = ctx.createLinearGradient(0, h * 0.43, 0, h * 0.84);
+  hull.addColorStop(0, '#f0f1eb'); hull.addColorStop(0.53, '#cbd2d0'); hull.addColorStop(0.54, '#29465b'); hull.addColorStop(1, '#11283a');
+  ctx.fillStyle = hull; ctx.fill(); ctx.strokeStyle = rgba(PAL.rimWhite, 0.62); ctx.lineWidth = 2 * scale; ctx.stroke();
+
+  // Deckhouse bands and passenger windows.
+  roundRect(ctx, w * 0.775, h * 0.42, w * 0.25, h * 0.16, 7 * scale);
+  ctx.fillStyle = rgba(PAL.washi, 0.96); ctx.fill(); ctx.strokeStyle = rgba(PAL.seaInk, 0.45); ctx.lineWidth = 1.2 * scale; ctx.stroke();
+  ctx.fillStyle = rgba(PAL.seaDeep, 0.82);
+  for (bi = 0; bi < 8; bi++) {
+    roundRect(ctx, w * (0.792 + bi * 0.029), h * 0.465, w * 0.018, h * 0.036, 1.5 * scale); ctx.fill();
+  }
+  roundRect(ctx, w * 0.885, h * 0.345, w * 0.036, h * 0.10, 4 * scale);
+  ctx.fillStyle = rgba(PAL.hanko, 0.97); ctx.fill();
+  ctx.fillStyle = rgba(PAL.indigoDeep, 0.95); ctx.fillRect(w * 0.885, h * 0.345, w * 0.036, h * 0.025);
+  ctx.fillStyle = 'rgba(225,119,48,.94)';
+  roundRect(ctx, w * 0.80, h * 0.60, w * 0.075, 9 * scale, 4 * scale); ctx.fill();
+  ctx.font = '800 ' + Math.round(8 * scale) + 'px system-ui,sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = rgba(PAL.washi, 0.78); ctx.fillText('OGASAWARA-MARU', w * 0.785, h * 0.725);
+
+  // Covered boarding bridge laid on top of both pier and ship.
+  ctx.fillStyle = rgba(PAL.washiWarm, 0.86);
+  ctx.beginPath(); ctx.moveTo(w * 0.65, h * 0.535); ctx.lineTo(w * 0.79, h * 0.49); ctx.lineTo(w * 0.80, h * 0.535); ctx.lineTo(w * 0.66, h * 0.58); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = rgba(PAL.indigoDeep, 0.68); ctx.lineWidth = 1 * scale; ctx.stroke();
   ctx.restore();
 }
 
@@ -2236,6 +2350,13 @@ function drawSky(ctx, sim, t, view) {
   var nAmt = LIGHT.night;
 
   ctx.save();
+  // Hotel lighting enters through the panoramic window; the carpet, doors and
+  // breakfast room remain warm interior space instead of receiving an outdoor
+  // full-stage sky wash.
+  if (_scene.id === 'tokyo-hotel') {
+    ctx.beginPath(); ctx.moveTo(w * 0.60, h * 0.075); ctx.lineTo(w * 0.95, h * 0.075);
+    ctx.lineTo(w * 0.95, h * 0.735); ctx.lineTo(w * 0.60, h * 0.735); ctx.closePath(); ctx.clip();
+  }
 
   // ---- day-phase wash: smoother 5-stop gradient (was a flat top/mid/horizon 3-stop) so the tint
   // reads as a graded sky rather than a hard band; every colour still comes straight off the SKY table ----
@@ -2289,6 +2410,7 @@ function drawSky(ctx, sim, t, view) {
 // clouds hold still at their seed positions — the shade (light) stays, the
 // drift (motion) stops.
 function drawCloudShadows(ctx, sim, t, view) {
+  if (_scene.id === 'tokyo-hotel') return; // indoors: city light is confined to the window
   var dayA = 0.055 * (1 - LIGHT.night);
   if (dayA <= 0.006) return;
   var w = view.w, h = view.h, i, kx, cx2, cy2, rx;
@@ -2430,8 +2552,8 @@ function drawGuests(ctx, sim, t, view) {
 
     // a fixed shore caster leans very slightly toward the water — a nicer, more purposeful stance
     // than standing bolt upright; the whole pawn (body/head/rod) rotates as one group about its feet.
-    var leaning = _scene.id === 'hahajima-hinata' && !!gs.cast;
-    if (leaning) {
+    var islandCaster = _scene.id === 'hahajima-hinata' && sceneFlags.localBoat && !!gs.cast;
+    if (islandCaster) {
       ctx.save();
       ctx.translate(cx, fy);
       ctx.rotate(-7 * Math.PI / 180);
@@ -2461,6 +2583,20 @@ function drawGuests(ctx, sim, t, view) {
     ctx.fillRect(bx, by + bh - 4 * figs, bw, 1.4 * figs);
     ctx.restore();
 
+    // Tokyo guests are travelling with luggage, not casting from an island
+    // shore. A restrained suitcase on alternating figures makes the hotel and
+    // terminal crowds operationally legible without adding new actors.
+    if (_scene.family === 'tokyo' && i % 3 === 0) {
+      var caseX = cx + 5.5 * figs, caseY = fy - 6.5 * figs;
+      ctx.strokeStyle = rgba(PAL.goldPale, 0.52); ctx.lineWidth = 0.8 * figs;
+      ctx.beginPath(); ctx.moveTo(caseX + 1.5 * figs, caseY); ctx.lineTo(caseX + 1.5 * figs, caseY - 2.5 * figs);
+      ctx.lineTo(caseX + 4.5 * figs, caseY - 2.5 * figs); ctx.lineTo(caseX + 4.5 * figs, caseY); ctx.stroke();
+      roundRect(ctx, caseX, caseY, 6 * figs, 7 * figs, 1.5 * figs);
+      ctx.fillStyle = rgba(i % 2 ? PAL.hanko : PAL.indigo, 0.88); ctx.fill();
+      ctx.beginPath(); ctx.arc(caseX + 1.5 * figs, caseY + 7.5 * figs, 0.7 * figs, 0, 6.2832);
+      ctx.arc(caseX + 4.5 * figs, caseY + 7.5 * figs, 0.7 * figs, 0, 6.2832); ctx.fillStyle = rgba(PAL.shadow, 0.9); ctx.fill();
+    }
+
     ctx.save();
     roundRect(ctx, bx, by, bw, bh, br); ctx.clip();
     ctx.strokeStyle = rgba(PAL.rimWhite, 0.24);
@@ -2485,12 +2621,12 @@ function drawGuests(ctx, sim, t, view) {
 
     // fishing rod for the fixed shore casters (::after on .g-cast .g-body) — bent, gold-lit,
     // with a drooping line + tiny glinting lure (drawGuests_rod above)
-    if (gs.cast) {
+    if (islandCaster) {
       var px0 = cx + 2 * figs, py0 = fy - 16.5 * figs;
       drawGuests_rod(ctx, px0, py0, figs, view.rm);
     }
 
-    if (leaning) ctx.restore();  // end lean rotation
+    if (islandCaster) ctx.restore();  // end lean rotation
 
     ctx.restore();               // end hush alpha
   }

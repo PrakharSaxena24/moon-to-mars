@@ -1445,6 +1445,10 @@ claimed schedule.
 - **Presentation/accessibility:** planning and reports use the route overview; losses aggregate by physical
   place; day badges use authored readiness; guests appear when transport/guest work requires them; Canvas and
   `?dom` share geography; dialog focus survives scene changes; reduced-motion changes take effect live.
+- **Tokyo landscape separation:** the hotel is a warm, contained lobby/room/breakfast interior with a framed
+  high-rise view. Takeshiba is an angular paved waterfront with terminal glazing, loading lanes, a straight
+  stepped seawall, passenger pier, boarding bridge, and moored Ogasawara-maru. Neither reuses Hahajima's
+  organic coast, wildlife, local boats, or fishing-guest cues; `?dom` carries the same distinction.
 
 The older direct-island/five-hour-return descriptions in §§28–29 remain only as implementation history and
 must not be used as itinerary facts.

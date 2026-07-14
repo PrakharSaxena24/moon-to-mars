@@ -1444,14 +1444,31 @@ console.log('\n=== SEGMENT-AWARE MAP PROFILES (presentation-only) ===');
   ok(profileIds.every(function (id) { var p0 = S.sceneProfile(null, { mapProfile: id }); return p0.en && p0.jp && p0.family && p0.stationSet; }),
     'map: every exact scene profile has bilingual status + family/station metadata');
 
-  var loadP = profile('load', hotelMove.start - 1), islandP = profile('fishday', 780);
+  var loadP = profile('load', hotelMove.start - 1), terminalP = profile('load', hotelMove.start), islandP = profile('fishday', 780);
   var loadKey = S.groundCacheKey(loadP.p, 900, 500, 2, 1);
+  var terminalKey = S.groundCacheKey(terminalP.p, 900, 500, 2, 1);
   var islandKey = S.groundCacheKey(islandP.p, 900, 500, 2, 1);
-  ok(loadKey !== islandKey &&
+  ok(loadKey !== terminalKey && loadKey !== islandKey &&
      loadKey !== S.groundCacheKey(loadP.p, 901, 500, 2, 1) &&
      loadKey !== S.groundCacheKey(loadP.p, 900, 500, 1, 1) &&
      loadKey !== S.groundCacheKey(loadP.p, 900, 500, 2, 1.1),
     'map: terrain cache key separates profile, size, DPR, and scale');
+  var hotelFlags = S.domFlagsForScene(loadP.sim, { mapProfile: 'load' });
+  var terminalFlags = S.domFlagsForScene(terminalP.sim, { mapProfile: 'load' });
+  ok(loadP.p.kind === 'hotel' && terminalP.p.kind === 'terminal' &&
+     hotelFlags.water === false && terminalFlags.water === true,
+    'map: Tokyo hotel interior and Takeshiba waterfront expose different physical landscape semantics');
+  ok(hotelFlags.seaLife === false && terminalFlags.seaLife === false &&
+     hotelFlags.localBoat === false && terminalFlags.localBoat === false,
+    'map: neither Tokyo landscape leaks Hahajima wildlife or local fishing boats');
+  var hotelVisible = S.stationsForScene(loadP.sim, { mapProfile: 'load' }).filter(function (st) { return !st.hidden; }).map(function (st) { return st.id; }).sort();
+  var terminalStations = S.stationsForScene(terminalP.sim, { mapProfile: 'load' });
+  var terminalVisible = terminalStations.filter(function (st) { return !st.hidden; }).map(function (st) { return st.id; }).sort();
+  ok(hotelVisible.join(',') === 'command,lodging,mess' && terminalVisible.join(',') === 'command,mess,port,vessel',
+    'map: hotel rooms/lobby/breakfast topology differs from terminal assembly/concourse/berth/boarding');
+  var terminalNames = terminalStations.filter(function (st) { return !st.hidden; }).map(function (st) { return st.name.en; });
+  ok(terminalNames.indexOf('Takeshiba berth') >= 0 && terminalNames.indexOf('Ogasawara-maru boarding') >= 0,
+    'map: Takeshiba landscape names its actual berth and moored Ogasawara-maru');
   var loadNames = S.stationsForScene(loadP.sim, { mapProfile: 'load' }).filter(function (st) { return !st.hidden; }).map(function (st) { return st.name.en; });
   ok(loadNames.indexOf('Hotel lobby') >= 0 && loadNames.indexOf('Breakfast room') >= 0 &&
      !loadNames.some(function (name) { return /Hinata|Hahajima/.test(name); }),
@@ -1479,21 +1496,31 @@ console.log('\n=== SEGMENT-AWARE MAP PROFILES (presentation-only) ===');
   // Render one static frame of every profile through a STRICT recording-canvas
   // shim. Unknown methods/properties throw, so a misspelled Canvas API cannot
   // silently pass as it would under an accept-everything Proxy.
-  var grad = function () { return { addColorStop: function () {} }; };
+  var grad = function () { return { addColorStop: function (offset) {
+    if (typeof offset !== 'number' || !isFinite(offset) || offset < 0 || offset > 1) throw new Error('Invalid Canvas gradient stop: ' + offset);
+  } }; };
   var canvasMethods = { arc:1, arcTo:1, beginPath:1, clearRect:1, clip:1, closePath:1, drawImage:1,
     ellipse:1, fill:1, fillRect:1, fillText:1, lineTo:1, moveTo:1, quadraticCurveTo:1, restore:1,
     rotate:1, save:1, scale:1, setLineDash:1, setTransform:1, stroke:1, strokeRect:1, translate:1 };
   var canvasProps = { fillStyle:1, strokeStyle:1, lineWidth:1, lineCap:1, lineJoin:1, lineDashOffset:1,
     shadowColor:1, shadowBlur:1, font:1, textAlign:1, textBaseline:1, globalAlpha:1, globalCompositeOperation:1,
     _prsGrain:1, _prsLand:1 };
-  function strictCanvas(onClear) { return new Proxy({ globalAlpha: 1 }, {
+  function strictCanvas(onClear) { return new Proxy({ globalAlpha: 1, _depth: 0 }, {
     get: function (t, prop) {
       if (Object.prototype.hasOwnProperty.call(t, prop)) return t[prop];
       if (prop === 'measureText') return function (s) { return { width: String(s).length * 6 }; };
       if (prop === 'createLinearGradient' || prop === 'createRadialGradient') return grad;
       if (prop === 'createPattern') return function () { return null; };
       if (prop === 'clearRect' && onClear) return onClear;
-      if (canvasMethods[prop]) return function () {};
+      if (prop === 'save') return function () { t._depth++; };
+      if (prop === 'restore') return function () { if (t._depth <= 0) throw new Error('Unbalanced Canvas restore'); t._depth--; };
+      if (canvasMethods[prop]) return function () {
+        var args = Array.prototype.slice.call(arguments);
+        for (var ai = 0; ai < args.length; ai++) if (typeof args[ai] === 'number' && !isFinite(args[ai])) throw new Error('Non-finite Canvas argument for ' + prop);
+        if (prop === 'arc' && args[2] < 0) throw new Error('Negative arc radius');
+        if (prop === 'ellipse' && (args[2] < 0 || args[3] < 0)) throw new Error('Negative ellipse radius');
+        if (prop === 'setLineDash' && (!Array.isArray(args[0]) || args[0].some(function (n) { return typeof n !== 'number' || !isFinite(n) || n < 0; }))) throw new Error('Invalid line dash');
+      };
       if (canvasProps[prop]) return undefined;
       throw new Error('Unknown CanvasRenderingContext2D member: ' + String(prop));
     },
@@ -1508,19 +1535,22 @@ console.log('\n=== SEGMENT-AWARE MAP PROFILES (presentation-only) ===');
     ['arrival', disembark.start], ['arrival', cross.start], ['arrival', cross.end],
     ['ops', 600], ['fishday', 780], ['return', interReturn.start],
     ['return', interReturn.end], ['return', sail.start], ['return', sail.end],
-    ['all', null, 'all']
+    ['all', null, 'all'],
+    ['load', hotelMove.start - 1, null, 360, 640], ['load', hotelMove.start, null, 360, 640],
+    ['load', hotelMove.start - 1, null, 1440, 720], ['load', hotelMove.start, null, 1440, 720]
   ];
   var renderErr = null;
   try {
     frames.forEach(function (row) {
-      var x = profile(row[0], row[1], row[2]), fig = {};
+      var x = profile(row[0], row[1], row[2]), fig = {}, fw = row[3] || 900, fh = row[4] || 500;
       x.sim.participants.forEach(function (person) {
         var st = P.station(person.station);
-        fig[person.id] = { pid: person.id, cx: st.x * 900, cy: st.y * 500, tx: st.x * 900, ty: st.y * 500, walking: false, faceL: false };
+        fig[person.id] = { pid: person.id, cx: st.x * fw, cy: st.y * fh, tx: st.x * fw, ty: st.y * fh, walking: false, faceL: false };
       });
-      S.scene(ctx, x.sim, 1, { w: 900, h: 500, scale: 1, lang: 'en', rm: row[0] !== 'voyage', mapProfile: row[2] || row[0], night: false,
-        guestsVisible: false, fig: fig, guest: {}, boat: { cx: 468, cy: 275 }, wakes: [], motes: [],
+      S.scene(ctx, x.sim, 1, { w: fw, h: fh, scale: Math.max(1, Math.min(1.7, Math.min(fw / 1000, fh / 560))), lang: 'en', rm: row[0] !== 'voyage', mapProfile: row[2] || row[0], night: false,
+        guestsVisible: false, fig: fig, guest: {}, boat: { cx: fw * 0.52, cy: fh * 0.55 }, wakes: [], motes: [],
         cascade: { hops: [], has: false }, ghost: [{}, {}, {}], trail: [], chain: [], hotPts: [], frozen: false });
+      if (ctx._depth !== 0) throw new Error('Unbalanced Canvas save/restore after ' + row[0] + ' frame: ' + ctx._depth);
     });
   } catch (e) { renderErr = e; }
   ok(!renderErr, 'map: every scene profile renders a dependency-free static frame' + (renderErr ? ' (' + renderErr.message + ')' : ''));
