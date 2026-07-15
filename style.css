@@ -35,6 +35,12 @@ body{
     repeating-linear-gradient(90deg, rgba(36,29,21,.011) 0 1px, transparent 1px 4px);
   padding:22px 16px 48px;line-height:1.5;
 }
+/* Japanese glyphs read optically smaller than Latin glyphs at the same nominal
+   size in the system stacks above.  Raise their ideographic height by a quiet
+   6% in Japanese mode; the property inherits through planner, Live, report,
+   dialogs and controls while every authored px size and English layout stays
+   unchanged.  Pictogram-only spans opt out so this is typography, not icon zoom. */
+html:lang(ja) body{font-size-adjust:ic-height 1.06;}
 .wrap{max-width:920px;margin:0 auto;width:100%;}
 body.running .wrap{max-width:1500px;}   /* §21.5: wider full stage while running (setup/report keep 920) */
 .hidden{display:none !important;}
@@ -72,7 +78,8 @@ body.running .wrap{max-width:1500px;}   /* §21.5: wider full stage while runnin
 .plan-session>summary::-webkit-details-marker{display:none;}
 .plan-session>summary::after{content:'▾';font-size:9px;margin-left:6px;}
 .plan-session[open]>summary::after{transform:rotate(180deg);}
-.plan-session-menu{position:absolute;right:0;top:calc(100% + 7px);z-index:90;width:min(260px,calc(100vw - 32px));display:grid;grid-template-columns:1fr 1fr;gap:7px;padding:10px;background:var(--indigo);border:1px solid var(--accent);border-radius:var(--r-sm);box-shadow:var(--shadow2);}
+.plan-session-menu{position:absolute;right:0;top:calc(100% + 7px);z-index:90;width:min(260px,calc(100vw - 32px));display:none;grid-template-columns:1fr 1fr;gap:7px;padding:10px;background:var(--indigo);border:1px solid var(--accent);border-radius:var(--r-sm);box-shadow:var(--shadow2);}
+.plan-session[open] .plan-session-menu{display:grid;}
 .plan-session-status{grid-column:1/-1;min-height:32px;font-size:11px;line-height:1.35;color:rgba(246,239,220,.8);padding-bottom:7px;border-bottom:1px solid var(--indigo-line);}
 .plan-session-menu .btn{width:100%;white-space:normal;text-align:center;}
 .plan-import-label{display:flex;align-items:center;justify-content:center;}
@@ -713,6 +720,7 @@ body:not(.canvas-stage) .sitemap[data-scene="interisland-ferry"] #stations::befo
 /* ============ §W1 LEDGER RAIL — the score receipt as the progress spine (setup/run/report) ============ */
 .setup-main{min-width:0;}
 .railcard #launch{width:100%;height:48px;font-size:16px;margin-top:12px;}
+html:lang(ja) .railcard #launch{min-height:48px;height:auto;padding:10px 15px;line-height:1.35;white-space:normal;}
 .setup-score-details>summary{cursor:pointer;list-style:none;font-family:var(--serif);font-size:13px;font-weight:700;color:var(--accent-dark);padding:3px 0;}
 .setup-score-details>summary::-webkit-details-marker{display:none;}
 .setup-score-details>summary::after{content:' ▾';font-size:10px;}
@@ -967,6 +975,7 @@ button.rail-row:focus-visible{outline:2px solid var(--accent);outline-offset:1px
 .fd-tick{position:absolute;top:4px;transform:translateX(-50%);font-size:10px;color:var(--ink3);font-weight:700;font-variant-numeric:tabular-nums;}
 .fd-lane{position:absolute;left:0;height:40px;border-top:1px solid var(--line);}
 .fd-lbl{position:absolute;left:0;width:104px;height:40px;display:flex;align-items:center;gap:6px;padding:0 6px;font-size:11px;font-weight:600;color:var(--ink2);background:rgba(239,228,204,.95);z-index:3;white-space:nowrap;overflow:hidden;border-top:1px solid var(--line);}
+html:lang(ja) .fd-lbl{width:108px;}
 .fd-lbl-ic{width:20px;height:20px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0;box-shadow:0 0 0 1.5px var(--bg1),0 0 0 2.5px rgba(184,137,43,.4);}
 .fd-block{position:absolute;height:26px;border-radius:var(--r-sm);background:var(--bg1);border:1px solid var(--line2);border-left:3px solid var(--leader);box-shadow:var(--shadow);cursor:grab;z-index:4;font-size:10.5px;display:flex;align-items:center;padding:0 4px 0 8px;user-select:none;touch-action:none;}
 .fd-block:hover,.fd-block:focus-visible,.fd-block:active{z-index:7;}
@@ -1157,6 +1166,9 @@ button.rail-row:focus-visible{outline:2px solid var(--accent);outline-offset:1px
   .rc-choices{grid-template-columns:1fr;}
   .card{padding:14px 14px;}
   .topbar{padding:16px 16px;}
+  .topbar{position:relative;}
+  .plan-session{position:static;}
+  .plan-session-menu{left:0;right:0;top:calc(100% + 7px);width:auto;}
   .brand h1{font-size:20px;}
   .brand-seal{width:36px;height:36px;font-size:16px;}
   .topbar{flex-direction:column;}
@@ -1639,3 +1651,21 @@ body.mode-live.screen-run.live-decision #btn-quit{flex:0 0 auto;}
 @media(prefers-reduced-motion:reduce){
   .disclosure-caret{transition:none;}
 }
+
+/* Form controls have user-agent font declarations, and a few compact controls
+   intentionally use the `font` shorthand above.  Keep the Japanese optical
+   adjustment after those rules so buttons/selects/inputs match nearby copy. */
+html:lang(ja) :where(button,input,select,textarea){font-size-adjust:inherit;}
+/* Pictogram buttons are also form controls.  Keep this complete opt-out after
+   control inheritance so their glyph geometry remains language-independent. */
+html:lang(ja) :where(
+  .brand-seal,.disclosure-caret,.as-caret,.tray-hint-x,.pc-x,.tc-x,.fd-x,.dd-close,
+  .cv-ic,.rc-ic,.ed-ic,.mc-role,.st-ic,.warn-ic,.lg-dot,.ins-ic,.ins-ic2,
+  .iv-ic,.fd-chip-ic,.fd-lbl-ic,.pc-ic,.pc-bub,.gc-ic,.to-ic,.tc-ic,.td-ic,.pt-ic,
+  .astro .bub
+){font-size-adjust:none;}
+html:lang(ja) :where(
+  .plan-session>summary,.setup-score-details>summary,.chapter-browser>summary,
+  .pr-more>summary,.run-options>summary,.intro-hero,.fd-block.time-unknown
+)::after{font-size-adjust:none;}
+html:lang(ja) :where(.ed-more summary,.plan-chip)::before{font-size-adjust:none;}

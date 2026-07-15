@@ -1540,6 +1540,40 @@ console.log('\n=== SEGMENT-AWARE MAP PROFILES (presentation-only) ===');
   delete require.cache[require.resolve('./stage.js')];
   require('./stage.js');
   var S = global.window.PRS_STAGE;
+  var canvasFontCases = [8, 9.4, 10.5, 11, 14.2, 19];
+  ok(canvasFontCases.every(function (px) {
+    return S.localizedFont('600', px, 'system-ui,sans-serif', 'en') ===
+      '600 ' + Math.round(px) + 'px system-ui,sans-serif';
+  }), 'map type: localized Canvas helper leaves every sampled EN font string byte-identical');
+  ok(canvasFontCases.every(function (px) {
+    var jaPx = parseFloat(S.localizedFont('600', px, 'system-ui,sans-serif', 'ja').match(/ ([0-9.]+)px /)[1]);
+    var roundedBase = Math.round(px), exact = Math.round(roundedBase * 1.06 * 100) / 100;
+    var ratio = jaPx / roundedBase;
+    return jaPx === exact && ratio >= 1.059 && ratio <= 1.061;
+  }), 'map type: explicit JA override applies exactly 1.06 after legacy px rounding (bounded 5.9–6.1%)');
+  var stageTypeSource = require('fs').readFileSync(require('path').join(__dirname, 'stage.js'), 'utf8');
+  var jaWordmarkStart = stageTypeSource.indexOf("chip(ctx, cx, y0 + 7 * scale, 'おがさわら丸', {");
+  var jaWordmarkEnd = jaWordmarkStart < 0 ? -1 : stageTypeSource.indexOf('      });', jaWordmarkStart);
+  var jaWordmarkBlock = jaWordmarkEnd < 0 ? '' : stageTypeSource.slice(jaWordmarkStart, jaWordmarkEnd);
+  ok(stageTypeSource.indexOf("gctx.font = '800 ' + Math.round(10 * scale) + 'px system-ui,sans-serif';") >= 0 &&
+      stageTypeSource.indexOf("ctx.font = 'bold ' + Math.round(11 * scale) + 'px sans-serif';") >= 0 &&
+      jaWordmarkBlock.indexOf("font: '800 ' + Math.round(9 * scale) + 'px system-ui,sans-serif'") >= 0 &&
+      jaWordmarkBlock.indexOf('maxW:') < 0 &&
+      stageTypeSource.indexOf("chip(ctx, cx, y0 + 7 * scale, '島間船（船名・時刻未確認）', {") >= 0 &&
+      stageTypeSource.indexOf("suffix: ' 🎣', suffixFont: '600 ' + Math.round(9 * scale)") >= 0 &&
+      stageTypeSource.indexOf("suffix: ' 🛥', suffixFont: '600 ' + Math.round(9 * scale)") >= 0 &&
+      stageTypeSource.indexOf("var bopts = { tail: 'down', font: chipFont") >= 0,
+    'map type: decorative wordmarks, numeric badges, Kimura/Nobu emoji, and BUB icons retain legacy draw geometry');
+  ok(stageTypeSource.indexOf("else gctx.fillText(a.name, a.x * w + (i > 3 ? -9 : 9) * scale, a.y * h - 7 * scale);") >= 0 &&
+      stageTypeSource.indexOf("else gctx.fillText('Dashed return is inferred as the reverse route · timetable unconfirmed', w * 0.52, h * 0.92);") >= 0 &&
+      stageTypeSource.indexOf("ctx.fillText(nm(st.name), cx, discCy + footR + (isHub ? footR * 0.6 : 6 * scale));") >= 0,
+    'map type: EN overview, footer, and station labels keep legacy three-argument fillText calls');
+  ok(stageTypeSource.indexOf("chip(ctx, cx, cy + 8 * scale, 'Kimura-san 🎣', {") >= 0 &&
+      stageTypeSource.indexOf("chip(ctx, cx, cy + 10 * scale, 'Nobu-san 🛥', {") >= 0 &&
+      stageTypeSource.indexOf("chip(ctx, cx, y0 + 7 * scale, namedLongHaul ? 'OGASAWARA-MARU' : 'INTER-ISLAND VESSEL · UNCONFIRMED', {") >= 0 &&
+      stageTypeSource.indexOf("chip(ctx, cx, feetY + 5 * figs, label, { font: chipFont, pad: chipPad, h: chipH, r: chipR });") >= 0 &&
+      stageTypeSource.indexOf("if (_lang === 'ja') sceneLabelOpts.maxW") >= 0,
+    'map type: EN person/emoji chips stay single-run and scene width fitting remains JA-only');
   function profile(seg, min, requested, cfg) {
     var s = P.createSim(cfg || base, seg, { animate: true });
     if (typeof min === 'number') s.clockMin = min;
@@ -2361,6 +2395,48 @@ console.log('\n=== GUIDED LIVE UI — stable channel commit control ===');
     'the recovery beat no longer repeats the already-repaired missing-handoff warning');
   ok(openGapSource.indexOf("var planSession = $('plan-session'); if (planSession) planSession.open = false") >= 0,
     'entering a Guided decision closes the plan-session disclosure before the topbar is hidden');
+})();
+
+// ============================================================================
+// JAPANESE TYPOGRAPHY — optical lift stays language-scoped and layout-safe.
+// ============================================================================
+console.log('\n=== JAPANESE TYPOGRAPHY — scoped optical sizing ===');
+(function () {
+  var css = require('fs').readFileSync(require('path').join(__dirname, 'style.css'), 'utf8');
+  var controlRule = 'html:lang(ja) :where(button,input,select,textarea){font-size-adjust:inherit;}';
+  var controlRulePos = css.lastIndexOf(controlRule);
+  var iconRulePos = css.lastIndexOf('html:lang(ja) :where(\n  .brand-seal');
+  var iconRuleEnd = iconRulePos < 0 ? -1 : css.indexOf('){font-size-adjust:none;}', iconRulePos);
+  var iconRule = iconRuleEnd < 0 ? '' : css.slice(iconRulePos, iconRuleEnd + 27);
+  var glyphAfterRulePos = css.lastIndexOf('html:lang(ja) :where(\n  .plan-session>summary,.setup-score-details>summary');
+  var glyphAfterRuleEnd = glyphAfterRulePos < 0 ? -1 : css.indexOf(')::after{font-size-adjust:none;}', glyphAfterRulePos);
+  var glyphAfterRule = glyphAfterRuleEnd < 0 ? '' : css.slice(glyphAfterRulePos, glyphAfterRuleEnd + 36);
+  var glyphBeforeRule = 'html:lang(ja) :where(.ed-more summary,.plan-chip)::before{font-size-adjust:none;}';
+  var glyphBeforeRulePos = css.lastIndexOf(glyphBeforeRule);
+  ok(css.indexOf('html:lang(ja) body{font-size-adjust:ic-height 1.06;}') >= 0,
+    'type: Japanese mode applies one inherited 6% ideographic-height adjustment');
+  ok(iconRulePos > controlRulePos &&
+      iconRule.indexOf('.tray-hint-x,.pc-x,.tc-x,.fd-x,.dd-close') >= 0 &&
+      iconRule.indexOf('.cv-ic,.rc-ic,.ed-ic,.mc-role,.st-ic,.warn-ic,.lg-dot') >= 0 &&
+      iconRule.indexOf('.fd-chip-ic,.fd-lbl-ic,.pc-ic,.pc-bub,.gc-ic,.to-ic,.tc-ic,.td-ic,.pt-ic') >= 0,
+    'type: the full pictogram opt-out, including icon-only buttons, wins the final control cascade');
+  ok(glyphAfterRulePos > iconRulePos && glyphBeforeRulePos > iconRulePos &&
+      glyphAfterRule.indexOf('.chapter-browser>summary') >= 0 &&
+      glyphAfterRule.indexOf('.pr-more>summary,.run-options>summary,.intro-hero,.fd-block.time-unknown') >= 0 &&
+      glyphAfterRule.indexOf(')::after{font-size-adjust:none;}') >= 0 &&
+      css.indexOf(glyphBeforeRule) >= 0,
+    'type: decorative ::after/::before glyphs use valid pseudo-outside-:where opt-outs');
+  ok(controlRulePos > css.lastIndexOf('font:'),
+    'type: final form-control inheritance wins over every compact font shorthand');
+  ok(css.indexOf('.plan-session-menu{position:absolute;right:0;top:calc(100% + 7px);z-index:90;width:min(260px,calc(100vw - 32px));display:none;') >= 0 &&
+      css.indexOf('.plan-session[open] .plan-session-menu{display:grid;}') >= 0,
+    'mobile shell: the saved-plan menu is absent while its details element is closed');
+  ok(css.indexOf('.railcard #launch{width:100%;height:48px;font-size:16px;margin-top:12px;}') >= 0 &&
+      css.indexOf('html:lang(ja) .railcard #launch{min-height:48px;height:auto;padding:10px 15px;line-height:1.35;white-space:normal;}') >= 0,
+    'mobile shell: Launch keeps legacy EN metrics while only the Japanese label can grow');
+  ok(css.indexOf('html:lang(ja) .fd-lbl{width:108px;}') >= 0 &&
+      css.indexOf('.plan-session-menu{left:0;right:0;top:calc(100% + 7px);width:auto;}') >= 0,
+    'mobile shell: Japanese lane labels use the reserved 108px gutter and the open saved-plan menu stays inset');
 })();
 
 // ============================================================================

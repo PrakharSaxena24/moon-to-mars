@@ -602,6 +602,20 @@
     return (_lang === 'ja' ? o.jp : o.en) || o.en || '';
   }
 
+  // Match the DOM's Japanese optical lift for the small, localized Canvas
+  // labels.  Start from the exact integer px value the English renderer has
+  // always used, then apply a restrained 6% only in Japanese.  Callers must
+  // opt in: decorative scenery words, numeric badges and emoji keep their
+  // original font strings and geometry.
+  var JA_CANVAS_TEXT_SCALE = 1.06;
+  function localizedFont(weight, rawPx, family, lang) {
+    var basePx = Math.round(rawPx);
+    var px = ((lang || _lang) === 'ja')
+      ? Math.round(basePx * JA_CANVAS_TEXT_SCALE * 100) / 100
+      : basePx;
+    return weight + ' ' + px + 'px ' + (family || 'system-ui,sans-serif');
+  }
+
   function lerp(a, b, k) { return a + (b - a) * k; }
   function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
   function clockOfDay(v) { var m = v % 1440; return m < 0 ? m + 1440 : m; }
@@ -670,19 +684,33 @@
   // o (all optional): font, pad (h-padding, default 4), h (box height, default 14),
   // bg, border, ink (colours), r (corner radius, default 2), alpha (whole-chip),
   // tail ('down' → small triangle under the box, i.e. a speech bubble),
-  // tailLen (tail triangle drop, default 4 — pass a scaled value with scaled h/pad).
+  // tailLen (tail triangle drop, default 4 — pass a scaled value with scaled h/pad),
+  // maxW (optional outer-width clamp), prefix/prefixFont and suffix/suffixFont
+  // (unscaled icon runs around localized text; keep emoji geometry independent
+  // from language size).
   // Returns { w, h } so callers can stack/avoid overlap.
   // NOTE (§21 scale): chip does NOT auto-scale — pass scaled font/h/pad/r/tailLen.
   function chip(ctx, x, y, text, o) {
     o = o || {};
     var font = o.font || '600 10px system-ui,sans-serif';
+    var prefix = o.prefix || '', prefixFont = o.prefixFont || font;
+    var suffix = o.suffix || '', suffixFont = o.suffixFont || font;
     var pad = o.pad != null ? o.pad : 4, h = o.h != null ? o.h : 14;
     var r = o.r != null ? o.r : 2;
     var tailLen = o.tailLen != null ? o.tailLen : 4;
     ctx.save();
     if (o.alpha != null) ctx.globalAlpha *= o.alpha;
+    var prefixW = 0, suffixW = 0;
+    if (prefix) { ctx.font = prefixFont; prefixW = ctx.measureText(prefix).width; }
+    if (suffix) { ctx.font = suffixFont; suffixW = ctx.measureText(suffix).width; }
     ctx.font = font;
-    var w = ctx.measureText(text).width + pad * 2, x0 = x - w / 2;
+    var textW = ctx.measureText(text).width, fixedW = prefixW + suffixW;
+    var contentW = fixedW + textW;
+    var maxContentW = o.maxW != null ? Math.max(1, o.maxW - pad * 2) : contentW;
+    var textMaxW = Math.max(1, maxContentW - fixedW);
+    var textDrawW = Math.min(textW, textMaxW);
+    var drawContentW = fixedW + textDrawW;
+    var w = drawContentW + pad * 2, x0 = x - w / 2;
     roundRect(ctx, x0, y, w, h, r);
     ctx.fillStyle = o.bg || rgba(PAL.washi, 0.92);
     ctx.fill();
@@ -699,7 +727,22 @@
     }
     ctx.fillStyle = o.ink || 'rgb(' + PAL.ink + ')';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(text, x, y + h / 2 + 0.5);
+    if (!prefix && !suffix) {
+      ctx.font = font;
+      if (o.maxW != null) ctx.fillText(text, x, y + h / 2 + 0.5, maxContentW);
+      else ctx.fillText(text, x, y + h / 2 + 0.5);
+    } else {
+      var tx = x - drawContentW / 2;
+      ctx.textAlign = 'left';
+      if (prefix) { ctx.font = prefixFont; ctx.fillText(prefix, tx, y + h / 2 + 0.5); }
+      ctx.font = font;
+      if (o.maxW != null) ctx.fillText(text, tx + prefixW, y + h / 2 + 0.5, textMaxW);
+      else ctx.fillText(text, tx + prefixW, y + h / 2 + 0.5);
+      if (suffix) {
+        ctx.font = suffixFont;
+        ctx.fillText(suffix, tx + prefixW + textDrawW, y + h / 2 + 0.5);
+      }
+    }
     ctx.restore();
     return { w: w, h: h };
   }
@@ -1498,10 +1541,11 @@ function drawGround_overviewStatic(gctx, w, h) {
     radialGlow(gctx, a.x * w, a.y * h, 18 * scale, i === 0 || i === pts.length - 1 ? PAL.hanko : PAL.gold, 0.24);
     gctx.beginPath(); gctx.arc(a.x * w, a.y * h, 5 * scale, 0, 6.2832);
     gctx.fillStyle = rgba(i === 0 || i === pts.length - 1 ? PAL.hanko : PAL.goldPale, 0.95); gctx.fill();
-    gctx.font = '700 ' + Math.round(10 * scale) + 'px system-ui,sans-serif';
+    gctx.font = localizedFont('700', 10 * scale, 'system-ui,sans-serif');
     gctx.textAlign = i > 3 ? 'right' : 'left'; gctx.textBaseline = 'bottom';
     gctx.fillStyle = rgba(PAL.washi, 0.92);
-    gctx.fillText(a.name, a.x * w + (i > 3 ? -9 : 9) * scale, a.y * h - 7 * scale);
+    if (_lang === 'ja') gctx.fillText(a.name, a.x * w + (i > 3 ? -9 : 9) * scale, a.y * h - 7 * scale, w * 0.18);
+    else gctx.fillText(a.name, a.x * w + (i > 3 ? -9 : 9) * scale, a.y * h - 7 * scale);
     if (i < pts.length - 1) {
       b = pts[i + 1];
       var k = 0.58, ax = lerp(a.x, b.x, k) * w, ay = lerp(a.y, b.y, k) * h;
@@ -1509,10 +1553,11 @@ function drawGround_overviewStatic(gctx, w, h) {
       gctx.fillStyle = rgba(PAL.goldPale, 0.82); gctx.beginPath(); gctx.moveTo(5 * scale, 0); gctx.lineTo(-4 * scale, -3 * scale); gctx.lineTo(-4 * scale, 3 * scale); gctx.closePath(); gctx.fill(); gctx.restore();
     }
   }
-  gctx.font = '600 ' + Math.round(10 * scale) + 'px system-ui,sans-serif';
+  gctx.font = localizedFont('600', 10 * scale, 'system-ui,sans-serif');
   gctx.textAlign = 'center'; gctx.textBaseline = 'bottom';
   gctx.fillStyle = rgba(PAL.seaGlint, 0.78);
-  gctx.fillText(_lang === 'ja' ? '破線の帰路は逆順ルートの推定（時刻未確認）' : 'Dashed return is inferred as the reverse route · timetable unconfirmed', w * 0.52, h * 0.92);
+  if (_lang === 'ja') gctx.fillText('破線の帰路は逆順ルートの推定（時刻未確認）', w * 0.52, h * 0.92, w * 0.9);
+  else gctx.fillText('Dashed return is inferred as the reverse route · timetable unconfirmed', w * 0.52, h * 0.92);
   gctx.restore();
   paperTexture(gctx, w, h, 0.04);
 }
@@ -2122,10 +2167,19 @@ function drawSea_kimura(ctx, t, view, nightK) {
   if (!view.rm) sparkle(ctx, tipX + 0.8 * scale, 1 * scale, 2 * scale, 0.4 + 0.3 * Math.sin(t * 3.1));
   ctx.restore();
   // draft label (scaled chip, world space)
-  chip(ctx, cx, cy + 8 * scale, (_lang === 'ja' ? 'きむらさん 🎣' : 'Kimura-san 🎣'), {
-    font: '600 ' + Math.round(9 * scale) + 'px system-ui,sans-serif',
-    pad: 3 * scale, h: 12 * scale, r: 2 * scale, alpha: 0.85
-  });
+  if (_lang === 'ja') {
+    chip(ctx, cx, cy + 8 * scale, 'きむらさん', {
+      font: localizedFont('600', 9 * scale, 'system-ui,sans-serif'),
+      suffix: ' 🎣', suffixFont: '600 ' + Math.round(9 * scale) + 'px system-ui,sans-serif',
+      maxW: Math.max(1, 2 * Math.min(cx, view.w - cx) - 4 * scale),
+      pad: 3 * scale, h: 12 * scale, r: 2 * scale, alpha: 0.85
+    });
+  } else {
+    chip(ctx, cx, cy + 8 * scale, 'Kimura-san 🎣', {
+      font: '600 ' + Math.round(9 * scale) + 'px system-ui,sans-serif',
+      pad: 3 * scale, h: 12 * scale, r: 2 * scale, alpha: 0.85
+    });
+  }
 }
 
 
@@ -2817,10 +2871,19 @@ function drawBoat(ctx, sim, t, view) {
   ctx.restore();
 
   // NEW GEOGRAPHY draft label under Nobu-san's skiff (world space — after the flip/bob restore)
-  chip(ctx, cx, cy + 10 * scale, (_lang === 'ja' ? 'のぶさん 🛥' : 'Nobu-san 🛥'), {
-    font: '600 ' + Math.round(9 * scale) + 'px system-ui,sans-serif',
-    pad: 3 * scale, h: 12 * scale, r: 2 * scale, alpha: 0.85
-  });
+  if (_lang === 'ja') {
+    chip(ctx, cx, cy + 10 * scale, 'のぶさん', {
+      font: localizedFont('600', 9 * scale, 'system-ui,sans-serif'),
+      suffix: ' 🛥', suffixFont: '600 ' + Math.round(9 * scale) + 'px system-ui,sans-serif',
+      maxW: Math.max(1, 2 * Math.min(cx, view.w - cx) - 4 * scale),
+      pad: 3 * scale, h: 12 * scale, r: 2 * scale, alpha: 0.85
+    });
+  } else {
+    chip(ctx, cx, cy + 10 * scale, 'Nobu-san 🛥', {
+      font: '600 ' + Math.round(9 * scale) + 'px system-ui,sans-serif',
+      pad: 3 * scale, h: 12 * scale, r: 2 * scale, alpha: 0.85
+    });
+  }
 }
 
 
@@ -3199,7 +3262,7 @@ function drawStations_hub(ctx, cx, cy, r, rimRgb, na, ic, t, rm) {
     ctx.fillText(rct.icon, rct.cx, rct.cy + 0.5 * scale);
     ctx.restore();
     chip(ctx, rct.cx, rct.cy + rct.r + 3 * scale, (_lang === 'ja' ? rct.jp : rct.en), {
-      font: '600 ' + Math.round(9 * scale) + 'px system-ui,sans-serif',
+      font: localizedFont('600', 9 * scale, 'system-ui,sans-serif'),
       pad: 3 * scale, h: 12 * scale, r: 2 * scale,
       bg: rgba(PAL.washi, 0.88), border: rgba(PAL.goldDeep, 0.4)
     });
@@ -3298,10 +3361,27 @@ function drawDeck(ctx, sim, t, view) {
   var arrowY = bowTop ? y0 + 12 * scale : y1 - 12 * scale, dir = bowTop ? -1 : 1;
   ctx.fillStyle = rgba(PAL.goldPale, 0.72); ctx.beginPath();
   ctx.moveTo(cx, arrowY + dir * 7 * scale); ctx.lineTo(cx - 5 * scale, arrowY - dir * 3 * scale); ctx.lineTo(cx + 5 * scale, arrowY - dir * 3 * scale); ctx.closePath(); ctx.fill();
-  chip(ctx, cx, y0 + 7 * scale, _scene.id === 'ogasawara-maru' ? (_lang === 'ja' ? 'おがさわら丸' : 'OGASAWARA-MARU') : (_lang === 'ja' ? '島間船（船名・時刻未確認）' : 'INTER-ISLAND VESSEL · UNCONFIRMED'), {
-    font: '800 ' + Math.round(9 * scale) + 'px system-ui,sans-serif', pad: 4 * scale, h: 14 * scale, r: 7 * scale,
-    bg: rgba(PAL.indigoDeep, 0.78), border: rgba(PAL.gold, 0.45), ink: rgba(PAL.washi, 0.96)
-  });
+  var namedLongHaul = _scene.id === 'ogasawara-maru';
+  if (_lang === 'ja') {
+    if (namedLongHaul) {
+      // The named ship wordmark is scenery, so even Japanese keeps the legacy draw signature.
+      chip(ctx, cx, y0 + 7 * scale, 'おがさわら丸', {
+        font: '800 ' + Math.round(9 * scale) + 'px system-ui,sans-serif', pad: 4 * scale, h: 14 * scale, r: 7 * scale,
+        bg: rgba(PAL.indigoDeep, 0.78), border: rgba(PAL.gold, 0.45), ink: rgba(PAL.washi, 0.96)
+      });
+    } else {
+      chip(ctx, cx, y0 + 7 * scale, '島間船（船名・時刻未確認）', {
+        font: localizedFont('800', 9 * scale, 'system-ui,sans-serif'),
+        maxW: Math.max(1, x1 - x0 - 8 * scale), pad: 4 * scale, h: 14 * scale, r: 7 * scale,
+        bg: rgba(PAL.indigoDeep, 0.78), border: rgba(PAL.gold, 0.45), ink: rgba(PAL.washi, 0.96)
+      });
+    }
+  } else {
+    chip(ctx, cx, y0 + 7 * scale, namedLongHaul ? 'OGASAWARA-MARU' : 'INTER-ISLAND VESSEL · UNCONFIRMED', {
+      font: '800 ' + Math.round(9 * scale) + 'px system-ui,sans-serif', pad: 4 * scale, h: 14 * scale, r: 7 * scale,
+      bg: rgba(PAL.indigoDeep, 0.78), border: rgba(PAL.gold, 0.45), ink: rgba(PAL.washi, 0.96)
+    });
+  }
   ctx.restore();
 }
 
@@ -3417,11 +3497,16 @@ function drawStations(ctx, sim, t, view) {
     // Hub gets extra clearance, PROPORTIONAL to footR (not a fixed px offset), so the name always
     // clears the sub-zone chip row beneath it regardless of HUB_FOOT_MULT.
     ctx.save();
-    ctx.font = '600 ' + Math.round(11 * scale) + 'px sans-serif';
+    ctx.font = localizedFont('600', 11 * scale, 'sans-serif');
     ctx.textAlign = 'center'; ctx.textBaseline = 'top';
     ctx.shadowColor = 'rgba(0,0,0,.55)'; ctx.shadowBlur = 3 * scale;
     ctx.fillStyle = rgba(PAL.gold, 1);
-    ctx.fillText(nm(st.name), cx, discCy + footR + (isHub ? footR * 0.6 : 6 * scale));
+    if (_lang === 'ja') {
+      ctx.fillText(nm(st.name), cx, discCy + footR + (isHub ? footR * 0.6 : 6 * scale),
+        Math.max(64 * scale, Math.min(130 * scale, view.w * 0.22)));
+    } else {
+      ctx.fillText(nm(st.name), cx, discCy + footR + (isHub ? footR * 0.6 : 6 * scale));
+    }
     ctx.restore();
   }
 }
@@ -3578,16 +3663,20 @@ function drawSceneLabel(ctx, view) {
   if (!view || !_scene) return;
   var label = _lang === 'ja' ? _scene.jp : _scene.en;
   var hs = Math.max(1, scale);   // HUD text keeps a readable CSS-pixel floor on compact stages
-  var font = '800 ' + Math.round(10 * hs) + 'px system-ui,sans-serif';
+  var font = _lang === 'ja'
+    ? localizedFont('800', 10 * hs, 'system-ui,sans-serif')
+    : '800 ' + Math.round(10 * hs) + 'px system-ui,sans-serif';
   ctx.save(); ctx.font = font;
   ctx.restore();
   // Centre avoids the live dinner/status tag in the top-right and the clock in
   // the top-left. The DOM map region carries the same label for AT.
-  chip(ctx, view.w / 2, 10 * scale, label, {
+  var sceneLabelOpts = {
     font: font, pad: 6 * hs, h: 18 * hs, r: 9 * hs,
     bg: rgba(PAL.indigoDeep, 0.82), border: rgba(PAL.gold, 0.52),
     ink: rgba(PAL.goldPale, 0.96)
-  });
+  };
+  if (_lang === 'ja') sceneLabelOpts.maxW = Math.max(1, view.w - 20 * scale);
+  chip(ctx, view.w / 2, 10 * scale, label, sceneLabelOpts);
 }
 
 // ---- drawDusk (spec §4, HUD side) — the full-canvas evening unifier ----
@@ -3860,6 +3949,7 @@ function drawFigures(ctx, sim, t, view) {
   // scaled chip geometry, shared by the speech bubble + name chip (chip() never
   // auto-scales). Text stays at HUD scale — chips are labels, not body parts.
   var chipFont = '600 ' + Math.round(10 * scale) + 'px system-ui,sans-serif';
+  var pawnLabelFont = localizedFont('600', 10 * scale, 'system-ui,sans-serif');
   var chipPad = 4 * scale, chipH = 14 * scale, chipR = 2 * scale, chipTail = 4 * scale;
 
   // ---- only the named boats go to sea (WORLD.md: Nobu-san / Kimura-san) — no individual
@@ -4174,10 +4264,21 @@ function drawFigures(ctx, sim, t, view) {
 
     // ---- name chip: role icon + localized name — stall state, spotlight, or hover ----
     if (STALL_STATES[state] || p.id === view.spotlightPid || p.id === view.hoverPid) {
-      var label = (role.icon ? role.icon + ' ' : '') + nm(p.name);
-      // hovered pawn: append the localized state word (supplied by app.js via view.hoverWord)
-      if (p.id === view.hoverPid && view.hoverWord) label += ' · ' + view.hoverWord;
-      chip(ctx, cx, feetY + 5 * figs, label, { font: chipFont, pad: chipPad, h: chipH, r: chipR });
+      var label;
+      if (_lang === 'ja') {
+        label = nm(p.name);
+        // hovered pawn: append the localized state word (supplied by app.js via view.hoverWord)
+        if (p.id === view.hoverPid && view.hoverWord) label += ' · ' + view.hoverWord;
+        chip(ctx, cx, feetY + 5 * figs, label, {
+          font: pawnLabelFont, prefix: role.icon ? role.icon + ' ' : '', prefixFont: chipFont,
+          pad: chipPad, h: chipH, r: chipR,
+          maxW: Math.max(1, Math.min(220 * scale, view.w - 20 * scale))
+        });
+      } else {
+        label = (role.icon ? role.icon + ' ' : '') + nm(p.name);
+        if (p.id === view.hoverPid && view.hoverWord) label += ' · ' + view.hoverWord;
+        chip(ctx, cx, feetY + 5 * figs, label, { font: chipFont, pad: chipPad, h: chipH, r: chipR });
+      }
     }
 
     ctx.restore(); // end dim alpha
@@ -4478,6 +4579,6 @@ function drawCascade(ctx, sim, t, view) {
                        stationStateForScene: stationStateForScene, linksForScene: linksForScene,
                        topologyForScene: topologyForScene, domFlagsForScene: domFlagsForScene,
                        sceneFlags: domFlagsForScene, routePoint: routePoint, routePoints: routePoints,
-                       groundCacheKey: groundCacheKey,
+                       groundCacheKey: groundCacheKey, localizedFont: localizedFont,
                        camTo: camTo, camReset: camReset, camState: camState, FIG_SCALE: FIG_SCALE };
 })();
