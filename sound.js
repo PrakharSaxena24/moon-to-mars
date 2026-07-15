@@ -16,8 +16,9 @@
  *     toggle(),           // flip on/off. MUST be called from inside a real
  *                          // user-gesture handler (a click) — browsers refuse
  *                          // to start/resume an AudioContext otherwise. Persists
- *                          // the choice to localStorage['prs_sound']. Returns
- *                          // the new enabled state.
+ *                          // the confirmed choice to localStorage['prs_sound'].
+ *                          // Returns Promise<boolean>; enabling resolves true
+ *                          // only once AudioContext.state is actually 'running'.
  *     cue(name),          // one-shot event sound. name is one of:
  *                          //   'freeze'  — soft low bell (a Live/coarse stall)
  *                          //   'place'   — wooden tick (a tray/care commit)
@@ -356,22 +357,93 @@
   // ever calls this from inside a real click handler (a user gesture).
   // =========================================================================
   var MASTER_ON = 0.85;
-  function toggle() {
-    if (!AC) return false;
-    if (!enabled) {
-      ensureCtx();
-      if (!ctx) return false;
-      try { ctx.resume(); } catch (e) { }
-      try { master.gain.cancelScheduledValues(now()); master.gain.linearRampToValueAtTime(MASTER_ON, now() + 0.5); } catch (e) { }
-      enabled = true; savePref(true);
-      if (curSeg) startAmbient(curSeg, curDayK, curScene);
-    } else {
-      enabled = false; savePref(false);
-      try { master.gain.cancelScheduledValues(now()); master.gain.linearRampToValueAtTime(0, now() + 0.4); } catch (e) { }
-      stopAmbientNodes();
+  var desiredEnabled = false;
+  var toggleGeneration = 0;
+
+  function muteMaster(immediate) {
+    if (!ctx || !master) return;
+    try {
+      master.gain.cancelScheduledValues(now());
+      if (immediate) {
+        if (master.gain.setValueAtTime) master.gain.setValueAtTime(0, now());
+        else master.gain.value = 0;
+      } else {
+        master.gain.linearRampToValueAtTime(0, now() + 0.4);
+      }
+    } catch (e) {
+      // A cosmetic ramp failure must still leave the authoritative gain muted.
+      try { master.gain.value = 0; } catch (ignore) { }
     }
-    API.enabled = enabled;
-    return enabled;
+  }
+
+  function confirmDisabled(immediate) {
+    enabled = false;
+    API.enabled = false;
+    savePref(false);
+    muteMaster(immediate);
+    stopAmbientNodes();
+  }
+
+  function toggle() {
+    var target = !desiredEnabled;
+    var generation = ++toggleGeneration;
+    desiredEnabled = target;
+
+    if (!target) {
+      confirmDisabled(false);
+      return Promise.resolve(false);
+    }
+
+    // Sound remains authoritatively off, muted, and persisted off until the
+    // browser confirms that its AudioContext is running. This also clears a
+    // stale remembered preference after an autoplay/resume failure.
+    confirmDisabled(true);
+    if (!AC) {
+      desiredEnabled = false;
+      return Promise.resolve(false);
+    }
+    ensureCtx();
+    if (!ctx) {
+      desiredEnabled = false;
+      return Promise.resolve(false);
+    }
+
+    var resumeResult;
+    try {
+      resumeResult = ctx.resume();
+    } catch (e) {
+      desiredEnabled = false;
+      confirmDisabled(true);
+      return Promise.resolve(false);
+    }
+
+    // Promise.resolve also handles older implementations whose resume()
+    // returns undefined. The final catch makes toggle() a never-reject API,
+    // even when callers intentionally fire-and-forget it from a click handler.
+    return Promise.resolve(resumeResult).then(function () {
+      if (generation !== toggleGeneration || !desiredEnabled) return enabled;
+      if (!ctx || ctx.state !== 'running') {
+        desiredEnabled = false;
+        confirmDisabled(true);
+        return false;
+      }
+      enabled = true;
+      API.enabled = true;
+      savePref(true);
+      try {
+        master.gain.cancelScheduledValues(now());
+        master.gain.linearRampToValueAtTime(MASTER_ON, now() + 0.5);
+      } catch (e) { }
+      if (curSeg) startAmbient(curSeg, curDayK, curScene);
+      return true;
+    }).catch(function () {
+      if (generation === toggleGeneration) {
+        desiredEnabled = false;
+        confirmDisabled(true);
+        return false;
+      }
+      return enabled;
+    });
   }
 
   var API = { enabled: false, toggle: toggle, cue: cue, ambient: ambient, scene: sceneAmbient };
@@ -399,7 +471,7 @@
       ensureCtx();
       if (ctx && ctx.state === 'running') {
         master.gain.linearRampToValueAtTime(MASTER_ON, now() + 0.5);
-        enabled = true; API.enabled = true;
+        enabled = true; desiredEnabled = true; API.enabled = true;
       }
     }
   } catch (e) { /* never let a restore attempt break page load */ }

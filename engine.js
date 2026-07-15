@@ -1461,6 +1461,44 @@
     var tasks = seg ? tasksForSeg(plan, seg) : [];
     return byId(tasks, id) || byId(plan.tasks || [], id);
   }
+  // A delivery is evidence, not just a matching card/recipient label. Direct
+  // arrows must originate at a placed task in the same authored day, that task
+  // must belong to the claimed sender, and it must actually produce the card.
+  // A relay hop derives provenance from its validated inbound prerequisite; its
+  // forwarding task still has to be real, placed, and owned by the forwarding
+  // role. The sole cross-day exception is the cabin list prepared on Load and
+  // re-shared at the start of Voyage.
+  function isVoyageCabinExternal(h, seg) {
+    return seg === 'voyage' && !!h && h.id === 'h_v_cabins' && h.cardId === 'ic_cabins' &&
+      h.fromRoleId === 'pm' && h.fromTaskId == null && h.toRoleId === 'logi' &&
+      h.toTaskId === 'hd_v_luggage';
+  }
+  function handoffProvenance(plan, h, seg) {
+    seg = handoffSegment(plan, h, seg);
+    if (!h || !seg) return { ok: false, reason: 'missing-handoff' };
+    var sourceSeg = seg, source = null, relay = !!h.requiresHandoffId;
+    if (isVoyageCabinExternal(h, seg)) {
+      sourceSeg = 'load';
+      source = byId(tasksForSeg(plan, sourceSeg), 'hd_l_cabins');
+    } else {
+      source = byId(tasksForSeg(plan, seg), h.fromTaskId);
+    }
+    if (!source) return { ok: false, reason: 'missing-producer' };
+    if (!isPlaced(source)) return { ok: false, reason: 'producer-unplaced' };
+    if (source.ownerRoleId !== h.fromRoleId) return { ok: false, reason: 'producer-role-mismatch' };
+    // A forwarding task holds the card only through requiresHandoffId. The
+    // prerequisite topology and arrival boundary are checked by the caller.
+    if (!relay && (source.produces || []).indexOf(h.cardId) < 0) {
+      return { ok: false, reason: 'producer-card-mismatch' };
+    }
+    if (typeof source.startMin !== 'number' || !isFinite(source.startMin) ||
+        typeof source.durMin !== 'number' || !isFinite(source.durMin) || source.durMin < 0) {
+      return { ok: false, reason: 'unresolved-producer' };
+    }
+    return { ok: true, reason: 'ok', task: source, segment: sourceSeg,
+      relay: relay, external: sourceSeg !== seg,
+      producerFinish: source.startMin + source.durMin };
+  }
   function handoffMinute(plan, h, seg, endpoint) {
     var t, tr = h.trigger || {};
     if (endpoint === 'to') {
@@ -1540,8 +1578,15 @@
     trail[key] = 1;
     var f = channelFeasibility(plan, h, seg);
     if (!f.ok) return { feasible: false, reason: f.reason, sendMin: null, arrivalMin: null, handoffIds: [h.id], channels: [h.channel] };
+    var provenance = handoffProvenance(plan, h, seg);
+    if (!provenance.ok) return { feasible: false, reason: provenance.reason, sendMin: null,
+      arrivalMin: null, handoffIds: [h.id], channels: [h.channel] };
     var send = handoffMinute(plan, h, seg, 'from');
     if (send == null || !isFinite(send)) return { feasible: false, reason: 'unresolved-trigger', sendMin: null, arrivalMin: null, handoffIds: [h.id], channels: [h.channel] };
+    if (!provenance.relay && send < provenance.producerFinish) {
+      return { feasible: false, reason: 'premature-handoff', sendMin: send,
+        arrivalMin: null, handoffIds: [h.id], channels: [h.channel] };
+    }
     var ids = [], channels = [];
     if (h.requiresHandoffId) {
       var dep = byId(handoffsForSeg(plan, seg), h.requiresHandoffId);
@@ -1737,6 +1782,8 @@
       trail[key] = 1;
       var feasible = channelFeasibility(plan, h, seg);
       if (!feasible.ok) return { arrival: null, pending: false, reason: feasible.reason };
+      var provenance = handoffProvenance(plan, h, seg);
+      if (!provenance.ok) return { arrival: null, pending: false, reason: provenance.reason };
       var tr = h.trigger || {}, source = null, send = null;
       if (tr.type === 'onTaskDone') {
         source = fdById[tr.taskId] || byId(plan.tasks, tr.taskId);
@@ -1751,6 +1798,19 @@
         if (source && typeof source.startMin === 'number') send = source.startMin - (tr.leadMin || 0);
       }
       if (send == null || !isFinite(send)) return { arrival: null, pending: false, reason: 'unresolved-trigger' };
+      if (!provenance.relay) {
+        var producerFinish = provenance.producerFinish;
+        // Same-day production follows the effective cascade, not merely the
+        // block painted on the board. An atMinute/beforeTaskStart arrow cannot
+        // smuggle a card out while its producer is still waiting or working.
+        if (dynamic && !provenance.external) {
+          if (!eff || !eff[provenance.task.id]) {
+            return { arrival: null, pending: true, reason: 'producer-pending' };
+          }
+          producerFinish = eff[provenance.task.id].end;
+        }
+        if (send < producerFinish) return { arrival: null, pending: false, reason: 'premature-handoff' };
+      }
       if (h.requiresHandoffId) {
         var dep = byId(segHandoffs, h.requiresHandoffId);
         if (!dep) return { arrival: null, pending: false, reason: 'missing-prerequisite' };
@@ -1867,7 +1927,27 @@
     }
     var perP = {}, overbookMin = 0;
     for (i = 0; i < fds.length; i++) { var pt = fds[i]; for (j = 0; j < pt.assignedIds.length; j++) { var pk = pt.assignedIds[j]; (perP[pk] = perP[pk] || []).push({ s: pt.startMin, e: pt.startMin + pt.durMin }); } }
-    for (var pid in perP) { var seq = perP[pid].sort(function (a, b) { return a.s - b.s; }); for (i = 1; i < seq.length; i++) { var ov = seq[i - 1].e - seq[i].s; if (ov > 0) overbookMin += ov; } }
+    // Exact wall-clock time during which a person has two or more live tasks.
+    // Pairwise-neighbour subtraction overcounts nested intervals (a 04:00–14:00
+    // task containing a 05:00–09:00 task used to report 9 hours, not 4) and can
+    // double-count triple overlaps. A grouped sweep counts each overloaded
+    // minute exactly once per person, including nesting and chained intervals.
+    for (var pid in perP) {
+      var events = [], seq = perP[pid];
+      for (i = 0; i < seq.length; i++) {
+        if (!isFinite(seq[i].s) || !isFinite(seq[i].e) || seq[i].e <= seq[i].s) continue;
+        events.push({ at: seq[i].s, delta: 1 }); events.push({ at: seq[i].e, delta: -1 });
+      }
+      events.sort(function (a, b) { return a.at - b.at; });
+      var active = 0, prev = null, ei = 0;
+      while (ei < events.length) {
+        var at = events[ei].at;
+        if (prev != null && active > 1) overbookMin += at - prev;
+        var delta = 0;
+        while (ei < events.length && events[ei].at === at) { delta += events[ei].delta; ei++; }
+        active += delta; prev = at;
+      }
+    }
     var serve = r.eff['t_f_serve'];
     return { byTask: byTask, idleTotal: idleTotal, reworkTotal: reworkTotal, availMin: availMin,
       missing: missing, late: late, wrongFish: r.wrongFish, arrivals: r.arrivals, unresolved: unresolved,
@@ -2089,38 +2169,153 @@
   // Mission Control budget lens: what the setup board teaches. This is a pure
   // pre-run view over envelopes, usable payment paths, reserves, and spend events.
   function budgetReadiness(plan) {
-    var target = plan.budget.reserveTarget || 300000;
-    var gaps = [], envelopeOut = [], eventOut = [], resourceOut = [], i;
-    for (i = 0; i < plan.budget.lines.length; i++) {
-      var line = plan.budget.lines[i];
-      var ok = !!line.approverRoleId && !!line.payMethod;
-      if (line.id === 'bl_meals' && !ok) gaps.push({ type: 'BUDGET_AUTH', lineId: line.id });
-      envelopeOut.push({ id: line.id, name: line.name, cap: line.cap, approverRoleId: line.approverRoleId || null,
-        payMethod: line.payMethod || null, receiptRule: line.receiptRule || 'required', ok: ok });
+    var budget = plan && plan.budget && typeof plan.budget === 'object' ? plan.budget : {};
+    var planRoles = plan && plan.roles && typeof plan.roles === 'object' ? plan.roles : {};
+    var methods = Object.create(null), canonicalRoles = Object.create(null), taskIds = Object.create(null);
+    var requiredLineIds = Object.create(null), requiredResourceIds = Object.create(null), requiredEventIds = Object.create(null);
+    var requiredLineList = ['bl_transport', 'bl_lodging', 'bl_meals', 'bl_boat', 'bl_tackle', 'bl_onsite', 'bl_card'];
+    var requiredResourceList = ['res_cash', 'res_ice', 'res_fuel', 'res_food'];
+    var requiredEventList = ['sp_meals', 'sp_ice', 'sp_fallback', 'sp_fuel'];
+    var gaps = [], envelopeOut = [], eventOut = [], resourceOut = [], i, k;
+    methods.cash = methods.card = methods.invoice = 1;
+    for (i = 0; i < ROLES.length; i++) canonicalRoles[ROLES[i].id] = 1;
+    for (i = 0; i < requiredLineList.length; i++) requiredLineIds[requiredLineList[i]] = 1;
+    for (i = 0; i < requiredResourceList.length; i++) requiredResourceIds[requiredResourceList[i]] = 1;
+    for (i = 0; i < requiredEventList.length; i++) requiredEventIds[requiredEventList[i]] = 1;
+    function own(o, id) { return !!o && Object.prototype.hasOwnProperty.call(o, id); }
+    function finiteNonnegative(v) { return typeof v === 'number' && isFinite(v) && v >= 0; }
+    function nonemptyId(v) { return typeof v === 'string' && v.length > 0; }
+    function knownRole(id) {
+      return nonemptyId(id) && own(canonicalRoles, id) && own(planRoles, id) &&
+        !!planRoles[id] && typeof planRoles[id] === 'object';
     }
-    if (plan.budget.reserve < target) gaps.push({ type: 'RESERVE_SHORT', current: plan.budget.reserve, target: target });
-    var resources = plan.budget.resources || [];
+    function supportedMethod(method) { return typeof method === 'string' && own(methods, method); }
+    function shallowRecord(value) {
+      var out = {}, key;
+      if (!value || typeof value !== 'object') return out;
+      for (key in value) if (own(value, key)) out[key] = value[key];
+      return out;
+    }
+
+    // Top-level amounts are part of the same trust boundary. Preserve the old
+    // 300k default only when reserveTarget is genuinely absent; malformed
+    // present values never coerce or fall back to a plausible number.
+    var reserve = budget.reserve;
+    var target = typeof budget.reserveTarget === 'undefined' ? 300000 : budget.reserveTarget;
+    var reserveOk = finiteNonnegative(reserve), targetOk = finiteNonnegative(target);
+    var totalOk = finiteNonnegative(budget.total);
+    var budgetRelationshipOk = reserveOk && targetOk && totalOk && reserve <= budget.total && target <= budget.total;
+
+    var linesArrayOk = Array.isArray(budget.lines), lines = linesArrayOk ? budget.lines : [];
+    var lineCounts = Object.create(null), capSum = 0, capSumFinite = true;
+    for (i = 0; i < lines.length; i++) {
+      var countLine = lines[i] && typeof lines[i] === 'object' ? lines[i] : {};
+      if (nonemptyId(countLine.id)) lineCounts[countLine.id] = (lineCounts[countLine.id] || 0) + 1;
+      if (finiteNonnegative(countLine.cap)) capSum += countLine.cap; else capSumFinite = false;
+    }
+    var lineSchemaComplete = lines.length === requiredLineList.length;
+    for (i = 0; i < requiredLineList.length; i++) if (lineCounts[requiredLineList[i]] !== 1) lineSchemaComplete = false;
+    var capsWithinTotal = totalOk && capSumFinite && capSum <= budget.total;
+    var validLineById = Object.create(null);
+    for (i = 0; i < lines.length; i++) {
+      var line = lines[i] && typeof lines[i] === 'object' ? lines[i] : {};
+      var lineIdOk = nonemptyId(line.id) && own(requiredLineIds, line.id) && lineCounts[line.id] === 1;
+      var capOk = finiteNonnegative(line.cap), spentOk = finiteNonnegative(line.spent);
+      var lineRelationshipOk = capOk && spentOk && line.spent <= line.cap && totalOk && line.cap <= budget.total && capsWithinTotal;
+      var lineApproverOk = knownRole(line.approverRoleId), lineMethodOk = supportedMethod(line.payMethod);
+      var lineOk = lineIdOk && lineRelationshipOk && lineApproverOk && lineMethodOk;
+      var lineOut = { id: line.id, name: line.name, cap: line.cap,
+        approverRoleId: line.approverRoleId == null ? null : line.approverRoleId,
+        payMethod: line.payMethod == null ? null : line.payMethod,
+        receiptRule: line.receiptRule || 'required', ok: lineOk };
+      envelopeOut.push(lineOut);
+      if (lineOk) validLineById[line.id] = line;
+      // Preserve the original teaching gaps. Other malformed envelopes fail
+      // through their own ok flag without changing the established gap count.
+      if (line.id === 'bl_meals' && (!lineApproverOk || !lineMethodOk)) {
+        gaps.push({ type: 'BUDGET_AUTH', lineId: line.id });
+      }
+    }
+    if (reserveOk && targetOk && reserve < target) gaps.push({ type: 'RESERVE_SHORT', current: reserve, target: target });
+
+    var resourcesArrayOk = Array.isArray(budget.resources), resources = resourcesArrayOk ? budget.resources : [];
+    var resourceCounts = Object.create(null);
     for (i = 0; i < resources.length; i++) {
-      var r = clone(resources[i]);
-      if (r.id === 'res_cash') r.planned = plan.budget.reserve;
-      r.ok = r.planned >= r.target;
+      var countResource = resources[i] && typeof resources[i] === 'object' ? resources[i] : {};
+      if (nonemptyId(countResource.id)) resourceCounts[countResource.id] = (resourceCounts[countResource.id] || 0) + 1;
+    }
+    var resourceSchemaComplete = resources.length === requiredResourceList.length;
+    for (i = 0; i < requiredResourceList.length; i++) if (resourceCounts[requiredResourceList[i]] !== 1) resourceSchemaComplete = false;
+    for (i = 0; i < resources.length; i++) {
+      var sourceResource = resources[i] && typeof resources[i] === 'object' ? resources[i] : {};
+      var r = shallowRecord(sourceResource);
+      var resourceIdOk = nonemptyId(sourceResource.id) && own(requiredResourceIds, sourceResource.id) && resourceCounts[sourceResource.id] === 1;
+      var rawPlannedOk = finiteNonnegative(sourceResource.planned), resourceTargetOk = finiteNonnegative(sourceResource.target);
+      var resourceOwnerOk = knownRole(sourceResource.ownerRoleId);
+      // Cash readiness is intentionally driven by the single reserve control,
+      // but a malformed stored planned value still invalidates the resource.
+      if (sourceResource.id === 'res_cash' && reserveOk) r.planned = reserve;
+      var effectivePlannedOk = finiteNonnegative(r.planned);
+      var resourceStructuralOk = resourceIdOk && rawPlannedOk && effectivePlannedOk && resourceTargetOk && resourceOwnerOk;
+      r.ok = resourceStructuralOk && r.planned >= r.target;
       resourceOut.push(r);
     }
-    var events = plan.budget.spendEvents || [];
+
+    // Event ids and task references are also structural evidence. Tasks may
+    // live in either the legacy plan.tasks collection or an authored day.
+    var legacyTasks = plan && Array.isArray(plan.tasks) ? plan.tasks : [];
+    for (i = 0; i < legacyTasks.length; i++) if (legacyTasks[i] && nonemptyId(legacyTasks[i].id)) taskIds[legacyTasks[i].id] = 1;
+    var planDays = plan && plan.days && typeof plan.days === 'object' ? plan.days : {};
+    for (k in planDays) if (own(planDays, k) && planDays[k] && Array.isArray(planDays[k].tasks)) {
+      for (i = 0; i < planDays[k].tasks.length; i++) {
+        var dayTask = planDays[k].tasks[i]; if (dayTask && nonemptyId(dayTask.id)) taskIds[dayTask.id] = 1;
+      }
+    }
+    var eventsArrayOk = Array.isArray(budget.spendEvents), events = eventsArrayOk ? budget.spendEvents : [];
+    var eventCounts = Object.create(null), plannedByLine = Object.create(null);
     for (i = 0; i < events.length; i++) {
-      var ev = events[i], ln = lineById(plan, ev.lineId), roleAuth = plan.roles[ev.actorRoleId] && plan.roles[ev.actorRoleId].authority;
-      var methodOk = !!ln && ln.payMethod === ev.requiredMethod;
-      var approverOk = !!ln && (!ev.requiresApproval || !!ln.approverRoleId);
-      var actorCanPay = !!roleAuth && roleAuth.canPay && roleAuth.payCap >= ev.amount;
-      var reserveBackstop = ev.requiredMethod === 'cash' && plan.budget.reserve >= Math.min(target, ev.amount);
+      var countEvent = events[i] && typeof events[i] === 'object' ? events[i] : {};
+      if (nonemptyId(countEvent.id)) eventCounts[countEvent.id] = (eventCounts[countEvent.id] || 0) + 1;
+      if (nonemptyId(countEvent.lineId) && finiteNonnegative(countEvent.amount)) {
+        plannedByLine[countEvent.lineId] = (plannedByLine[countEvent.lineId] || 0) + countEvent.amount;
+      }
+    }
+    var eventSchemaComplete = events.length === requiredEventList.length;
+    for (i = 0; i < requiredEventList.length; i++) if (eventCounts[requiredEventList[i]] !== 1) eventSchemaComplete = false;
+    for (i = 0; i < events.length; i++) {
+      var ev = events[i] && typeof events[i] === 'object' ? events[i] : {};
+      var eventIdOk = nonemptyId(ev.id) && own(requiredEventIds, ev.id) && eventCounts[ev.id] === 1;
+      var amountOk = finiteNonnegative(ev.amount), eventLine = validLineById[ev.lineId] || null;
+      var eventLineOk = !!eventLine, actorRoleOk = knownRole(ev.actorRoleId);
+      var requiredMethodOk = supportedMethod(ev.requiredMethod);
+      var flagsOk = typeof ev.requiresApproval === 'boolean' && typeof ev.receiptRequired === 'boolean';
+      var taskOk = nonemptyId(ev.taskId) && !!taskIds[ev.taskId];
+      var methodOk = eventLineOk && requiredMethodOk && eventLine.payMethod === ev.requiredMethod;
+      var approverOk = eventLineOk && flagsOk && (!ev.requiresApproval || knownRole(eventLine.approverRoleId));
+      var roleAuth = actorRoleOk && planRoles[ev.actorRoleId] && planRoles[ev.actorRoleId].authority;
+      var payCapOk = !!roleAuth && (roleAuth.payCap === Infinity || finiteNonnegative(roleAuth.payCap));
+      var actorOk = actorRoleOk && !!roleAuth && typeof roleAuth.canPay === 'boolean' && payCapOk;
+      var actorCanPay = actorOk && roleAuth.canPay === true && amountOk && roleAuth.payCap >= ev.amount;
+      var reserveBackstop = requiredMethodOk && ev.requiredMethod === 'cash' && reserveOk && targetOk && amountOk &&
+        reserve >= Math.min(target, ev.amount);
+      var lineCapacityOk = eventLineOk && amountOk && finiteNonnegative(eventLine.spent) &&
+        eventLine.spent + (plannedByLine[ev.lineId] || 0) <= eventLine.cap;
+      var eventStructuralOk = eventIdOk && amountOk && eventLineOk && actorOk && requiredMethodOk && flagsOk && taskOk;
+      var eventOk = eventStructuralOk && methodOk && approverOk && lineCapacityOk &&
+        (actorCanPay || reserveBackstop || knownRole(eventLine.approverRoleId));
       eventOut.push({ id: ev.id, name: ev.name, amount: ev.amount, lineId: ev.lineId, taskId: ev.taskId,
         actorRoleId: ev.actorRoleId, requiredMethod: ev.requiredMethod, methodOk: methodOk,
         approverOk: approverOk, actorCanPay: actorCanPay, reserveBackstop: reserveBackstop,
-        receiptRequired: !!ev.receiptRequired, ok: methodOk && approverOk && (actorCanPay || reserveBackstop || !!ln.approverRoleId) });
+        receiptRequired: ev.receiptRequired === true, ok: eventOk });
     }
-    return { reserve: plan.budget.reserve, reserveTarget: target, envelopes: envelopeOut,
-      resources: resourceOut, events: eventOut, gaps: gaps,
-      ready: gaps.length === 0 && eventOut.every(function (ev) { return ev.ok; }) && resourceOut.every(function (r) { return r.ok; }) };
+
+    var structuralOk = !!(plan && plan.budget && typeof plan.budget === 'object') &&
+      linesArrayOk && lineSchemaComplete && resourcesArrayOk && resourceSchemaComplete &&
+      eventsArrayOk && eventSchemaComplete && budgetRelationshipOk && capsWithinTotal;
+    var ready = structuralOk && gaps.length === 0 && envelopeOut.every(function (item) { return item.ok; }) &&
+      eventOut.every(function (item) { return item.ok; }) && resourceOut.every(function (item) { return item.ok; });
+    return { reserve: reserve, reserveTarget: target, envelopes: envelopeOut,
+      resources: resourceOut, events: eventOut, gaps: gaps, ok: ready, ready: ready };
   }
 
   // live readiness hints for the authoring screen (§7.2/§20) — pure, recomputed per edit.
@@ -2159,8 +2354,17 @@
     var per = {};
     for (i = 0; i < placedTasks.length; i++) for (j = 0; j < placedTasks[i].assignedIds.length; j++) { var pid = placedTasks[i].assignedIds[j]; (per[pid] = per[pid] || []).push(placedTasks[i]); }
     for (var pid2 in per) {
-      var list = per[pid2].slice().sort(function (a, b) { return a.startMin - b.startMin; });
-      for (i = 1; i < list.length; i++) if (list[i].startMin < list[i - 1].startMin + list[i - 1].durMin) out.push({ type: 'OVERLOAD', personId: pid2, taskId: list[i].id, otherId: list[i - 1].id });
+      var list = per[pid2].slice().sort(function (a, b) {
+        return a.startMin - b.startMin || (b.startMin + b.durMin) - (a.startMin + a.durMin);
+      });
+      var covering = list[0], coveringEnd = covering ? covering.startMin + covering.durMin : null;
+      for (i = 1; i < list.length; i++) {
+        var listEnd = list[i].startMin + list[i].durMin;
+        if (list[i].startMin < coveringEnd) {
+          out.push({ type: 'OVERLOAD', personId: pid2, taskId: list[i].id, otherId: covering.id });
+        }
+        if (listEnd > coveringEnd) { covering = list[i]; coveringEnd = listEnd; }
+      }
     }
     return out;
   }
@@ -2300,8 +2504,10 @@
       segEnd = Math.max.apply(null, inTasks.map(function (t) { return t.startDay + t.dur; }));
     }
 
+    var replayCfg = { seed: (cfg.seed >>> 0) || 1, overrides: clone(cfg.overrides || {}) };
+    if (cfg.scenarioId && SCENARIOS[cfg.scenarioId]) replayCfg.scenarioId = cfg.scenarioId;
     var sim = {
-      cfg: { seed: (cfg.seed >>> 0) || 1, overrides: clone(cfg.overrides || {}) },
+      cfg: replayCfg,
       plan: plan, rng: mulberry32((cfg.seed >>> 0) || 1),
       segment: segment || 'all', segTaskIds: inTasks.map(function (t) { return t.id; }), segEnd: segEnd,
       day: d0, clock: d0, tick: 0, finished: null, phaseLabel: null, idleStation: idleStation,
@@ -2509,6 +2715,37 @@
 
   // per-day result (for the rehearse-a-day flow): how that day ran + its gaps.
   function daySummary(sim) {
+    // Animated coarse-day sims execute plan.days[segment], whose task ids do not
+    // exist in the legacy ten-day plan.tasks array. Summarize those authored
+    // tasks directly and combine plan quality with actual runtime completion.
+    // The legacy day-clock branch below remains byte-for-byte behaviorally
+    // compatible for its established Arrival/Ops/Return report flow.
+    if (sim && sim.mode === 'minute' && AUTHORABLE.indexOf(sim.segment) >= 0 && sim.segment !== 'fishday') {
+      var authored = tasksForSeg(sim.plan, sim.segment).filter(function (t) { return t.required !== false; });
+      var required = {}, liveDone = {};
+      authored.forEach(function (t) { required[t.id] = 1; });
+      (sim.tasks || []).forEach(function (t) { if (required[t.id] && t.state === 'done') liveDone[t.id] = 1; });
+      var authoredDone = Object.keys(liveDone).length, authoredTotal = authored.length;
+      var completion = authoredTotal ? authoredDone / authoredTotal : 0;
+      var planned = scoreDay(sim.plan, sim.segment), readinessGaps = dayReadiness(sim.plan, sim.segment);
+      var executionComplete = authoredTotal > 0 && authoredDone === authoredTotal && sim.finished === 'done';
+      var authoredClean = planned.clean && executionComplete;
+      var authoredScore = Math.min(planned.score, Math.round(100 * completion));
+      if (!authoredClean && authoredScore > 89) authoredScore = 89;
+      var authoredGrade = authoredScore >= 90 && authoredClean ? 'A' :
+        (authoredScore >= 75 ? 'B' : (authoredScore >= 60 ? 'C' : 'D'));
+      var authoredFixes = readinessGaps.map(function (gap, index) {
+        return { id: 'authored_' + String(gap.type || 'gap').toLowerCase() + '_' + index,
+          fixId: null, category: 'schedule', severity: 'med', station: null, roleId: null,
+          hint: clone(gap) };
+      });
+      if (!executionComplete) authoredFixes.push({ id: 'authored_execution_incomplete', fixId: null,
+        category: 'schedule', severity: 'high', station: null, roleId: null });
+      return { segment: sim.segment, score: authoredScore, grade: authoredGrade, clean: authoredClean,
+        tasksDone: authoredDone, tasksTotal: authoredTotal,
+        gaps: authoredFixes.length, fixes: authoredFixes,
+        reason: sim.finished };
+    }
     var plan = sim.plan, problems = detect(plan), blocked = blockedTasks(plan, problems);
     var ids = sim.segTaskIds, inSeg = {}; ids.forEach(function (id) { inSeg[id] = 1; });
     var segTasks = plan.tasks.filter(function (t) { return inSeg[t.id]; });

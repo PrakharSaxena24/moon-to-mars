@@ -84,11 +84,76 @@ var mcCfg = { seed: 1, overrides: { budget: {
 } } };
 var mcPlan = P.mergePlan(mcCfg), mcBr = P.budgetReadiness(mcPlan), mcDets = P.detect(mcPlan).map(function (d) { return d.id; });
 ok(mcBr.gaps.length === 0, 'Mission Control overrides clear budget readiness gaps');
-ok(mcBr.ready === true, 'Mission Control ready flag requires envelopes, spends, and resources');
+var invalidCardEnvelope = mcBr.envelopes.filter(function (line) { return line.id === 'bl_card'; })[0];
+ok(!!invalidCardEnvelope && invalidCardEnvelope.ok === false && mcBr.ready === false,
+  'Mission Control stays not-ready when a non-meals envelope is invalid, even with no legacy gaps');
 ok(mcDets.indexOf('budgetAuth') < 0 && mcDets.indexOf('reserve') < 0, 'Mission Control budget edits remove budgetAuth/reserve detectors');
 ok(mcBr.resources.filter(function (r) { return r.id === 'res_ice'; })[0].planned === 55, 'Mission Control resource override updates ice count');
 ok(P.makeTemplate().budget.reserve === 0, 'Mission Control merge does not mutate the template');
 ok(P.projected(mcCfg).categories.budget === 10, 'Mission Control edits are reflected in projected budget score');
+var mcReadyCfg = JSON.parse(JSON.stringify(mcCfg));
+mcReadyCfg.overrides.budget.lines.bl_card = { approverRoleId: 'budgetLead', payMethod: 'card' };
+ok(P.budgetReadiness(P.mergePlan(mcReadyCfg)).ready === true,
+  'Mission Control becomes ready only after every envelope, event, and resource is valid');
+
+// The readiness API is a trust boundary for imported/edited plans. Truthy but
+// malformed values, missing canonical records, and duplicate ids all fail
+// closed; a complete baseline and the supported invoice method remain valid.
+(function () {
+  function validBudgetPlan() { return P.mergePlan(mcReadyCfg); }
+  function itemById(items, id) { return items.filter(function (item) { return item.id === id; })[0]; }
+  var expectedIds = {
+    lines: ['bl_boat', 'bl_card', 'bl_lodging', 'bl_meals', 'bl_onsite', 'bl_tackle', 'bl_transport'],
+    resources: ['res_cash', 'res_food', 'res_fuel', 'res_ice'],
+    spendEvents: ['sp_fallback', 'sp_fuel', 'sp_ice', 'sp_meals']
+  };
+  var validPlan = validBudgetPlan(), validBr = P.budgetReadiness(validPlan);
+  ok(validBr.ready === true && validBr.ok === true &&
+     validBr.envelopes.map(function (x) { return x.id; }).sort().join(',') === expectedIds.lines.join(',') &&
+     validBr.resources.map(function (x) { return x.id; }).sort().join(',') === expectedIds.resources.join(',') &&
+     validBr.events.map(function (x) { return x.id; }).sort().join(',') === expectedIds.spendEvents.join(','),
+    'budgetReadiness accepts the complete exact-once 7/4/4 canonical baseline');
+  var invoicePlan = validBudgetPlan();
+  itemById(invoicePlan.budget.lines, 'bl_lodging').payMethod = 'invoice';
+  ok(P.budgetReadiness(invoicePlan).ready === true,
+    'budgetReadiness accepts the supported invoice method on an otherwise-valid envelope');
+
+  var malformedCases = [
+    ['string reserve', function (p) { p.budget.reserve = '300000'; }],
+    ['string total', function (p) { p.budget.total = '4800000'; }],
+    ['string cap', function (p) { itemById(p.budget.lines, 'bl_transport').cap = '1600000'; }],
+    ['unknown approver', function (p) { itemById(p.budget.lines, 'bl_card').approverRoleId = 'ghost-role'; }],
+    ['unsupported method', function (p) { itemById(p.budget.lines, 'bl_card').payMethod = 'wire'; }],
+    ['string resource amount', function (p) { itemById(p.budget.resources, 'res_ice').planned = '55'; }],
+    ['string spend amount', function (p) { itemById(p.budget.spendEvents, 'sp_meals').amount = '85000'; }],
+    ['truthy approval flag', function (p) { itemById(p.budget.spendEvents, 'sp_meals').requiresApproval = 'true'; }]
+  ];
+  var malformedAccepted = [];
+  malformedCases.forEach(function (row) {
+    var plan = validBudgetPlan(); row[1](plan);
+    var result = P.budgetReadiness(plan);
+    if (result.ready !== false || result.ok !== false) malformedAccepted.push(row[0]);
+  });
+  ok(malformedAccepted.length === 0,
+    'budgetReadiness rejects representative truthy malformed values' +
+      (malformedAccepted.length ? ' (accepted: ' + malformedAccepted.join(', ') + ')' : ''));
+
+  var collectionCases = [
+    ['lines', 7], ['resources', 4], ['spendEvents', 4]
+  ], collectionAccepted = [];
+  collectionCases.forEach(function (entry) {
+    var key = entry[0], expected = entry[1], plan, list, result;
+    plan = validBudgetPlan(); list = plan.budget[key]; delete list[0];
+    result = P.budgetReadiness(plan); if (result.ready || result.ok) collectionAccepted.push(key + ':deleted-slot');
+    plan = validBudgetPlan(); list = plan.budget[key]; list.length = expected - 1;
+    result = P.budgetReadiness(plan); if (result.ready || result.ok) collectionAccepted.push(key + ':truncated');
+    plan = validBudgetPlan(); list = plan.budget[key]; list[expected - 1] = JSON.parse(JSON.stringify(list[0]));
+    result = P.budgetReadiness(plan); if (result.ready || result.ok) collectionAccepted.push(key + ':duplicate-id');
+  });
+  ok(collectionAccepted.length === 0,
+    'budgetReadiness requires every canonical 7/4/4 record exactly once after deletion, truncation, or duplication' +
+      (collectionAccepted.length ? ' (accepted: ' + collectionAccepted.join(', ') + ')' : ''));
+})();
 
 console.log('\n=== FISHDAY · temporal information axis (minute clock) ===');
 function fishRun(cfg) {
@@ -116,7 +181,8 @@ ok(gfd.dinnerMin > 1080, 'wrong fish pushes dinner past 18:00 (min ' + gfd.dinne
 var gsim = fishRun(baseL);
 ok(gsim._pauses.join(',') === 'cp_predep,cp_relay,cp_dinner', 'run pauses at the 3 checkpoints (' + gsim._pauses.join(',') + ')');
 var gsc = P.score(gsim);
-ok(gsim.finished === 'incomplete' && gsc.grade === 'D', 'gappy fishday finishes incomplete, grades D (' + gsc.score + ')');
+ok(gsim.finished === 'incomplete' && gsim.endedEarly !== true && gsc.grade === 'D',
+  'naturally completed gappy fishday is incomplete/D but is not marked as an early user stop (' + gsc.score + ')');
 
 // MIGRATION (Voyage carryover, 2026-07-13): the fully-fixed fishday reference is now
 // allFixesLoad (8 classic fixes + applyDayFix('load')) — applyAllFixes alone leaves the jig
@@ -189,7 +255,41 @@ ok(capFd.byTask.t_f_sideprep.idleMin === 60 && capMiss === 1, 'erased wait-arrow
 // beforeTaskStart trigger (§6.1, third trigger type) resolves consumer start − lead
 var btsPlan = P.mergePlan({ seed: 1, overrides: { handoffs: { h_food: { trigger: { type: 'beforeTaskStart', taskId: 't_f_menu', leadMin: 20 } } } } });
 var btsH = btsPlan.handoffs.filter(function (h) { return h.id === 'h_food'; })[0];
-ok(P.resolveSendMin(btsPlan, btsH) === 280 && P.staticArrival(btsPlan, btsH) === 280, 'beforeTaskStart resolves to consumer start − lead (05:00−20 = 04:40)');
+ok(P.resolveSendMin(btsPlan, btsH) === 280 && P.staticArrival(btsPlan, btsH) === null,
+  'beforeTaskStart resolves to consumer start − lead, but a pre-production send fails closed');
+
+// Handoff integrity: a matching card/recipient label is not proof that the
+// claimed sender produced the card, and a real producer cannot send it early.
+var foodCleanCfg = JSON.parse(JSON.stringify(allFixesLoad));
+var foodCleanPlan = P.mergePlan(foodCleanCfg);
+var foodArrow = foodCleanPlan.handoffs.filter(function (h) { return h.id === 'h_food'; })[0];
+var forgedCfg = JSON.parse(JSON.stringify(foodCleanCfg));
+var forgedFood = JSON.parse(JSON.stringify(foodArrow));
+forgedFood.fromRoleId = 'comms'; forgedFood.fromTaskId = 't_f_orgfood';
+forgedFood.trigger = { type: 'atMinute', value: 285 };
+forgedCfg.overrides.handoffs.h_food = forgedFood;
+var forgedPlan = P.mergePlan(forgedCfg), forgedFd = P.fishdaySchedule(forgedPlan);
+ok(P.staticArrival(forgedPlan, forgedFood) === null &&
+   forgedFd.missing.some(function (m) { return m.taskId === 't_f_menu' && m.cardId === 'ic_food'; }) &&
+   P.scoreDay(forgedPlan, 'fishday').clean === false,
+  'forged wrong-producer food handoff is missing and cannot earn a clean Fishing Day');
+var prematureCfg = JSON.parse(JSON.stringify(foodCleanCfg));
+var prematureFood = JSON.parse(JSON.stringify(foodArrow));
+prematureFood.trigger = { type: 'atMinute', value: 284 };
+prematureCfg.overrides.handoffs.h_food = prematureFood;
+var prematurePlan = P.mergePlan(prematureCfg), prematureFd = P.fishdaySchedule(prematurePlan);
+ok(P.staticArrival(prematurePlan, prematureFood) === null &&
+   prematureFd.missing.some(function (m) { return m.taskId === 't_f_menu' && m.cardId === 'ic_food'; }) &&
+   P.scoreDay(prematurePlan, 'fishday').clean === false,
+  'real producer sending one minute before completion is rejected and cannot score clean');
+var boundaryCfg = JSON.parse(JSON.stringify(foodCleanCfg));
+var boundaryFood = JSON.parse(JSON.stringify(foodArrow));
+boundaryFood.trigger = { type: 'atMinute', value: 285 };
+boundaryCfg.overrides.handoffs.h_food = boundaryFood;
+var boundaryPlan = P.mergePlan(boundaryCfg), boundaryFd = P.fishdaySchedule(boundaryPlan);
+ok(P.staticArrival(boundaryPlan, boundaryFood) === 285 &&
+   !boundaryFd.missing.some(function (m) { return m.taskId === 't_f_menu' && m.cardId === 'ic_food'; }),
+  'handoff at the genuine producer completion boundary remains valid');
 
 // fixHandoffs heals a hand-vandalized plan (erased + slowed + junk arrows) back to clean
 var vandal = { seed: 1, overrides: { handoffs: {
@@ -210,13 +310,13 @@ lateDinner.overrides.timing = { t_f_serve: { startMin: 1110 } };
 var ldFd = P.fishdaySchedule(P.mergePlan(lateDinner));
 ok(ldFd.guestWaitMin === 30 && ldFd.dinnerMin === 1110, 'dinner dragged to 18:30 still bills 30 min guest wait (' + ldFd.guestWaitMin + '/' + ldFd.dinnerMin + ')');
 
-// a dynamically-unresolvable arrow graph (mutual onTaskDone arrows) cannot score as clean
+// A genuine producer whose trigger waits on a downstream task creates a real
+// dependency cycle; provenance remains valid, so the cascade must mark it unresolved.
 var loopCfg = { seed: 1, overrides: { handoffs: {
-  h_loop: { cardId: 'ic_tackle', fromRoleId: 'chef', fromTaskId: 't_f_cook', toRoleId: 'specialist', toTaskId: 't_f_gearload', trigger: { type: 'onTaskDone', taskId: 't_f_cook' }, channel: 'radio', ifLate: 'idle', reworkKind: null, content: { en: 'x', jp: 'x' } },
-  h_tackle: null
+  h_tackle: { trigger: { type: 'onTaskDone', taskId: 't_f_cook' } }
 } } };
 var loopFd = P.fishdaySchedule(P.mergePlan(P.applyFix(loopCfg, 'setSafety')));
-ok(loopFd.unresolved > 0, 'a cyclic arrow graph marks tasks unresolved (' + loopFd.unresolved + ') instead of scoring clean');
+ok(loopFd.unresolved > 0, 'a valid-provenance cyclic arrow graph marks tasks unresolved (' + loopFd.unresolved + ') instead of scoring clean');
 ok(P.detect(P.mergePlan(loopCfg)).map(function (d) { return d.id; }).indexOf('handoffTiming') >= 0, 'handoffTiming fires on an unresolvable arrow graph');
 
 // a trigger pointing at a DAY-CLOCK task (no startMin) is unresolvable — never a free on-time pass
@@ -425,6 +525,20 @@ console.log('\n=== AUTHORABLE DAYS — daySchedule / scoreDay (§20 + §Voyage) 
   ok(pureBefore.days === pureAfter.days, '§20 read helpers do not mutate plan.days (pure)');
 })();
 
+// Nested work blocks used to be billed as the outer block's remaining span.
+// Isolate two p01 intervals so the exact overloaded wall-clock time is 240 min.
+(function () {
+  var nestedPlan = P.mergePlan(base), nestedTasks = P.tasksForSeg(nestedPlan, 'ops');
+  nestedTasks.forEach(function (task) { task.assignedIds = []; });
+  var outer = nestedTasks.filter(function (task) { return task.id === 'hd_o_weather'; })[0];
+  var inner = nestedTasks.filter(function (task) { return task.id === 'hd_o_tackleprep'; })[0];
+  outer.startMin = 240; outer.durMin = 600; outer.assignedIds = ['p01'];
+  inner.startMin = 300; inner.durMin = 240; inner.assignedIds = ['p01'];
+  var nestedSchedule = P.daySchedule(nestedPlan, 'ops');
+  ok(nestedSchedule.overbookMin === 240,
+    'nested 04:00–14:00 and 05:00–09:00 assignments bill exactly 240 overbooked minutes (' + nestedSchedule.overbookMin + ')');
+})();
+
 console.log('\n=== §20 REVIEW FIXES — fishday stays timing+arrows-only; coarse atMinute handoffs stay honest ===');
 (function () {
   // ---- Fix A: no engine-level public flow ever empties a fishday task's crew. The §20 editor's
@@ -558,6 +672,26 @@ console.log('\n=== COARSE-DAY ANIMATION — opt-in minute-sim (§21.12) ===');
     ok(P.scoreDay(P.mergePlan(cfg), seg).efficiency === 100, 'coarse ' + seg + ' (auto-arranged): scoreDay efficiency 100%');
   });
   ok(P.createSim(base, 'fishday').mode === 'minute', 'fishday is still a minute-sim without opts (coarse gate leaves it alone)');
+  // A freshly-created animated day has executed nothing. Its public summary
+  // must reflect runtime evidence rather than awarding the authored plan's 100.
+  var arrivalCfg = P.applyDayFix(P.applyAllFixes(base), 'arrival');
+  var untouchedArrival = P.createSim(arrivalCfg, 'arrival', { animate: true });
+  var untouchedSummary = P.daySummary(untouchedArrival);
+  ok(untouchedSummary.tasksDone === 0 && untouchedSummary.tasksTotal === 13 &&
+     untouchedSummary.score === 0 && untouchedSummary.grade === 'D' && untouchedSummary.clean === false,
+    'coarse Arrival summary before execution is 0/D/not-clean with 0/13 tasks, never 100/A');
+  var completedArrival = P.createSim(arrivalCfg, 'arrival', { animate: true }), caGuard = 0;
+  while (!completedArrival.finished && caGuard++ < 1000) {
+    P.tick(completedArrival); if (completedArrival.paused) P.resume(completedArrival);
+  }
+  var completedSummary = P.daySummary(completedArrival);
+  ok(completedSummary.tasksDone === 13 && completedSummary.tasksTotal === 13 &&
+     completedSummary.score === 100 && completedSummary.grade === 'A' && completedSummary.clean === true,
+    'coarse Arrival summary reaches 100/A/clean only after all 13 tasks execute');
+  var legacySummary = dayRun(P.applyAllFixes(base), 'arrival');
+  ok(legacySummary.score === 100 && legacySummary.grade === 'A' && legacySummary.clean === true &&
+     legacySummary.tasksDone === 4 && legacySummary.tasksTotal === 4,
+    'legacy two-argument day-clock summary remains 100/A/clean with its established 4/4 scope');
   // intervene on a coarse animated sim re-solves via daySchedule + logs the hand-feed
   var isim = P.createSim(base, 'arrival', { animate: true }), gi = 0;
   while (!isim.paused && !isim.finished && gi < 400) { P.tick(isim); gi++; }
@@ -1834,6 +1968,11 @@ console.log('\n=== TEACHING MVP — readiness, channel feasibility, and scenario
     'applyScenario clones its config and does not mutate caller-owned overrides');
   ok(JSON.stringify(outageCfgA) === JSON.stringify(outageCfgB) && outageCfgA.scenarioId === 'comms-outage',
     'applyScenario is deterministic and records the selected scenario as config data');
+  var outageSim = P.createSim(outageCfgA, 'fishday');
+  var outageReplay = P.createSim(outageSim.cfg, 'fishday');
+  ok(outageSim.cfg.scenarioId === 'comms-outage' && outageReplay.cfg.scenarioId === 'comms-outage' &&
+     outageReplay.plan.scenarioId === 'comms-outage',
+    'simulation replay preserves the communications-outage scenario in cfg and merged plan');
 
   var normalPlan = P.mergePlan(P.applyScenario(canonCfg, 'normal'));
   ok(JSON.stringify(P.daySchedule(normalPlan, 'fishday')) === JSON.stringify(canonFish),
@@ -2686,6 +2825,130 @@ console.log('\n=== MASTERY P0 — Return shipping must finish before headcount =
   ok(audited === 52 && auditFailures.length === 0,
     'all 52 authorable dependency-edge overlap variants surface a cause and withhold 100' +
       (auditFailures.length ? ' (' + auditFailures.join(', ') + ')' : ''));
+})();
+
+// ============================================================================
+// INTEGRITY REGRESSIONS — report truth, editor clocks, resilient presentation,
+// and asynchronous sound confirmation. Engine behaviors are exercised above;
+// these source contracts pin the browser glue that connects them to the player.
+// ============================================================================
+console.log('\n=== INTEGRITY REGRESSIONS — browser-facing contracts ===');
+(function () {
+  var fs = require('fs'), path = require('path');
+  var source = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
+  var i18nSource = fs.readFileSync(path.join(__dirname, 'i18n.js'), 'utf8');
+  function section(startNeedle, endNeedle) {
+    var start = source.indexOf(startNeedle), end = source.indexOf(endNeedle, start + startNeedle.length);
+    return start >= 0 && end > start ? source.slice(start, end) : '';
+  }
+  var finishSource = section('function finish()', 'function ledgerBucketsFor(segment)');
+  var reportSource = section('function renderReport(res)', 'function renderDayReport(res)');
+  var dayReportSource = section('function renderDayReport(res)', 'function rsDims()');
+  var arrowPanelSource = section('function openArrowPanel(hid, returnKey, focusId)', 'function arrowPatch(focusId)');
+  var arrowPatchSource = section('function arrowPatch(focusId)', 'function closeArrowPanel(repaint)');
+  var figTargetsSource = section('function figTargets(s)', 'function startAnim()');
+  var syncFigsSource = section('function renderSim(s)', 'function updateStageRoster(s)');
+  var tryInitStageSource = section('function tryInitStage(canvas, dims)', '// Defensive app-side route vocabulary');
+  var sitemapSource = section('function buildSitemap(keepActors)', 'function buildMotes(s)');
+  var missionBuildSource = section('function buildMissionControl()', 'function refreshMissionResourceControl(el)');
+  var missionRefreshSource = section('function refreshMissionResourceControl(el)', 'function buildEditors()');
+  var quitSource = section("$('btn-quit').addEventListener('click'", "$('detail-close').addEventListener");
+  var soundUiSource = section('var soundToggleGeneration = 0', '// ---- modal focus management');
+  var learningAttemptSource = section('function ensureLearningAttempt(res, plan, trip)', 'function localizedEvidence(item, plan)');
+  var finalizeGuidedSource = section('function finalizeGuidedAttempt()', 'function liveFinish()');
+  var liveFinishSource = section('function liveFinish()', 'function renderResult(focusAction)');
+  var guidedResultSource = section('function renderResult(focusAction)', 'function continueFromGuided()');
+
+  ok(reportSource.indexOf('(guidedReport || day || res.executionIncomplete) ? null : reportReadinessVerdict') >= 0 &&
+     dayReportSource.indexOf('reportReadinessVerdict') < 0 &&
+     i18nSource.indexOf("badgeDayClean: '✓ DAY MASTERED'") >= 0 &&
+     i18nSource.indexOf("badgeDayClean: '✓ DAY REHEARSAL COMPLETE'") < 0,
+    'a mastered Arrival/day report stays day-scoped and cannot claim whole-rehearsal completion');
+
+  ok(quitSource.indexOf('sim.endedEarly = true') >= 0 &&
+     quitSource.indexOf('sim.endedEarly = true') < quitSource.indexOf("sim.finished = 'incomplete'") &&
+     finishSource.indexOf('sim && sim.endedEarly') >= 0 &&
+     finishSource.indexOf('wholeSegmentResult(sim)') >= 0 &&
+     source.indexOf("sim.finished === 'incomplete'") < 0 &&
+     reportSource.indexOf('!res.executionIncomplete') >= 0 &&
+     dayReportSource.indexOf('executionIncompleteGrade') >= 0 &&
+     dayReportSource.indexOf('rExecutionIncomplete') >= 0,
+    'End & Review owns an explicit early-stop marker while naturally gappy engine completion remains an ordinary gap report');
+
+  ok(finalizeGuidedSource.indexOf('executionIncomplete: !!sim.endedEarly') >= 0 &&
+     liveFinishSource.indexOf('sim && sim.endedEarly') >= 0 &&
+     liveFinishSource.indexOf('var win = !executionIncomplete') >= 0 &&
+     guidedResultSource.indexOf('if (r.executionIncomplete)') >= 0 &&
+     guidedResultSource.indexOf('executionIncompleteBody(stopped.tasksDone, stopped.tasksTotal)') >= 0 &&
+     learningAttemptSource.indexOf('res.executionIncomplete ? null : trip.total') >= 0 &&
+     learningAttemptSource.indexOf('executionIncomplete: !!res.executionIncomplete') >= 0,
+    'Guided Live immediate-stop propagates no-score execution evidence through result, report, and saved learning attempt');
+
+  ok(source.indexOf('function htmlTimeValue(min)') >= 0 &&
+     source.indexOf('function absoluteTimeValue(value, day, fallback)') >= 0 &&
+     arrowPanelSource.indexOf('id="ar-day"') >= 0 &&
+     arrowPanelSource.indexOf('value="\' + htmlTimeValue(authorValue)') >= 0 &&
+     arrowPanelSource.indexOf('value="\' + hhmm(authorValue)') < 0 &&
+     arrowPatchSource.indexOf('absoluteTimeValue(tv, dayN') >= 0,
+    'post-midnight handoffs use a valid HH:MM input plus an explicit day offset and round-trip to absolute minutes');
+
+  ok(arrowPanelSource.indexOf("h.trigger.type === 'beforeTaskStart'") >= 0 &&
+     arrowPanelSource.indexOf('value="beforeTaskStart" selected') >= 0 &&
+     arrowPanelSource.indexOf('relationalTrigger') >= 0 &&
+     arrowPatchSource.indexOf("trig === 'beforeTaskStart'") >= 0 &&
+     arrowPatchSource.indexOf('patch.trigger = jsonCopy(h.trigger)') >= 0,
+    'editing an unrelated field preserves beforeTaskStart taskId/leadMin instead of converting the trigger');
+
+  ok(figTargetsSource.indexOf('var bounds = runPawnBounds(sc)') >= 0 &&
+     figTargetsSource.indexOf('fanShift(minX, maxX, bounds.left, bounds.right)') >= 0 &&
+     figTargetsSource.indexOf('fanShift(minY, maxY, bounds.top, bounds.bottom)') >= 0 &&
+     syncFigsSource.indexOf('var f = anim.fig[p.id], target = pos[p.id]') >= 0 &&
+     syncFigsSource.indexOf('var initial = target ||') >= 0,
+    'phone-width pawn fans and their initial frames are shifted wholly inside the visible map bounds');
+
+  ok(tryInitStageSource.indexOf("typeof PRS_STAGE.initStage !== 'function'") >= 0 &&
+     tryInitStageSource.indexOf('return PRS_STAGE.initStage(canvas, dims) || null') >= 0 &&
+     tryInitStageSource.indexOf('catch (e) { return null; }') >= 0 &&
+     sitemapSource.indexOf('stageCtx = tryInitStage') >= 0 &&
+     sitemapSource.indexOf("if (stageCtx) document.body.classList.add('canvas-stage')") >= 0 &&
+     sitemapSource.indexOf('USE_CANVAS = false') >= 0 &&
+     sitemapSource.indexOf("document.body.classList.remove('canvas-stage')") >= 0,
+    'failed canvas context creation permanently keeps the visible DOM map fallback');
+
+  var invalidEnvelopeCount = 'br.envelopes.filter(function (env) { return !env.ok; }).length';
+  ok(missionBuildSource.indexOf(invalidEnvelopeCount) >= 0 && missionRefreshSource.indexOf(invalidEnvelopeCount) >= 0,
+    'Mission Control counts invalid envelopes in both full-build and in-place resource refresh status');
+
+  ok(soundUiSource.indexOf('result = sound.toggle()') >= 0 &&
+     soundUiSource.indexOf('Promise.resolve(result).then(settled, settled)') >= 0 &&
+     soundUiSource.indexOf('updateSoundButton()') >= 0,
+    'sound button waits for the asynchronous confirmed toggle state and handles rejection');
+
+  // Execute sound.js in an isolated process with resume() rejected. Waiting a
+  // full event-loop turn catches both a false enabled flag and an unhandled
+  // rejection that a superficial source check would miss.
+  var soundProbe = [
+    "const fs=require('fs'),vm=require('vm');",
+    "let store={},unhandled=0; process.on('unhandledRejection',()=>{unhandled++;});",
+    "function param(){return {value:0,cancelScheduledValues(){},linearRampToValueAtTime(){},setValueAtTime(){}};}",
+    "class BlockedAudioContext { constructor(){this.state='suspended';this.currentTime=0;this.sampleRate=8;this.destination={};}",
+    "createGain(){return {gain:param(),connect(){}};} createBuffer(ch,len){return {getChannelData(){return new Float32Array(len);}};}",
+    "resume(){return Promise.reject(new Error('blocked'));} }",
+    "const window={AudioContext:BlockedAudioContext,matchMedia(){return {matches:false,addEventListener(){}};}};",
+    "const sandbox={window,localStorage:{getItem(k){return store[k]||null;},setItem(k,v){store[k]=String(v);}},",
+    "Promise,Math,Float32Array,setTimeout,clearTimeout};",
+    "vm.runInNewContext(fs.readFileSync('sound.js','utf8'),sandbox,{filename:'sound.js'});",
+    "(async()=>{const value=await window.PRS_SOUND.toggle(); await new Promise(r=>setImmediate(r));",
+    "if(value!==false||window.PRS_SOUND.enabled!==false||store.prs_sound!=='0'||unhandled!==0)",
+    "throw new Error(JSON.stringify({value,enabled:window.PRS_SOUND.enabled,pref:store.prs_sound,unhandled}));",
+    "})().catch(e=>{console.error(e.stack||e);process.exitCode=1;});"
+  ].join('\n');
+  var soundRun = require('child_process').spawnSync(process.execPath, ['-e', soundProbe], {
+    cwd: __dirname, encoding: 'utf8', timeout: 10000
+  });
+  ok(soundRun.status === 0,
+    'AudioContext.resume rejection resolves false, persists disabled, and emits no unhandled rejection' +
+      (soundRun.status === 0 ? '' : ' (' + String(soundRun.stderr || soundRun.error || '').trim() + ')'));
 })();
 
 console.log('\n' + (fail === 0 ? 'ALL ' + pass + ' CHECKS PASSED ✓' : pass + ' passed, ' + fail + ' FAILED ✗'));

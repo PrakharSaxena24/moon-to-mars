@@ -33,12 +33,15 @@
         var level = levels.indexOf(x.level) >= 0 ? x.level : 'learn', segment = segs.indexOf(x.segment) >= 0 ? x.segment : 'all';
         var cause = causes.indexOf(x.actualCause) >= 0 ? x.actualCause : 'none';
         var pc = x.prediction && causes.indexOf(x.prediction.cause) >= 0 ? x.prediction.cause : null;
+        var executionIncomplete = x.executionIncomplete === true;
         return { id: typeof x.id === 'string' ? x.id.slice(0, 80) : ('stored-' + i), at: Number.isFinite(Number(x.at)) ? Number(x.at) : 0,
           level: level, segment: segment, seed: Number.isFinite(Number(x.seed)) ? Number(x.seed) : 1,
-          scenario: x.scenario === 'comms-outage' ? 'comms-outage' : 'normal', score: clamp(Number(x.score) || 0, 0, 100),
+          scenario: x.scenario === 'comms-outage' ? 'comms-outage' : 'normal', score: executionIncomplete ? null : clamp(Number(x.score) || 0, 0, 100),
           grade: typeof x.grade === 'string' ? x.grade.slice(0, 2) : '', gapCount: Math.max(0, Math.min(999, Number(x.gapCount) || 0)), actualCause: cause,
           prediction: pc ? { cause: pc, rationale: String(x.prediction.rationale || '').slice(0, 240), createdAt: Number(x.prediction.createdAt || x.prediction.at) || 0 } : null,
           evidence: Array.isArray(x.evidence) ? x.evidence.slice(0, 3) : [], observedRepair: x.observedRepair === true,
+          executionIncomplete: executionIncomplete,
+          tasksDone: Math.max(0, Math.min(999, Number(x.tasksDone) || 0)), tasksTotal: Math.max(0, Math.min(999, Number(x.tasksTotal) || 0)),
           buckets: x.buckets && typeof x.buckets === 'object' ? x.buckets : {},
           unresolvedAssumptions: Array.isArray(x.unresolvedAssumptions) ? x.unresolvedAssumptions.slice(0, 20).map(function (v) { return String(v).slice(0, 80); }) : [],
           reflection: { why: String(x.reflection && x.reflection.why || '').slice(0, 400), transfer: String(x.reflection && x.reflection.transfer || '').slice(0, 400) } };
@@ -513,6 +516,23 @@
     var h = Math.floor(local / 60), m = Math.round(local % 60);
     if (m === 60) { h = (h + 1) % 24; m = 0; }
     return (day > 0 ? 'D+' + day + ' ' : '') + (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m;
+  }
+  // HTML's time input accepts only a local HH:MM value.  The authoring model,
+  // however, uses absolute trip minutes and several route windows cross
+  // midnight.  Keep those representations separate: a companion day selector
+  // carries the offset, while this helper is the only value fed to type=time.
+  function htmlTimeValue(min) {
+    if (typeof min !== 'number' || !isFinite(min)) return '';
+    var local = ((Math.round(min) % 1440) + 1440) % 1440;
+    var h = Math.floor(local / 60), m = local % 60;
+    return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m;
+  }
+  function absoluteTimeValue(value, day, fallback) {
+    var match = /^(\d{2}):(\d{2})$/.exec(String(value || ''));
+    if (!match) return fallback;
+    var h = parseInt(match[1], 10), m = parseInt(match[2], 10);
+    if (h > 23 || m > 59 || !isFinite(day)) return fallback;
+    return Math.round(day) * 1440 + h * 60 + m;
   }
   function minuteOfDay(min) { return typeof min === 'number' ? ((min % 1440) + 1440) % 1440 : 0; }
   function isNightMinute(min) { var local = minuteOfDay(min); return local < 330 || local >= 1110; }
@@ -1093,7 +1113,8 @@
   function buildMissionControl() {
     var box = $('mission-control'); if (!box) return;
     var plan = currentPlan(), br = P.budgetReadiness(plan), t = T(), conceal = learningHidesExact();
-    var gapCount = br.gaps.length + br.events.filter(function (ev) { return !ev.ok; }).length + br.resources.filter(function (r) { return !r.ok; }).length;
+    var gapCount = br.gaps.length + br.envelopes.filter(function (env) { return !env.ok; }).length +
+      br.events.filter(function (ev) { return !ev.ok; }).length + br.resources.filter(function (r) { return !r.ok; }).length;
     var roles = ['budgetLead', 'logi', 'siteLead', 'chef', 'safetyLead', 'comms'];
     var people = roles.map(function (rid) {
       var rr = P.role(rid), ro = plan.roles[rid], pp = ro && ro.holder ? byId(plan.participants, ro.holder) : null;
@@ -1140,7 +1161,8 @@
     }
     var status = $('mission-control').querySelector('.mc-status');
     if (status) {
-      var gapCount = br.gaps.length + br.events.filter(function (ev) { return !ev.ok; }).length + br.resources.filter(function (r) { return !r.ok; }).length;
+      var gapCount = br.gaps.length + br.envelopes.filter(function (env) { return !env.ok; }).length +
+        br.events.filter(function (ev) { return !ev.ok; }).length + br.resources.filter(function (r) { return !r.ok; }).length;
       status.className = 'mc-status ' + (conceal ? '' : (gapCount ? 'bad' : 'ok'));
       var headline = status.querySelector('b');
       if (headline) headline.textContent = conceal ? t.learningDiagnoseFirst : (gapCount ? t.mcStatusBad(gapCount) : t.mcStatusOk);
@@ -2040,6 +2062,8 @@
     $('ar-title').textContent = nm(card ? card.name : h.cardId);
     $('ar-sub').textContent = t.arFrom + ' ' + (from ? nm(from.name) : h.fromRoleId) + ' → ' + t.arTo + ' ' + (to ? nm(to.name) : h.toRoleId);
     var hasProducer = !!(h.fromTaskId && from), trigDone = hasProducer && h.trigger.type === 'onTaskDone';
+    var trigBefore = h.trigger.type === 'beforeTaskStart';
+    var relationalTrigger = trigDone || trigBefore;
     var sendMin = sendMinInSeg(segT, h), minSend = producedAtSeg(segT, h);
     var chOpts = CH_LIST.map(function (c) {
       return '<option value="' + c + '"' + (h.channel === c ? ' selected' : '') + '>' + t['ch' + c.charAt(0).toUpperCase() + c.slice(1)] + ' (+' + P.CHANNELS[c] + t.chMin + ')</option>';
@@ -2048,14 +2072,30 @@
     var arr = feas.arrival, needBy = to ? to.startMin : 0, late = arr == null || arr > needBy;
     var authorMin = authoringSend(seg, minSend, minSend);
     var authorSeed = typeof sendMin === 'number' && isFinite(sendMin) ? sendMin : needBy;
-    var authorValue = authoringSend(seg, authorSeed, minSend);
+    // Relational triggers are read-only clock projections.  Show their exact
+    // resolved minute (even if it precedes the producer); only an authored
+    // atMinute trigger is clamped by the send-time rules.
+    var authorValue = relationalTrigger && typeof sendMin === 'number' && isFinite(sendMin) ? sendMin : authoringSend(seg, authorSeed, minSend);
+    var win = segWin(seg), firstDay = Math.floor(win[0] / 1440), lastDay = Math.floor(win[1] / 1440);
+    var valueDay = Math.floor(authorValue / 1440), optionFirstDay = Math.min(firstDay, valueDay), optionLastDay = Math.max(lastDay, valueDay);
+    var dayOptions = '';
+    for (var dayN = optionFirstDay; dayN <= optionLastDay; dayN++) {
+      dayOptions += '<option value="' + dayN + '"' + (dayN === valueDay ? ' selected' : '') + '>' + t.arDayOption(dayN) + '</option>';
+    }
+    // Native min/max works only when both bounds live on the same local day.
+    // Cross-midnight windows are validated after recombining day + HH:MM.
+    var localBounds = firstDay === lastDay ? ' min="' + htmlTimeValue(authorMin) + '" max="' + htmlTimeValue(win[1]) + '"' : '';
+    var dayControl = (optionFirstDay !== 0 || optionLastDay !== 0 || optionFirstDay !== optionLastDay)
+      ? '<select class="ar-sel" id="ar-day" aria-label="' + esc(t.arDay) + '"' + (relationalTrigger ? ' disabled' : '') + '>' + dayOptions + '</select>' : '';
+    var beforeTask = trigBefore ? byId(segT, h.trigger.taskId || h.toTaskId) : null;
     var unknownClock = taskTimeUnconfirmed(from) || taskTimeUnconfirmed(to);
     $('ar-body').innerHTML =
       (unknownClock ? '<div class="ar-note">' + t.routeTimeUnknown + '</div>' : '') +
       '<div class="ar-row"><label class="dt-h" for="ar-trig">' + t.arTrigger + '</label>' +
         '<select class="ar-sel" id="ar-trig">' + (hasProducer ? '<option value="onTaskDone"' + (trigDone ? ' selected' : '') + '>' + t.arTrigDone + ' — ' + nm(from.name) + '</option>' : '') +
-        '<option value="atMinute"' + (!trigDone ? ' selected' : '') + '>' + t.arTrigAt + '</option></select>' +
-        '<input class="ar-time" id="ar-time" type="time" step="' + (segSnap(seg) * 60) + '" min="' + hhmm(authorMin) + '" value="' + hhmm(authorValue) + '"' + (trigDone ? ' disabled' : '') + ' aria-label="' + esc(t.arTime) + '"></div>' +
+        (trigBefore ? '<option value="beforeTaskStart" selected>' + t.arTrigBefore(beforeTask ? nm(beforeTask.name) : h.trigger.taskId, h.trigger.leadMin || 0) + '</option>' : '') +
+        '<option value="atMinute"' + (!trigDone && !trigBefore ? ' selected' : '') + '>' + t.arTrigAt + '</option></select>' +
+        dayControl + '<input class="ar-time" id="ar-time" type="time" step="' + (segSnap(seg) * 60) + '"' + localBounds + ' value="' + htmlTimeValue(authorValue) + '"' + (relationalTrigger ? ' disabled' : '') + ' aria-label="' + esc(t.arTime) + '"></div>' +
       '<div class="ar-row"><label class="dt-h" for="ar-ch">' + t.arChannel + '</label><select class="ar-sel" id="ar-ch">' + chOpts + '</select></div>' +
       (learningHidesExact() ? '<div class="ar-note">' + t.learningProjectionHidden + '</div>' : '<div class="ar-arrive ' + (late ? 'late' : 'ok') + '">' + (unknownClock ? t.routeTimeUnconfirmedShort : (arr == null ? '—' : (late ? t.arriveLate(hhmm(arr), arr - needBy) : t.arriveOk(hhmm(arr))))) + ' <span class="muted2">(' + (to ? nm(to.name) + ' ' + (unknownClock ? t.routeClockAssumption : hhmm(needBy)) : '') + ')</span></div>') +
       '<div class="ar-feasibility' + (!learningHidesExact() && !feas.ok ? ' bad' : '') + '" id="ar-feasibility">' + (learningHidesExact() ? t.feasibilityUntested : feasibilityText(feas.reason)) + '</div>' +
@@ -2074,8 +2114,11 @@
     var trig = $('ar-trig').value, ch = $('ar-ch').value, tv = $('ar-time').value;
     var patch = { channel: ch };
     if (trig === 'onTaskDone' && h.fromTaskId) patch.trigger = { type: 'onTaskDone', taskId: h.fromTaskId };
+    else if (trig === 'beforeTaskStart' && h.trigger.type === 'beforeTaskStart') patch.trigger = jsonCopy(h.trigger);
     else {
-      var mm = tv ? (parseInt(tv.slice(0, 2), 10) * 60 + parseInt(tv.slice(3, 5), 10)) : h.trigger.value || 0;
+      var currentSend = sendMinInSeg(segT, h), dayEl = $('ar-day');
+      var dayN = dayEl ? parseInt(dayEl.value, 10) : Math.floor((typeof currentSend === 'number' && isFinite(currentSend) ? currentSend : segWin(seg)[0]) / 1440);
+      var mm = absoluteTimeValue(tv, dayN, h.trigger.type === 'atMinute' ? h.trigger.value : currentSend);
       mm = authoringSend(seg, mm, producedAtSeg(segT, h)); // can't precede production; obeys this day's blocks
       patch.trigger = { type: 'atMinute', value: mm };
     }
@@ -2192,7 +2235,11 @@
   }
   function routeWaypoints(f, fromId, toId) {                  // store pass-through station centres (final leg = fanned tx/ty)
     var path = stationPath(fromId, toId, sim), W = anim.w, H = anim.h, feet = FEET_BASE * (USE_CANVAS ? stageScaleNow() : 1), wp = [], i, st;
-    for (i = 1; i < path.length - 1; i++) { st = mapStationFor(path[i], sim); wp.push({ x: st.x * W, y: st.y * H + feet }); }
+    var bounds = runPawnBounds(USE_CANVAS ? stageScaleNow() : 1);
+    for (i = 1; i < path.length - 1; i++) {
+      st = mapStationFor(path[i], sim);
+      wp.push({ x: clamp(st.x * W, bounds.left, bounds.right), y: clamp(st.y * H + feet, bounds.top, bounds.bottom) });
+    }
     f.wp = wp; f.wpi = 0;
   }
   function figSpeedMul(pid) {                                 // deterministic slight per-person speed (~0.85..1.17)
@@ -2247,6 +2294,11 @@
   var stageTrail = [], stageGhost = [{}, {}, {}], stageChain = [];  // canvas-owned cascade scratch (separate from anim.*)
   var stageSpotPid = null, stageTint = null, stageGapState = null;  // §21.4 Live draw-state bridge -> the scene() view
   function mapDims() { var m = $('sitemap'); return { w: m.clientWidth || 900, h: m.clientHeight || 480 }; }
+  function tryInitStage(canvas, dims) {
+    if (!canvas || !window.PRS_STAGE || typeof PRS_STAGE.initStage !== 'function') return null;
+    try { return PRS_STAGE.initStage(canvas, dims) || null; }
+    catch (e) { return null; }
+  }
   // Defensive app-side route vocabulary. stage.js normally owns the richer
   // profiles/station labels; these keep the no-stage DOM path location-correct.
   var MAP_FALLBACK_PROFILES = {
@@ -2519,12 +2571,22 @@
     if (sceneStatus.textContent !== profileLabel) sceneStatus.textContent = profileLabel;
     var dims = mapDims(); anim.w = dims.w; anim.h = dims.h;
     rebuildPaths();
-    // Tier 2: mount + size the canvas stage; body.canvas-stage hides the DOM stage layers (CSS)
-    if (USE_CANVAS && window.PRS_STAGE) {
+    // Tier 2: mount + size the canvas stage.  Hide the DOM stage only after a
+    // real 2D context exists; unsupported/failed canvas initialization must
+    // degrade to the already-built DOM map instead of leaving a blank scene.
+    stageCtx = null;
+    if (USE_CANVAS) {
       var cv = $('stage');
-      if (cv) { PRS_STAGE.initStage(cv, { w: anim.w, h: anim.h }); stageCtx = cv.getContext('2d'); }
-      document.body.classList.add('canvas-stage');
-    }
+      stageCtx = tryInitStage(cv, { w: anim.w, h: anim.h });
+      if (stageCtx) document.body.classList.add('canvas-stage');
+      else {
+        USE_CANVAS = false;
+        document.body.classList.remove('canvas-stage');
+        // These hotspots describe canvas-only sub-zones and would otherwise be
+        // invisible controls floating over the DOM fallback.
+        box.querySelectorAll('.sec-hot').forEach(function (node) { node.remove(); });
+      }
+    } else document.body.classList.remove('canvas-stage');
     // sea + micro-life layer (west-coast water band, drifting gulls, jumping fish) — pure ambience
     var sea = document.getElementById('sealayer');
     if (!sea) { sea = document.createElement('div'); sea.id = 'sealayer'; sea.className = 'sealayer'; map.insertBefore(sea, $('paths')); }
@@ -2837,6 +2899,27 @@
     }
   }
 
+  // Anchor bounds for the visible pawn. Canvas sprites use a 48×56 box with
+  // feet at (24,52), plus a small idle drift; the DOM fallback uses its 16×27
+  // procedural figure.  Keeping this presentation-only avoids altering any
+  // engine station while guaranteeing the whole figure stays on the map.
+  function runPawnBounds(sc) {
+    var W = anim.w, H = anim.h, left, top, bottomPad;
+    if (USE_CANVAS) {
+      left = (24 * FIGK + 6) * sc;
+      top = (52 * FIGK + 3) * sc;
+      bottomPad = (8 * FIGK) * sc;
+    } else { left = 10; top = 30; bottomPad = 10; }
+    left = Math.min(left, W / 2); top = Math.min(top, H / 2); bottomPad = Math.min(bottomPad, H / 2);
+    return { left: left, right: Math.max(left, W - left), top: top, bottom: Math.max(top, H - bottomPad) };
+  }
+  function fanShift(min, max, lo, hi) {
+    if (max - min > hi - lo) return (lo + hi - min - max) / 2;
+    var d = min < lo ? lo - min : 0;
+    if (max + d > hi) d += hi - (max + d);
+    return d;
+  }
+
   // px target for each duty-holder: its engine station + a fanned stack below it
   // (anchor = the sprite's FEET; rows of 4, wide enough that name chips stay legible)
   function figTargets(s) {
@@ -2847,12 +2930,19 @@
     });
     var W = anim.w, H = anim.h, sc = USE_CANVAS ? stageScaleNow() : 1;   // only scale the fan when the (scaled) canvas is active
     var colGap = FAN_COL * sc, rowGap = FAN_ROW * sc, feet = FEET_BASE * sc;   // scale fan+feet so bigger pawns don't overlap
+    var bounds = runPawnBounds(sc);
     Object.keys(bucket).forEach(function (id) {
-      var visual = visualById[id], n = bucket[id].length;
+      var visual = visualById[id], n = bucket[id].length, raw = [], minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
       bucket[id].forEach(function (p, i) {
         var col = i % 4, row = Math.floor(i / 4), rowN = Math.min(4, n - row * 4);
-        pos[p.id] = { x: visual.x * W + (col - (rowN - 1) / 2) * colGap, y: visual.y * H + feet + row * rowGap };
+        var point = { pid: p.id, x: visual.x * W + (col - (rowN - 1) / 2) * colGap, y: visual.y * H + feet + row * rowGap };
+        raw.push(point); minX = Math.min(minX, point.x); maxX = Math.max(maxX, point.x); minY = Math.min(minY, point.y); maxY = Math.max(maxY, point.y);
       });
+      // Shift the entire station fan as one unit.  Unlike per-pawn clamping,
+      // this preserves every column/row gap and therefore cannot collapse a
+      // four-person fan against a phone edge.
+      var dx = fanShift(minX, maxX, bounds.left, bounds.right), dy = fanShift(minY, maxY, bounds.top, bounds.bottom);
+      raw.forEach(function (point) { pos[point.pid] = { x: point.x + dx, y: point.y + dy }; });
     });
     return pos;
   }
@@ -3096,7 +3186,7 @@
     var pos = figTargets(s);
     anim.hotPts = [];
     s.participants.forEach(function (p) {
-      var f = anim.fig[p.id];
+      var f = anim.fig[p.id], target = pos[p.id];
       if (!f) {
         var el = document.createElement('div'); el.className = 'astro';
         el.setAttribute('data-pid', p.id);
@@ -3105,14 +3195,15 @@
         $('figs').appendChild(el);
         var st0 = mapStationFor(p.station, s);
         var feet0 = FEET_BASE * (USE_CANVAS ? stageScaleNow() : 1);
+        var initial = target || { x: st0.x * anim.w, y: st0.y * anim.h + feet0 };
         f = anim.fig[p.id] = { el: el, bub: el.querySelector('.bub'), nmEl: el.querySelector('.nm'),
-          cx: st0.x * anim.w, cy: st0.y * anim.h + feet0, tx: st0.x * anim.w, ty: st0.y * anim.h + feet0, st: '', lang: '',
+          cx: initial.x, cy: initial.y, tx: initial.x, ty: initial.y, st: '', lang: '',
           pid: p.id, spdMul: figSpeedMul(p.id), spd: 0, wp: [], wpi: 0, stn: p.station };
         el._cx = f.cx; el._cy = f.cy;
         setXY(el, f.cx, f.cy);
       }
       if (f.lang !== L) { f.nmEl.innerHTML = '<i>' + P.role(p.roleId).icon + '</i>' + nm(p.name); f.lang = L; }
-      var t = pos[p.id]; if (t) { f.tx = t.x; f.ty = t.y; }
+      if (target) { f.tx = target.x; f.ty = target.y; }
       if (f.stn !== p.station) { routeWaypoints(f, f.stn, p.station); f.stn = p.station; }   // engine moved this figure: recompute the road route
       if (f.el) f.el._stn = p.station;   // persist current station on the DOM node so a keepActors rebuild keeps the route
       // the rAF loop owns walking/faceL; the live spotlight owns spot — preserve them across state writes
@@ -3304,6 +3395,28 @@
     var on = !!(window.PRS_SOUND && window.PRS_SOUND.enabled);
     sb.textContent = on ? T().sndOff : T().sndOn;
     sb.setAttribute('aria-label', T().sndAria);
+  }
+  var soundToggleGeneration = 0;
+  function requestSoundToggle() {
+    var sb = $('snd-toggle'), sound = window.PRS_SOUND;
+    if (!sound || typeof sound.toggle !== 'function') { updateSoundButton(); return; }
+    // AudioContext.resume() can be asynchronous. One gesture owns the pending
+    // transition so rapid/programmatic clicks cannot let an older settlement
+    // paint a stale label over the final sound state.
+    if (sb && sb.getAttribute('aria-busy') === 'true') return;
+    var token = ++soundToggleGeneration, result;
+    try { result = sound.toggle(); }
+    catch (e) { updateSoundButton(); return; }
+    if (!result || typeof result.then !== 'function') { updateSoundButton(); return; } // legacy sync boolean/undefined
+    if (sb) { sb.disabled = true; sb.setAttribute('aria-busy', 'true'); }
+    function settled() {
+      if (token !== soundToggleGeneration) return;
+      if (sb) { sb.disabled = false; sb.removeAttribute('aria-busy'); }
+      // Read the sound module's settled truth rather than trusting a stale
+      // captured boolean (or a legacy Promise with no fulfillment value).
+      updateSoundButton();
+    }
+    Promise.resolve(result).then(settled, settled);             // rejection is contained and reflected as the module's final state
   }
 
   // ---- modal focus management: remember the invoker, restore focus on close ----
@@ -3568,6 +3681,8 @@
   function finish() {
     clearInterval(timer); timer = null;
     camReleaseSafe(0);                            // §3 safety: no camera offset carries into the report stage
+    var executionIncomplete = !!(sim && sim.endedEarly);
+    var execution = (sim && sim.mode === 'minute' && sim.segment !== 'all') ? wholeSegmentResult(sim) : null;
     // §7.2: a coarse animated day (arrival/ops/return) report reads the whole-trip ledger (scoreTrip)
     // + that day's daySchedule/dayReadiness in renderDayReport — no scoreDay grade/score is rendered,
     // so res.day is unused for the coarse path.
@@ -3577,11 +3692,14 @@
       var legacy = P.createSim(seededCfg(wholeRun.seed), 'all'), guard = 0;
       while (!legacy.finished && guard++ < 1000) P.tick(legacy);
       lastResult = { trip: P.score(legacy), day: null, segment: 'all', wholeTrip: true,
-        segmentResults: wholeRun.results.slice(), segmentSims: wholeRun.sims, authoredClean: wholeRun.clean };
+        segmentResults: wholeRun.results.slice(), segmentSims: wholeRun.sims, authoredClean: wholeRun.clean,
+        executionIncomplete: executionIncomplete, execution: execution };
     } else if (sim.mode === 'minute' && sim.segment !== 'fishday') {
-      lastResult = { trip: null, day: null, segment: sim.segment, coarse: true };
+      lastResult = { trip: null, day: null, segment: sim.segment, coarse: true,
+        executionIncomplete: executionIncomplete, execution: execution };
     } else {
-      lastResult = { trip: P.score(sim), day: (sim.segment !== 'all' ? P.daySummary(sim) : null), segment: sim.segment };
+      lastResult = { trip: P.score(sim), day: (sim.segment !== 'all' ? P.daySummary(sim) : null), segment: sim.segment,
+        executionIncomplete: executionIncomplete, execution: execution };
     }
     var simAt = sim, wholeAt = wholeRun;
     scheduleUncoveredTransition(function () {
@@ -3824,18 +3942,23 @@
       res._learningSnapshot = { plan: plan, trip: trip, readiness: executionReadiness(plan), run: activeLearningRun || newLearningRun((sim && sim.cfg && sim.cfg.seed) || 1, res.segment || daySel) };
     }
     if (res._learningAttempt) return res._learningAttempt;
-    var run = res._learningSnapshot.run, actual = classifyEvidence(plan, trip, res);
+    var run = res._learningSnapshot.run;
+    var stopped = res.execution || { tasksDone: 0, tasksTotal: 0 };
+    var actual = res.executionIncomplete
+      ? { cause: 'none', count: 0, items: [{ kind: 'execution-incomplete', tasksDone: stopped.tasksDone, tasksTotal: stopped.tasksTotal }] }
+      : classifyEvidence(plan, trip, res);
     // Guided Live repairs its gap before the report is created. Preserve the
     // evidence the learner actually observed so a clean final plan does not
     // erase the causal lesson and report only “no modeled gap.”
-    if (run.observed && run.observed.cause && run.observed.item) {
+    if (!res.executionIncomplete && run.observed && run.observed.cause && run.observed.item) {
       actual = { cause: run.observed.cause, count: 1, items: [run.observed.item] };
     }
-    var lessonScore = trip.total, lessonGrade = '';
+    var lessonScore = res.executionIncomplete ? null : trip.total, lessonGrade = '';
     var attempt = { id: run.id, at: run.at, level: run.level, segment: res.segment || run.segment || 'all', seed: run.seed,
       scenario: (plan && plan.scenarioId) || run.scenario || 'normal', prediction: run.prediction || null,
       score: lessonScore, grade: lessonGrade, gapCount: actual.count, actualCause: actual.cause, evidence: actual.items,
       observedRepair: !!run.observed,
+      executionIncomplete: !!res.executionIncomplete, tasksDone: stopped.tasksDone, tasksTotal: stopped.tasksTotal,
       buckets: compactBucketScores(trip), unresolvedAssumptions: (res._learningSnapshot.readiness.unresolved || []).map(function (a) { return a.id; }),
       reflection: { why: '', transfer: '' } };
     res._learningAttempt = attempt;
@@ -3845,6 +3968,7 @@
     return attempt;
   }
   function localizedEvidence(item, plan) {
+    if (item && item.kind === 'execution-incomplete') return T().debriefExecutionIncomplete(item.tasksDone || 0, item.tasksTotal || 0);
     if (item && item.kind === 'scenario') return readinessText(plan, item.segment, item);
     if (item && item.kind === 'hint') return readinessText(plan, item.segment, item);
     var v = item && item.reasonKey ? T()[item.reasonKey] : null;
@@ -3860,7 +3984,9 @@
       takeaway.textContent = T().debriefTakeaway(causeLabel(attempt.actualCause));
       takeaway.classList.toggle('hidden', learningLevel !== 'learn');
     }
-    var summary = attempt.observedRepair ? T().debriefRepairedSummary(attempt.score, attempt.gapCount) : T().debriefEvidenceSummary(attempt.score, attempt.gapCount);
+    var summary = attempt.executionIncomplete
+      ? T().debriefExecutionIncomplete(attempt.tasksDone || 0, attempt.tasksTotal || 0)
+      : (attempt.observedRepair ? T().debriefRepairedSummary(attempt.score, attempt.gapCount) : T().debriefEvidenceSummary(attempt.score, attempt.gapCount));
     var evidence = attempt.evidence && attempt.evidence.length ? attempt.evidence.map(function (item) { return localizedEvidence(item, plan); }).join(' · ') : summary;
     box.innerHTML = '<div class="debrief-compare"><div class="debrief-box"><small>' + T().debriefPrediction + '</small><b>' +
       (pred ? causeLabel(pred.cause) : T().debriefNoPrediction) + '</b>' + (pred ? '<p>' + esc(pred.rationale) + '</p>' : '') + '</div>' +
@@ -3923,16 +4049,23 @@
     var reportCluster = reportClusters.filter(function (c) { return c.id === res.segment; })[0];
     var guidedBucket = guidedReport ? trip.byBucket.fishday : null;
     var dayBucket = day ? trip.byBucket[res.segment] : null;
-    var dayMastered = !!(dayBucket && dayBucket.earned === dayBucket.maxPts && day && day.clean && reportCluster && (!reportCluster.rootIssues || reportCluster.rootIssues.length === 0));
+    var dayMastered = !!(!res.executionIncomplete && dayBucket && dayBucket.earned === dayBucket.maxPts && day && day.clean && reportCluster && (!reportCluster.rootIssues || reportCluster.rootIssues.length === 0));
     var wholeMastered = trip.total === 100 && !!(trip.gate && trip.gate.clean) && authoredClean && reportClusters.every(function (c) {
       return c.earned === c.maxPts && (!c.rootIssues || c.rootIssues.length === 0);
     });
     var perfect = day ? dayMastered : wholeMastered;
-    $('r-grade-label').textContent = guidedReport ? t.guidedGradeLbl : (day ? dayLabel(res.segment) + ' · ' + t.gradeLbl : t.gradeLbl);
-    $('r-grade').textContent = dayBucket ? (dayBucket.earned + ' / ' + dayBucket.maxPts) : (trip.total + ' / 100');
+    var reportExecution = res.execution || { tasksDone: 0, tasksTotal: 0 };
+    $('r-grade-label').textContent = res.executionIncomplete
+      ? (day ? dayLabel(res.segment) + ' · ' : '') + t.executionStatusLbl
+      : (guidedReport ? t.guidedGradeLbl : (day ? dayLabel(res.segment) + ' · ' + t.gradeLbl : t.gradeLbl));
+    $('r-grade').textContent = res.executionIncomplete
+      ? t.executionIncompleteGrade(reportExecution.tasksDone, reportExecution.tasksTotal)
+      : (dayBucket ? (dayBucket.earned + ' / ' + dayBucket.maxPts) : (trip.total + ' / 100'));
     $('r-grade').style.color = perfect ? 'var(--build)' : 'var(--wait)';
     var badge = $('r-badge'); badge.textContent = perfect ? (day ? t.badgeDayClean : t.badgePerfect) : ''; badge.classList.toggle('show', perfect);
-    if (guidedReport) {
+    if (res.executionIncomplete) {
+      $('r-verdict').textContent = t.rExecutionIncomplete(day ? dayLabel(res.segment) : t.wholeTrip, reportExecution.tasksDone, reportExecution.tasksTotal);
+    } else if (guidedReport) {
       $('r-verdict').textContent = t.guidedReportVerdict(guidedBucket.earned, guidedBucket.maxPts, dayMastered);
     } else if (res.wholeTrip && !authoredClean) {
       $('r-verdict').textContent = trip.total + ' / 100 — ' + t.rIncomplete;
@@ -3942,16 +4075,31 @@
     } else {
       $('r-verdict').textContent = trip.total + ' / 100 — ' + (wholeMastered ? t.rDone : t.rIncomplete);
     }
-    var readinessVerdict = guidedReport ? null : reportReadinessVerdict(reportPlan, perfect);
+    // Critical-fact readiness may refine a completed WHOLE-TRIP verdict.  A
+    // mastered day keeps its day-scoped wording; it must never be relabeled as
+    // if all six authored days had completed rehearsal.
+    var readinessVerdict = (guidedReport || day || res.executionIncomplete) ? null : reportReadinessVerdict(reportPlan, wholeMastered);
     if (readinessVerdict) $('r-verdict').textContent = readinessVerdict;
     if (guidedReport) {
-      $('r-conds').innerHTML = '<span class="cond ' + (day.clean ? 'met' : 'unmet') + '">' +
-        (day.clean ? '✓ ' : '✗ ') + t.dayTasksLine(day.tasksDone, day.tasksTotal) + '</span>' +
-        '<span class="cond ' + (guidedBucket.earned === guidedBucket.maxPts ? 'met' : 'unmet') + '">' +
-        t.daySliceLine(guidedBucket.earned, guidedBucket.maxPts, dayLabel('fishday')) + '</span>';
+      if (res.executionIncomplete) {
+        $('r-conds').innerHTML = '<span class="cond unmet">✗ ' + t.runTasksLine(reportExecution.tasksDone, reportExecution.tasksTotal) + '</span>';
+      } else {
+        var guidedTasks = res.execution || day;
+        var guidedTasksClean = guidedTasks.tasksDone === guidedTasks.tasksTotal;
+        $('r-conds').innerHTML = '<span class="cond ' + (guidedTasksClean ? 'met' : 'unmet') + '">' +
+          (guidedTasksClean ? '✓ ' : '✗ ') + (res.execution ? t.runTasksLine(guidedTasks.tasksDone, guidedTasks.tasksTotal) : t.dayTasksLine(guidedTasks.tasksDone, guidedTasks.tasksTotal)) + '</span>' +
+          '<span class="cond ' + (guidedBucket.earned === guidedBucket.maxPts ? 'met' : 'unmet') + '">' +
+          t.daySliceLine(guidedBucket.earned, guidedBucket.maxPts, dayLabel('fishday')) + '</span>';
+      }
     } else if (day) {
-      $('r-conds').innerHTML = '<span class="cond ' + (day.clean ? 'met' : 'unmet') + '">' + (day.clean ? '✓' : '✗') + ' ' + t.dayTasksLine(day.tasksDone, day.tasksTotal) + '</span>';
-      if (res.segment === 'fishday') {
+      if (res.executionIncomplete) {
+        $('r-conds').innerHTML = '<span class="cond unmet">✗ ' + t.runTasksLine(reportExecution.tasksDone, reportExecution.tasksTotal) + '</span>';
+      } else {
+        $('r-conds').innerHTML = '<span class="cond ' + (day.clean ? 'met' : 'unmet') + '">' + (day.clean ? '✓' : '✗') + ' ' + t.dayTasksLine(day.tasksDone, day.tasksTotal) + '</span>';
+        if (res.execution) $('r-conds').insertAdjacentHTML('afterbegin', '<span class="cond ' + (res.execution.tasksDone === res.execution.tasksTotal ? 'met' : 'unmet') + '">' +
+          (res.execution.tasksDone === res.execution.tasksTotal ? '✓ ' : '✗ ') + t.runTasksLine(res.execution.tasksDone, res.execution.tasksTotal) + '</span>');
+      }
+      if (!res.executionIncomplete && res.segment === 'fishday') {
         $('r-conds').innerHTML +=
           '<span class="cond ' + (sc.efficiency === 100 ? 'met' : 'unmet') + '">' + t.rcEff(sc.efficiency) + '</span>' +
           '<span class="cond ' + (sc.idleMin === 0 ? 'met' : 'unmet') + '">' + t.rcIdle(sc.idleMin) + '</span>' +
@@ -3962,7 +4110,7 @@
       }
       // §Phase3a — the day-slice line: this segment's earned/max share of the whole-trip 100.
       var b = trip.byBucket[res.segment];
-      if (b) $('r-conds').innerHTML += '<span class="cond">' + t.daySliceLine(b.earned, b.maxPts, dayLabel(res.segment)) + '</span>';
+      if (!res.executionIncomplete && b) $('r-conds').innerHTML += '<span class="cond">' + t.daySliceLine(b.earned, b.maxPts, dayLabel(res.segment)) + '</span>';
     } else {
       // Whole Trip is the six authored schedules, not the legacy ten-day task
       // clock. Show every boundary's actual required-task completion.
@@ -3987,7 +4135,10 @@
     if (res.wholeTrip) res.segmentResults.forEach(function (r) {
       r.readiness.forEach(function (h) { authoredHints.push({ segment: r.segment, hint: h }); });
     });
-    if (guidedReport) {
+    if (res.executionIncomplete) {
+      $('fixpack').innerHTML = '<div class="fix-row sev-high"><div class="fix-main"><div class="fix-title">⏹ ' + t.executionIncompleteTitle + '</div>' +
+        '<div class="fix-body">' + t.executionIncompleteBody(reportExecution.tasksDone, reportExecution.tasksTotal) + '</div></div></div>';
+    } else if (guidedReport) {
       $('fixpack').innerHTML = dayMastered
         ? '<div class="fix-clean">' + t.fixpackCleanDay(dayLabel('fishday')) + '</div>'
         : '<div class="fix-row sev-high"><div class="fix-main"><div class="fix-title">⚠️ ' + t.guidedFixTitle + '</div>' +
@@ -4035,22 +4186,35 @@
     // efficiency chips come from that day's daySchedule (§7.3); the fix-list is dayReadiness. scoreDay's
     // grade/score/89-cap and its 8-category scorecard are gone from this player-facing path.
     var trip = res._learningSnapshot ? res._learningSnapshot.trip : P.scoreTrip(plan);
-    var dayClean = hints.length === 0 && ds.unresolved === 0;
+    var execution = res.execution || null;
+    var executionComplete = !res.executionIncomplete && (!execution || execution.tasksDone === execution.tasksTotal);
+    var dayClean = hints.length === 0 && ds.unresolved === 0 && executionComplete;
     var b = trip.byBucket[seg] || { earned: 0, maxPts: 0 };
     var cluster = planClustersFor(plan, trip).filter(function (c) { return c.id === seg; })[0];
     var perfectD = dayClean && b.earned === b.maxPts && !!cluster && (!cluster.rootIssues || cluster.rootIssues.length === 0);
-    $('r-grade').textContent = b.earned + ' / ' + b.maxPts; $('r-grade').style.color = perfectD ? 'var(--build)' : 'var(--wait)';
-    $('r-verdict').textContent = perfectD ? t.rDayScoreOk(dayLabel(seg), b.earned, b.maxPts) : t.rDayScoreGaps(dayLabel(seg), b.earned, b.maxPts, hints.length);
+    if (res.executionIncomplete) {
+      $('r-grade-label').textContent = dayLabel(seg) + ' · ' + t.executionStatusLbl;
+      $('r-grade').textContent = t.executionIncompleteGrade(execution ? execution.tasksDone : 0, execution ? execution.tasksTotal : 0);
+    } else $('r-grade').textContent = b.earned + ' / ' + b.maxPts;
+    $('r-grade').style.color = perfectD ? 'var(--build)' : 'var(--wait)';
+    $('r-verdict').textContent = res.executionIncomplete
+      ? t.rExecutionIncomplete(dayLabel(seg), execution ? execution.tasksDone : 0, execution ? execution.tasksTotal : 0)
+      : (perfectD ? t.rDayScoreOk(dayLabel(seg), b.earned, b.maxPts) : t.rDayScoreGaps(dayLabel(seg), b.earned, b.maxPts, hints.length));
     var bd = $('r-badge'); bd.textContent = perfectD ? t.badgeDayClean : ''; bd.classList.toggle('show', perfectD);
-    // the day-slice line: this segment's earned/max share of the whole-trip 100
-    $('r-conds').innerHTML =
-      (b ? '<span class="cond">' + t.daySliceLine(b.earned, b.maxPts, dayLabel(seg)) + '</span>' : '') +
-      '<span class="cond ' + (ds.efficiency === 100 ? 'met' : 'unmet') + '">' + t.rcEff(ds.efficiency) + '</span>' +
-      '<span class="cond ' + (ds.idleTotal === 0 ? 'met' : 'unmet') + '">' + t.rcIdle(ds.idleTotal) + '</span>' +
-      '<span class="cond ' + (ds.reworkTotal === 0 ? 'met' : 'unmet') + '">' + t.rcRework(ds.reworkTotal) + '</span>' +
-      (ds.dinnerMin != null ? '<span class="cond ' + (ds.dinnerMin <= 1080 ? 'met' : 'unmet') + '">' + t.rcDinner(hhmm(ds.dinnerMin)) + '</span>' : '');
-    var dayVerdict = reportReadinessVerdict(plan, perfectD && dayClean);
-    if (dayVerdict) $('r-verdict').textContent = dayVerdict;
+    // A stopped rehearsal has no end-of-day evidence, so do not display the
+    // plan's points/efficiency as if they were observed execution outcomes.
+    if (res.executionIncomplete) {
+      $('r-conds').innerHTML = '<span class="cond unmet">✗ ' + t.runTasksLine(execution ? execution.tasksDone : 0, execution ? execution.tasksTotal : 0) + '</span>';
+    } else {
+      // the day-slice line: this segment's earned/max share of the whole-trip 100
+      $('r-conds').innerHTML =
+        (execution ? '<span class="cond ' + (executionComplete ? 'met' : 'unmet') + '">' + (executionComplete ? '✓ ' : '✗ ') + t.runTasksLine(execution.tasksDone, execution.tasksTotal) + '</span>' : '') +
+        (b ? '<span class="cond">' + t.daySliceLine(b.earned, b.maxPts, dayLabel(seg)) + '</span>' : '') +
+        '<span class="cond ' + (ds.efficiency === 100 ? 'met' : 'unmet') + '">' + t.rcEff(ds.efficiency) + '</span>' +
+        '<span class="cond ' + (ds.idleTotal === 0 ? 'met' : 'unmet') + '">' + t.rcIdle(ds.idleTotal) + '</span>' +
+        '<span class="cond ' + (ds.reworkTotal === 0 ? 'met' : 'unmet') + '">' + t.rcRework(ds.reworkTotal) + '</span>' +
+        (ds.dinnerMin != null ? '<span class="cond ' + (ds.dinnerMin <= 1080 ? 'met' : 'unmet') + '">' + t.rcDinner(hhmm(ds.dinnerMin)) + '</span>' : '');
+    }
     appendAssumptionCondition(plan);
     // fix-list: every dayReadiness hint, worded with the same rh* strings the live editor uses
     var segT = P.tasksForSeg(plan, seg);
@@ -4067,7 +4231,9 @@
       if (h.type === 'OVERLOAD') { var pp = byId(plan.participants, h.personId); return t.rhOverload(pp ? nm(pp.name) : h.personId); }
       return '';
     }
-    if (!hints.length) $('fixpack').innerHTML = '<div class="fix-clean">' + t.fixpackCleanDay(dayLabel(seg)) + '</div>';
+    if (res.executionIncomplete) $('fixpack').innerHTML = '<div class="fix-row sev-high"><div class="fix-main"><div class="fix-title">⏹ ' + t.executionIncompleteTitle + '</div>' +
+      '<div class="fix-body">' + t.executionIncompleteBody(execution ? execution.tasksDone : 0, execution ? execution.tasksTotal : 0) + '</div></div></div>';
+    else if (!hints.length) $('fixpack').innerHTML = '<div class="fix-clean">' + t.fixpackCleanDay(dayLabel(seg)) + '</div>';
     else $('fixpack').innerHTML = reportIssueRows(hints.map(function (h) {
       var targetId = registerFaultTarget(targetForReadiness(seg, h));
       return '<div class="fix-row" data-type="' + h.type + '"><div class="fix-main"><div class="fix-body">' + hintTxt(h) + '</div></div>' +
@@ -4300,7 +4466,9 @@
     }
     if (!RSTG.resultSim) RSTG.resultSim = RSTG.sim;   // completed run: report facts/inspection always read this object
     if (!RSTG.resultSims.length) RSTG.resultSims = [RSTG.resultSim];
-    RSTG.ctx = PRS_STAGE.initStage(cv, { w: d.w, h: d.h });
+    cv.hidden = false;
+    RSTG.ctx = tryInitStage(cv, { w: d.w, h: d.h });
+    if (!RSTG.ctx) cv.hidden = true;
     RSTG.markers = rsStalls();
     RSTG.mapProfile = RSTG.overview ? 'route-overview' : RSTG.seg;
     if (RSTG.seg === 'return') {
@@ -4328,11 +4496,15 @@
     }
     RSTG.fig = {}; rsSyncFigs();
     cv.setAttribute('aria-label', t.rsChip + ' · ' + mapProfileLabel(mapProfileFor(RSTG.sim, RSTG.mapProfile)));
-    // a clean day lost no time — the chip must not claim it did (deep-check finding)
-    $('rs-chip').textContent = RSTG.markers.length ? t.rsChip : t.rsClean;
+    var executionIncomplete = !!res.executionIncomplete;
+    // A stopped run has no end-of-day evidence.  Never turn an empty marker
+    // list into a false "clean" finding merely because execution never reached
+    // the tasks that could have stalled.
+    $('rs-chip').textContent = executionIncomplete ? t.rsIncomplete : (RSTG.markers.length ? t.rsChip : t.rsClean);
     var note = $('rs-note');
     if (note) {
-      if (wholeTrip) { note.textContent = t.rsWholeTrip; note.classList.remove('hidden'); note.classList.remove('good'); }
+      if (executionIncomplete) { note.textContent = t.rsIncomplete; note.classList.remove('hidden'); note.classList.remove('good'); }
+      else if (wholeTrip) { note.textContent = t.rsWholeTrip; note.classList.remove('hidden'); note.classList.remove('good'); }
       else if (!RSTG.markers.length) { note.textContent = t.rsClean; note.classList.remove('hidden'); note.classList.add('good'); }
       else { note.classList.add('hidden'); note.classList.remove('good'); }
     }
@@ -4340,20 +4512,21 @@
     rsBuildRoster();
     // hanko stamp: lands once per fresh report (thock); a re-render (language switch) keeps it seated
     var stampEl = $('rs-stamp');
-    var key = trip.total + '|' + (res.segment || '') + (res.coarse ? '|c' : '');
+    var key = (executionIncomplete ? 'incomplete' : trip.total) + '|' + (res.segment || '') + (res.coarse ? '|c' : '');
     var fresh = key !== rsStampKey;
     rsStampKey = key;
     if (stampEl) {
-      stampEl.textContent = trip.total + '/100';
-      stampEl.setAttribute('aria-label', t.rsStampAria(trip.total));
+      stampEl.textContent = executionIncomplete ? t.rsIncompleteStamp : (trip.total + '/100');
+      stampEl.setAttribute('aria-label', executionIncomplete ? t.rsIncomplete : t.rsStampAria(trip.total));
       stampEl.classList.remove('hidden');
       stampEl.classList.remove('thock');
-      if (fresh && !RM.matches) { void stampEl.offsetWidth; stampEl.classList.add('thock'); }
+      if (!executionIncomplete && fresh && !RM.matches) { void stampEl.offsetWidth; stampEl.classList.add('thock'); }
     }
-    if (fresh && window.PRS_SOUND) window.PRS_SOUND.cue('thock');   // the hanko stamp (sound.js §W3)
+    if (!executionIncomplete && fresh && window.PRS_SOUND) window.PRS_SOUND.cue('thock');   // the hanko stamp (sound.js §W3)
     // stage.js names this legacy field `grade`; it now carries the same mastery
     // number as every other surface, never an A/B/C/D currency.
-    RSTG.stamp = { grade: String(trip.total), at: fresh ? (window.performance ? performance.now() : 0) / 1000 : 0 };
+    RSTG.stamp = executionIncomplete ? null : { grade: String(trip.total), at: fresh ? (window.performance ? performance.now() : 0) / 1000 : 0 };
+    if (!RSTG.ctx) return;                            // textual report remains complete without decorative canvas
     if (RM.matches) { PRS_STAGE.scene(RSTG.ctx, RSTG.sim, 1, rsView(true)); rsPositionOverlays(); return; }
     RSTG.last = 0; RSTG.raf = requestAnimationFrame(rsFrame);
   }
@@ -4379,7 +4552,8 @@
     RSTG.w = d.w; RSTG.h = d.h;
     RSTG.sc = clamp(Math.min(d.w / 1000, d.h / 520), 0.6, 1.25);
     RSTG.boat = { cx: DOCK.x * d.w, cy: DOCK.y * d.h };
-    PRS_STAGE.initStage(RSTG.cv, { w: d.w, h: d.h });
+    RSTG.ctx = tryInitStage(RSTG.cv, { w: d.w, h: d.h });
+    if (!RSTG.ctx) { RSTG.cv.hidden = true; if (RSTG.raf) cancelAnimationFrame(RSTG.raf); RSTG.raf = null; return; }
     rsSyncFigs();
     rsPositionOverlays();
     if (RM.matches && RSTG.ctx && RSTG.sim) PRS_STAGE.scene(RSTG.ctx, RSTG.sim, 1, rsView(true));
@@ -4770,7 +4944,7 @@
     $('learning-levels').addEventListener('click', function (e) { var b = e.target.closest('button[data-level]'); if (b) setLearningLevel(b.dataset.level); });
     // header 🔊 toggle: the ONE real user-gesture handler allowed to resume the AudioContext (sound.js §W3)
     var sndBtn = $('snd-toggle');
-    if (sndBtn) sndBtn.addEventListener('click', function () { if (window.PRS_SOUND) window.PRS_SOUND.toggle(); updateSoundButton(); });
+    if (sndBtn) sndBtn.addEventListener('click', requestSoundToggle);
     $('modesw').addEventListener('click', function (e) {
       var b = e.target.closest('button[data-mode]'); if (!b) return;
       var m = b.dataset.mode;
@@ -5046,6 +5220,10 @@
     });
     $('btn-quit').addEventListener('click', function () {
       if (!sim || sim.finished) return;
+      // `finished: "incomplete"` is also the engine's legitimate terminal
+      // state for a fully run day with modeled gaps. Keep a separate UI-owned
+      // marker so only an explicit End & Review action is called "ended early."
+      sim.endedEarly = true;
       sim.finished = 'incomplete';
       if (appMode === 'live' && liveState) { livePausedForFix = false; clearGapFocus(); camReleaseSafe(0); liveFinish(); }   // stay in the live flow
       else {
@@ -5535,7 +5713,8 @@
     var cv = document.createElement('canvas'); cv.id = 'vig-canvas';
     cv.setAttribute('role', 'img'); cv.setAttribute('aria-label', T().vgAria);
     host.appendChild(cv);
-    VIG.cv = cv; VIG.ctx = PRS_STAGE.initStage(cv, { w: w, h: h });
+    VIG.cv = cv; VIG.ctx = tryInitStage(cv, { w: w, h: h });
+    if (!VIG.ctx) cv.hidden = true;
     var pr = document.createElement('button'); pr.type = 'button';
     pr.className = 'btn primary glow vig-prompt hidden'; pr.id = 'vig-prompt';
     pr.textContent = T().vgPrompt;
@@ -5548,6 +5727,7 @@
     vigBuildData();
     VIG.sim = P.createSim({ seed: 1, overrides: VIG.cfg.overrides }, 'fishday');
     vigMount(host);
+    if (!VIG.ctx) { VIG.phase = 'unavailable'; return; }
     VIG.fig = {}; VIG.motes = [];
     vigSyncFigs(true);                       // everyone starts on their pre-dawn station and walks out from there
     vigCaption(1);
@@ -5644,7 +5824,8 @@
     var sx = VIG.w ? w / VIG.w : 1, sy = VIG.h ? h / VIG.h : 1;
     VIG.w = w; VIG.h = h; VIG.sc = clamp(Math.min(w / 1000, h / 560), 0.6, 1.2);
     VIG.boat = { cx: DOCK.x * w, cy: DOCK.y * h };
-    PRS_STAGE.initStage(VIG.cv, { w: w, h: h });
+    VIG.ctx = tryInitStage(VIG.cv, { w: w, h: h });
+    if (!VIG.ctx) { if (VIG.raf) cancelAnimationFrame(VIG.raf); VIG.raf = null; return; }
     for (var pid in VIG.fig) { var f = VIG.fig[pid]; f.cx *= sx; f.cy *= sy; f.tx *= sx; f.ty *= sy; }
   }
   // one-shot still of a beat: 1 = walk-in settled (pre-gap) · 2 = frozen ❓ · 3 = fixed & moving.
@@ -5673,13 +5854,14 @@
       var cap = document.createElement('div'); cap.className = 'vig-still-cap'; cap.textContent = t['vg' + b] || '';
       cell.appendChild(cv); cell.appendChild(cap); wrap.appendChild(cell);
       var w = Math.max(180, cell.clientWidth || 260), h = Math.max(140, Math.round(w * 0.62));
-      var ctx = PRS_STAGE.initStage(cv, { w: w, h: h });
+      var ctx = tryInitStage(cv, { w: w, h: h });
+      if (!ctx) cv.hidden = true;
       var still = vigStillSim(b);
       VIG.sim = still.sim; VIG.w = w; VIG.h = h;
       VIG.sc = clamp(Math.min(w / 1000, h / 560), 0.45, 1);
       VIG.boat = { cx: DOCK.x * w, cy: DOCK.y * h };
       VIG.fig = {}; vigSyncFigs(true);
-      PRS_STAGE.scene(ctx, still.sim, 1, vigView(true, b === 2));
+      if (ctx) PRS_STAGE.scene(ctx, still.sim, 1, vigView(true, b === 2));
     }
     VIG.sim = null;                                       // nothing live to keep — stills are done
   }
@@ -5695,7 +5877,7 @@
     vigSyncFigs(true);
     vigCaption(final ? 3 : 1);
     if (final && still.trip2) { VIG.trip2 = still.trip2; vigRailRow(true, false); }
-    PRS_STAGE.scene(VIG.ctx, VIG.sim, 1, vigView(true, false));
+    if (VIG.ctx) PRS_STAGE.scene(VIG.ctx, VIG.sim, 1, vigView(true, false));
     VIG.phase = 'poster';
   }
   function vigSkip() {
@@ -5891,7 +6073,9 @@
     PSTG.host = host; PSTG.cv = cv; PSTG.w = d.w; PSTG.h = d.h;
     PSTG.sc = clamp(Math.min(d.w / 1000, d.h / 520), 0.6, 1.25);
     PSTG.boat = { cx: DOCK.x * d.w, cy: DOCK.y * d.h };
-    PSTG.ctx = PRS_STAGE.initStage(cv, { w: d.w, h: d.h });
+    cv.hidden = false;
+    PSTG.ctx = tryInitStage(cv, { w: d.w, h: d.h });
+    if (!PSTG.ctx) cv.hidden = true;
     psBuildSim();
     var planProfile = daySel === 'all' ? 'route-overview' : daySel;
     PSTG.sceneKey = mapProfileFor(PSTG.sim, planProfile).id;
@@ -5900,6 +6084,7 @@
     $('plan-chip').textContent = T().planChip;
     renderPlanRoster();
     renderTray();
+    if (!PSTG.ctx) return;                            // editor controls + roster remain available without decorative canvas
     if (RM.matches) { PRS_STAGE.scene(PSTG.ctx, PSTG.sim, 1, psView(true)); psPositionOverlays(); return; }
     PSTG.last = 0; PSTG.raf = requestAnimationFrame(psFrame);
   }
@@ -5930,7 +6115,8 @@
     var sx = PSTG.w ? d.w / PSTG.w : 1, sy = PSTG.h ? d.h / PSTG.h : 1;
     PSTG.w = d.w; PSTG.h = d.h; PSTG.sc = clamp(Math.min(d.w / 1000, d.h / 520), 0.6, 1.25);
     PSTG.boat = { cx: DOCK.x * d.w, cy: DOCK.y * d.h };
-    PRS_STAGE.initStage(PSTG.cv, { w: d.w, h: d.h });
+    PSTG.ctx = tryInitStage(PSTG.cv, { w: d.w, h: d.h });
+    if (!PSTG.ctx) { PSTG.cv.hidden = true; if (PSTG.raf) cancelAnimationFrame(PSTG.raf); PSTG.raf = null; return; }
     for (var pid in PSTG.fig) { var f = PSTG.fig[pid]; f.cx *= sx; f.cy *= sy; f.tx *= sx; f.ty *= sy; }
     if (RM.matches) PRS_STAGE.scene(PSTG.ctx, PSTG.sim, 1, psView(true));
   }
@@ -6673,7 +6859,8 @@
   function finalizeGuidedAttempt() {
     if (!liveState || !sim) return null;
     if (liveState.completedResult) return liveState.completedResult;
-    var completed = { trip: P.score(sim), day: P.daySummary(sim), segment: 'fishday' };
+    var completed = { trip: P.score(sim), day: P.daySummary(sim), segment: 'fishday',
+      executionIncomplete: !!sim.endedEarly, execution: wholeSegmentResult(sim) };
     ensureLearningAttempt(completed, currentPlan(), P.scoreTrip(currentPlan()));
     liveState.completedResult = completed;
     return completed;
@@ -6693,8 +6880,9 @@
     camReleaseSafe(0);                            // §3 safety: no punch-in survives into the result/report
     // §7.1: win = the Fishing-Day bucket is fully earned in the ledger AND dinner is served by 18:00.
     var trip = P.scoreTrip(currentPlan()), fd = P.fishdaySchedule(currentPlan()), fb = trip.byBucket.fishday;
-    var win = fb.earned === fb.maxPts && (fd.dinnerMin == null || fd.dinnerMin <= 1080);
-    liveState.phase = 'result'; liveState.result = { win: win, trip: trip, fd: fd };
+    var executionIncomplete = !!(sim && sim.endedEarly);
+    var win = !executionIncomplete && fb.earned === fb.maxPts && (fd.dinnerMin == null || fd.dinnerMin <= 1080);
+    liveState.phase = 'result'; liveState.result = { win: win, trip: trip, fd: fd, executionIncomplete: executionIncomplete };
     finalizeGuidedAttempt();
     renderResult(true);
     if (win && !anim.fanfared) { anim.fanfared = true; fireFanfare(); }   // one beat only — 18:00 already fired it on a clean serve
@@ -6702,7 +6890,12 @@
 
   function renderResult(focusAction) {
     var t = T(), r = liveState.result, el = $('ld-result'); if (!r) return;
-    if (r.win) {
+    if (r.executionIncomplete) {
+      var stopped = finalizeGuidedAttempt().execution || { tasksDone: 0, tasksTotal: 0 };
+      el.className = 'ld-panel result miss';
+      el.innerHTML = '<div class="ld-txt"><h3>' + t.executionIncompleteTitle + '</h3><p>' + t.executionIncompleteBody(stopped.tasksDone, stopped.tasksTotal) + '</p></div>' +
+        '<div class="ld-actions"><button class="btn primary" id="ld-rerun">' + t.ldRerun + '</button><button class="btn ghost" id="ld-report">' + t.ldReport + '</button></div>';
+    } else if (r.win) {
       var fb = r.trip.byBucket.fishday;
       el.className = 'ld-panel result win';
       el.innerHTML = '<div class="ld-txt"><h3>' + t.resWinT + '</h3><p>' + t.resWinP2(fb.earned, fb.maxPts) + '</p></div>' +
@@ -6737,7 +6930,8 @@
   function liveToReport() {
     stopAnim(); if (timer) { clearInterval(timer); timer = null; }
     clearFinishTimer(); livePausedForFix = false;
-    lastResult = finalizeGuidedAttempt() || { trip: P.score(sim), day: P.daySummary(sim), segment: 'fishday' };
+    lastResult = finalizeGuidedAttempt() || { trip: P.score(sim), day: P.daySummary(sim), segment: 'fishday',
+      executionIncomplete: !!(sim && sim.endedEarly), execution: sim ? wholeSegmentResult(sim) : null };
     enterScreen('report');
     renderReport(lastResult);
     focusReportScreen();
