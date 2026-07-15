@@ -2288,6 +2288,82 @@ console.log('\n=== DAY-3 FOOD TRADE-OFF — direct, delegated, and redundant pat
 })();
 
 // ============================================================================
+// GUIDED LIVE UI — channel choice must keep a stable, reachable commit action.
+// ============================================================================
+console.log('\n=== GUIDED LIVE UI — stable channel commit control ===');
+(function () {
+  var source = require('fs').readFileSync(require('path').join(__dirname, 'app.js'), 'utf8');
+  var renderStart = source.indexOf('function renderSpot()');
+  var previewStart = source.indexOf('function previewChannel(', renderStart);
+  var previewEnd = source.indexOf('function paintBlast(', previewStart);
+  var liveStepStart = source.indexOf('function liveStep()');
+  var liveStepEnd = source.indexOf('function gapClusterKey(', liveStepStart);
+  var authoredStepStart = source.indexOf('function step()');
+  var authoredStepEnd = source.indexOf('function camPunchStall(', authoredStepStart);
+  var scheduleStart = source.indexOf('function scheduleUncoveredTransition(');
+  var scheduleEnd = source.indexOf('var BUB =', scheduleStart);
+  var openGapStart = source.indexOf('function openGap(');
+  var openGapEnd = source.indexOf('function advanceCluster()', openGapStart);
+  var advanceStart = source.indexOf('function advanceCluster()');
+  var advanceEnd = source.indexOf('function renderLivePanel(', advanceStart);
+  var panelEnd = source.indexOf('function renderSpot()', advanceEnd);
+  var renderSource = source.slice(renderStart, previewStart);
+  var previewSource = source.slice(previewStart, previewEnd);
+  var liveStepSource = source.slice(liveStepStart, liveStepEnd);
+  var authoredStepSource = source.slice(authoredStepStart, authoredStepEnd);
+  var scheduleSource = source.slice(scheduleStart, scheduleEnd);
+  var openGapSource = source.slice(openGapStart, openGapEnd);
+  var advanceSource = source.slice(advanceStart, advanceEnd);
+  var panelSource = source.slice(advanceEnd, panelEnd);
+
+  ok(renderStart >= 0 && previewStart > renderStart && previewEnd > previewStart,
+    'Guided Live channel-choice functions are present in source order');
+  ok(renderSource.indexOf('id="ld-send"') >= 0 &&
+      renderSource.indexOf('disabled aria-disabled="true"') >= 0,
+    'the channel commit action is rendered once and remains visible, initially disabled');
+  ok(renderSource.indexOf("send.addEventListener('click'") >= 0 &&
+      renderSource.indexOf('var ch = liveState && liveState.selectedChannel') >= 0 &&
+      renderSource.indexOf('commitChannel(g, ch)') >= 0,
+    'the stable action commits only the channel owned by Guided Live state');
+  ok(previewSource.indexOf("send.disabled = !ev.feas.ok") >= 0 &&
+      previewSource.indexOf("send.setAttribute('aria-disabled'") >= 0,
+    'an explicit option click enables only a feasible selected channel');
+  ok(previewSource.indexOf("querySelector('.ld-send')") < 0 &&
+      previewSource.indexOf('.remove()') < 0 && previewSource.indexOf('createElement') < 0,
+    'hover/focus previews cannot remove or recreate the channel commit action');
+  ok(renderSource.indexOf("if (selected) previewChannel(g, selected.dataset.ch, false)") >= 0,
+    'leaving a transient hover restores the selected channel preview without clearing its action');
+  ok(renderSource.indexOf('liveState.selectedChannel = ch') >= 0 &&
+      renderSource.indexOf('aria-pressed=') >= 0 &&
+      renderSource.indexOf('if (selectedChannel) previewChannel(g, selectedChannel, true)') >= 0,
+    'selection is state-owned, exposed accessibly, and restored after EN/JA or other re-renders');
+  ok(renderSource.indexOf("send.addEventListener('focus'") >= 0 &&
+      renderSource.indexOf('previewChannel(g, ch, false)') >= 0,
+    'keyboard focus on Send restores the selected preview before commit');
+  ok((source.match(/focusFirstLiveChannel\(\);/g) || []).length === 2,
+    'the first channel receives focus both on the first gap and every following cluster card');
+  ok(source.indexOf('function focusFirstLiveChannel() {\n    if (topModal()) return;') >= 0 &&
+      liveStepSource.indexOf('topModal()') >= 0 && authoredStepSource.indexOf('topModal()') >= 0,
+    'modal-covered rehearsals hold time and cannot move focus to controls behind the dialog');
+  ok(source.indexOf("else if (top === 'rules-modal') { $('rules-modal').classList.remove('show'); modalClosed(); }") >= 0,
+    'Escape closes Rules through the shared focus-restoration lifecycle');
+  ok(scheduleSource.indexOf('if (topModal()) { finishTimer = setTimeout(attempt, 100); return; }') >= 0 &&
+      scheduleSource.indexOf('if (stillValid && !stillValid()) return') >= 0,
+    'delayed result/report transitions wait for dialogs and cancel when their run is no longer current');
+  ok(liveStepSource.indexOf("liveState.phase === 'recovering'") >= 0 &&
+      advanceSource.indexOf("livePausedForFix = recovering; liveState.phase = recovering ? 'recovering' : 'brief'") >= 0,
+    'post-commit recovery holds the engine interval instead of racing straight to the result');
+  var recoveryPhasePos = advanceSource.indexOf("liveState.phase = recovering ? 'recovering' : 'brief'");
+  ok(recoveryPhasePos >= 0 && recoveryPhasePos < advanceSource.indexOf('renderLivePanel()', recoveryPhasePos) &&
+      advanceSource.indexOf('scheduleUncoveredTransition(liveFinish, RM.matches ? 0 : 1600') >= 0,
+    'the owned recovery timer follows the hold and preserves the deliberate 1.6-second visual beat');
+  ok(panelSource.indexOf('t.ldRecoverT') >= 0 && panelSource.indexOf('t.ldRecoverP') >= 0,
+    'the recovery beat no longer repeats the already-repaired missing-handoff warning');
+  ok(openGapSource.indexOf("var planSession = $('plan-session'); if (planSession) planSession.open = false") >= 0,
+    'entering a Guided decision closes the plan-session disclosure before the topbar is hidden');
+})();
+
+// ============================================================================
 // MASTERY P0 — every authored dependency break must cost an existing point.
 // ============================================================================
 console.log('\n=== MASTERY P0 — Return shipping must finish before headcount ===');

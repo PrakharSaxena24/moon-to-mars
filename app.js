@@ -534,6 +534,18 @@
     } while (guard < 500);
   }
   function clearFinishTimer() { if (finishTimer) { clearTimeout(finishTimer); finishTimer = null; } }
+  function scheduleUncoveredTransition(action, delay, stillValid) {
+    clearFinishTimer();
+    function attempt() {
+      finishTimer = null;
+      if (stillValid && !stillValid()) return;
+      // Dialogs own both focus and time. Retry after they close instead of
+      // replacing the covered run/result behind aria-modal content.
+      if (topModal()) { finishTimer = setTimeout(attempt, 100); return; }
+      action();
+    }
+    finishTimer = setTimeout(attempt, delay);
+  }
 
   var BUB = { confused: '❓', meeting: '💬', waiting: '⏳', tired: '😣', onFire: '🔥', resolved: '✅', working: '', idle: '', waitInfo: '⏳', rework: '🔁' };
   var STATE_KEY = { working: 'stWorking', confused: 'stConfused', meeting: 'stMeeting', waiting: 'stWaiting', tired: 'stTired', onFire: 'stOnFire', resolved: 'stResolved', idle: 'stIdle', waitInfo: 'stWaitInfo', rework: 'stRework' };
@@ -2583,7 +2595,7 @@
   }
   function restartTimer() { if (timer) { clearInterval(timer); timer = setInterval(runFn || step, tickMs()); } }
   function step() {
-    if (paused || !sim) return;
+    if (paused || !sim || topModal()) return;       // aria-modal content owns time as well as focus
     if (sim.paused) return;                       // checkpoint: wait for Resume
     advanceAuthoredClock(sim); renderSim(sim); if (RM.matches) drawRunOnce();
     if (sim.paused && sim.checkpoint) {
@@ -3320,13 +3332,12 @@
       lastResult = { trip: P.score(sim), day: (sim.segment !== 'all' ? P.daySummary(sim) : null), segment: sim.segment };
     }
     var simAt = sim, wholeAt = wholeRun;
-    clearFinishTimer();
-    finishTimer = setTimeout(function () {
-      finishTimer = null;
-      if (sim !== simAt || wholeRun !== wholeAt) return;      // a mode/screen change won the race — don't pop the report over it
+    scheduleUncoveredTransition(function () {
       closePawnCard();
       stopAnim(); enterScreen('report'); renderReport(lastResult); focusReportScreen();
-    }, RM.matches ? 0 : 700);
+    }, RM.matches ? 0 : 700, function () {
+      return sim === simAt && wholeRun === wholeAt && !$('run').classList.contains('hidden');
+    });
   }
 
   // =========================================================================
@@ -4870,7 +4881,7 @@
       var top = topModal();
       if (e.key === 'Escape') {
         if (top === 'prediction-modal') closePrediction(true);
-        else if (top === 'rules-modal') $('rules-modal').classList.remove('show');
+        else if (top === 'rules-modal') { $('rules-modal').classList.remove('show'); modalClosed(); }
         else if (top === 'pick-modal') closePicker();
         else if (top === 'inspect-modal') closeInspector();
         else if (top === 'arrow-modal') { arrowEdit = null; $('arrow-modal').classList.remove('show'); modalClosed(); }
@@ -6046,7 +6057,8 @@
     var ld = (lc.overrides.days && lc.overrides.days.load) || {};
     for (var hk in (ld.handoffs || {})) dayOv.load.handoffs[hk] = Object.assign({}, dayOv.load.handoffs[hk], ld.handoffs[hk]);
     for (var pk in (ld.placement || {})) dayOv.load.placement[pk] = ld.placement[pk];
-    liveState = { fixes: 0, addressed: {}, phase: 'brief', currentGap: null, currentCluster: null, clusterIdx: 0, result: null };
+    liveState = { fixes: 0, addressed: {}, phase: 'brief', currentGap: null, currentCluster: null, clusterIdx: 0,
+      selectedChannel: null, result: null };
     launchLive();
   }
 
@@ -6072,7 +6084,7 @@
   }
 
   function liveStep() {
-    if (!sim || paused || livePausedForFix) return;
+    if (!sim || paused || topModal() || livePausedForFix || (liveState && liveState.phase === 'recovering')) return;
     if (sim.paused && sim.checkpoint) { P.resume(sim); }         // Live ignores the fixed checkpoints
     P.tick(sim); renderSim(sim); if (RM.matches) drawRunOnce();
     var cl = nextLiveGap();
@@ -6131,10 +6143,16 @@
     }
     if (USE_CANVAS && sim) updateStageRoster(sim);               // refresh AT during the freeze (renderSim is paused)
   }
+  function focusFirstLiveChannel() {
+    if (topModal()) return;                         // never focus a control behind aria-modal content
+    var first = $('ld-opts') && $('ld-opts').querySelector('.ld-opt');
+    if (first) first.focus();                    // every card in a cluster remains keyboard-complete
+  }
   // open a whole cluster (spec §5): freeze once, present its cards in sequence. cl = { key, gaps, startMin }.
   function openGap(cl) {
+    var planSession = $('plan-session'); if (planSession) planSession.open = false;
     liveState.currentCluster = cl; liveState.clusterIdx = 0;
-    liveState.currentGap = cl.gaps[0]; liveState.phase = 'spot';
+    liveState.currentGap = cl.gaps[0]; liveState.selectedChannel = null; liveState.phase = 'spot';
     if (activeLearningRun && !activeLearningRun.observed) {
       var observedGap = liveState.currentGap;
       activeLearningRun.observed = {
@@ -6146,8 +6164,7 @@
     paintGapFocus(liveState.currentGap);
     camPunchGap(liveState.currentGap);            // §3 auto-cinematic: punch in on the stalled pawn
     renderLivePanel();
-    var firstChannel = $('ld-opts') && $('ld-opts').querySelector('.ld-opt');
-    if (firstChannel) firstChannel.focus();        // direct-to-decision remains keyboard complete
+    focusFirstLiveChannel();
   }
   // move to the next un-addressed card in the frozen cluster, or resume the run when the cluster is done
   function advanceCluster() {
@@ -6157,34 +6174,41 @@
       if (!liveState.addressed[gg.taskId + '|' + gg.cardId]) { next = gg; ni = i; break; }
     }
     if (next) {
-      liveState.clusterIdx = ni; liveState.currentGap = next; liveState.phase = 'spot';
+      liveState.clusterIdx = ni; liveState.currentGap = next; liveState.selectedChannel = null; liveState.phase = 'spot';
       paintGapFocus(next); camPunchGap(next);     // re-center on the next stalled crewmate
       renderLivePanel();
+      focusFirstLiveChannel();
     } else {                                       // cluster cleared — release the freeze and the camera
       clearStationTints(); clearGapFocus(); camReleaseSafe(520);
-      livePausedForFix = false; liveState.phase = 'brief';
+      liveState.selectedChannel = null;
       liveState.currentGap = null; liveState.currentCluster = null;
+      var recovering = !nextLiveGap();
+      livePausedForFix = recovering; liveState.phase = recovering ? 'recovering' : 'brief';
       renderLivePanel();
       try { $('ld-brief').focus({ preventScroll: true }); } catch (e) { $('ld-brief').focus(); }
       // The guided lesson has no second decision. Let the repaired pawn move for
       // one visible beat, then resolve the clean schedule immediately instead of
       // making the learner watch the remaining simulated day in real time.
-      if (!nextLiveGap()) {
-        document.body.classList.add('live-decision');
-        clearFinishTimer();
-        finishTimer = setTimeout(function () {
-          finishTimer = null;
-          if (liveState && liveState.phase === 'brief' && appMode === 'live' && !$('run').classList.contains('hidden')) liveFinish();
-        }, RM.matches ? 0 : 1600);
+      if (recovering) {
+        // This timeout owns the recovery transition. Keep the interval from
+        // racing the deterministic sim to `finished` and replacing this beat in
+        // a few hundred milliseconds; the rAF layer can still animate the newly
+        // repaired pawn and handoff while the engine clock is held here.
+        scheduleUncoveredTransition(liveFinish, RM.matches ? 0 : 1600, function () {
+          return liveState && liveState.phase === 'recovering' && appMode === 'live' && !$('run').classList.contains('hidden');
+        });
       }
     }
   }
 
   function renderLivePanel(focusPrompt) {
     var t = T();
-    if (liveState.phase === 'brief') {
-      $('ld-brief').innerHTML = '<div class="ld-txt"><h3>' + t.ldBriefT + '</h3><p>' + t.ldBriefP + '</p></div><div class="ld-chip">' + t.liveChip(liveState.fixes) + '</div>';
+    if (liveState.phase === 'brief' || liveState.phase === 'recovering') {
+      var recovering = liveState.phase === 'recovering';
+      $('ld-brief').innerHTML = '<div class="ld-txt"><h3>' + (recovering ? t.ldRecoverT : t.ldBriefT) + '</h3><p>' +
+        (recovering ? t.ldRecoverP : t.ldBriefP) + '</p></div><div class="ld-chip">' + t.liveChip(liveState.fixes) + '</div>';
       ldPanel('ld-brief');
+      if (recovering) document.body.classList.add('live-decision');
     } else if (liveState.phase === 'prompt') {
       var g = liveState.currentGap, plan = currentPlan(), to = byId(plan.tasks, g.taskId);
       var kind = gapKindState(g, to);
@@ -6202,11 +6226,13 @@
   function renderSpot() {
     var t = T(), g = liveState.currentGap, plan = currentPlan(), to = byId(plan.tasks, g.taskId), from = producerOf(plan, g.cardId), card = byId(plan.infoCards, g.cardId);
     var cname = nm(card.name).split('：')[0].split(':')[0];
+    var selectedChannel = LIVE_CH.indexOf(liveState.selectedChannel) >= 0 ? liveState.selectedChannel : null;
     var chips = LIVE_CH.map(function (ch) {
       var latency = P.CHANNELS[ch] || 0;
       var channelName = t['ch' + ch.charAt(0).toUpperCase() + ch.slice(1)];
       var pace = channelPace(latency, t);
-      return '<button class="ld-opt" type="button" data-ch="' + ch + '" aria-label="' + esc(t.channelOptionAria(channelName, pace)) + '">' +
+      var selected = ch === selectedChannel;
+      return '<button class="ld-opt' + (selected ? ' sel' : '') + '" type="button" data-ch="' + ch + '" aria-pressed="' + (selected ? 'true' : 'false') + '" aria-label="' + esc(t.channelOptionAria(channelName, pace)) + '">' +
         '<span class="oc">' + chIcon(ch) + ' ' + channelName + '</span>' +
         '<span class="lat">' + pace + '</span></button>';
     }).join('');
@@ -6215,18 +6241,43 @@
       '<div class="ld-spot-head">' + step + '<h3>' + t.spotTitle(cname) + '</h3><p class="ld-sub">' +
       t.spotSub(from ? personName(from) : nm(P.role('chef').name), personName(to), hhmm(to.startMin)) + '</p></div>' +
       '<div class="ld-opts" id="ld-opts">' + chips + '</div>' +
-      '<div class="ld-preview" id="ld-preview"><span class="pv-lbl">' + t.pvLbl + '</span><span id="ld-pv-txt">' + t.spotHover + '</span></div>';
-    var opts = $('ld-opts');
+      '<div class="ld-preview" id="ld-preview"><span class="pv-lbl">' + t.pvLbl + '</span><span id="ld-pv-txt">' + t.spotHover + '</span>' +
+      '<button class="btn primary ld-send" id="ld-send" type="button" disabled aria-disabled="true">' + t.spotSend + '</button></div>';
+    var opts = $('ld-opts'), send = $('ld-send');
     opts.querySelectorAll('.ld-opt').forEach(function (b) {
       var ch = b.dataset.ch;
       b.addEventListener('mouseenter', function () { previewChannel(g, ch, false); });
       b.addEventListener('focus', function () { previewChannel(g, ch, false); });
-      b.addEventListener('click', function () { opts.querySelectorAll('.ld-opt').forEach(function (x) { x.classList.remove('sel'); }); b.classList.add('sel'); previewChannel(g, ch, true); });
+      b.addEventListener('click', function () {
+        liveState.selectedChannel = ch;
+        opts.querySelectorAll('.ld-opt').forEach(function (x) {
+          var on = x === b; x.classList.toggle('sel', on); x.setAttribute('aria-pressed', on ? 'true' : 'false');
+        });
+        previewChannel(g, ch, true);
+      });
     });
-    // hover ends with nothing selected → the hypothetical tints yield back to the real diagnosis
+    // The commit control is a stable part of the decision panel. Hover/focus may
+    // preview another option, but must never destroy the action selected by the
+    // learner (touch browsers can dispatch a delayed focus after click).
+    send.addEventListener('focus', function () {
+      var ch = liveState && liveState.selectedChannel;
+      if (LIVE_CH.indexOf(ch) >= 0) previewChannel(g, ch, false);
+    });
+    send.addEventListener('click', function () {
+      var ch = liveState && liveState.selectedChannel;
+      if (send.disabled || LIVE_CH.indexOf(ch) < 0) return;
+      commitChannel(g, ch);
+    });
+    // Restore the committed selection's preview after a transient hover. With
+    // no selection, the hypothetical tints yield back to the real diagnosis.
     opts.addEventListener('mouseleave', function () {
-      if (!opts.querySelector('.ld-opt.sel') && liveState.currentGap) paintGapFocus(liveState.currentGap);
+      var selected = opts.querySelector('.ld-opt.sel');
+      if (selected) previewChannel(g, selected.dataset.ch, false);
+      else if (liveState.currentGap) paintGapFocus(liveState.currentGap);
     });
+    // A language switch or other imperative re-render must preserve the chosen
+    // action. Selection lives in liveState; DOM classes/data are projections.
+    if (selectedChannel) previewChannel(g, selectedChannel, true);
     ldPanel('ld-spot');
   }
 
@@ -6262,12 +6313,11 @@
     onTime = onTime && ev.feas.ok;
     pv.className = 'ld-preview ' + (onTime ? 'fast' : 'slow');
     txt.textContent = ev.feas.ok ? (onTime ? t.spotOnTime() : (assume ? t.spotLateWrong() : t.spotLateIdle())) : feasibilityText(ev.feas.reason);
-    var old = pv.querySelector('.ld-send'); if (old) old.remove();
-    if (persist && ev.feas.ok) {
-      var b = document.createElement('button'); b.className = 'btn primary ld-send'; b.type = 'button';
-      b.textContent = onTime ? t.spotSend : t.spotSendLate;
-      b.addEventListener('click', function () { commitChannel(g, ch); });
-      pv.appendChild(b);
+    var send = $('ld-send');
+    if (persist && send) {
+      send.disabled = !ev.feas.ok;
+      send.setAttribute('aria-disabled', send.disabled ? 'true' : 'false');
+      send.textContent = onTime ? t.spotSend : t.spotSendLate;
     }
   }
 
