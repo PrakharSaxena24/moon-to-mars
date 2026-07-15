@@ -857,16 +857,14 @@ console.log('\n=== SCORING RUBRIC v1.0 §8 — the pinned constitution ===');
     'scoreTrip: withheldA — erasing one 1pt return arrow (' + returnArrowIds[0] + ') -> 99/clean:false/B/withheldA:true (' +
     wt.total + '/' + wt.grade + '/' + wt.gate.withheldA + ')');
 
-  // (7b) the clean gate also polices the one classic detector without an atom home: skipping
-  // setReturn (frame t_ship staffing) still totals 100 but withholds the A via detect()!==0
-  // (MIGRATION Voyage 2026-07-13: load/voyage canonDay added so the rest of the trip is genuinely
-  // clean and this isolates setReturn as the ONLY surviving gap)
+  // (7b) 100 means mastery: the formerly detector-only returnLogi duty is now bound to
+  // the existing 1-point Return Logistics execution atom (no new row/weight).
   var nrCfg = base;
   ['setSafety', 'grantAuth', 'shareInfo', 'setReport', 'rebalance', 'fixReserve', 'fixHandoffs'].forEach(function (fx) { nrCfg = P.applyFix(nrCfg, fx); });
   ['load', 'voyage', 'arrival', 'ops', 'return'].forEach(function (seg) { nrCfg = P.applyDayFix(nrCfg, seg); });
   var nrt = P.scoreTrip(P.mergePlan(nrCfg));
-  ok(nrt.total === 100 && nrt.gate.clean === false && nrt.grade === 'B' && nrt.gate.withheldA === true,
-    'scoreTrip: skipping setReturn -> 100 points but a live returnLogi detector withholds the A (' +
+  ok(nrt.total === 99 && nrt.gate.clean === false && nrt.grade === 'B' && nrt.gate.withheldA === true,
+    'scoreTrip: skipping setReturn -> 99 because the existing Return Logistics atom prices the live returnLogi duty (' +
     nrt.total + '/' + nrt.grade + '/withheldA:' + nrt.gate.withheldA + ')');
 
   // (8) drawn-but-late riskable: canonical + retime h_menu_angler to a late board send ->
@@ -1290,10 +1288,10 @@ console.log('\n=== VOYAGE §2 — carryover purity: all-aboard is carry-inert; a
     ok(P.manifestTransferGaps(transferCustodyBroken).indexOf('mi_lug_gd_watanabe') >= 0 && !P.scoreTrip(transferCustodyBroken).gate.clean,
       'an item-level Chichijima transfer omission withholds the trip A');
     var brokenReturnTrip = P.scoreTrip(returnCustodyBroken);
-    ok(P.manifestReturnGaps(returnCustodyBroken).indexOf('mi_lug_gd_yamate') >= 0 && brokenReturnTrip.total === 100 &&
+    ok(P.manifestReturnGaps(returnCustodyBroken).indexOf('mi_lug_gd_yamate') >= 0 && brokenReturnTrip.total === 99 &&
        brokenReturnTrip.grade === 'B' && brokenReturnTrip.gate.withheldA &&
        P.dayReadiness(returnCustodyBroken, 'return').some(function (x) { return x.type === 'CARRY_GAP' && x.itemId === 'mi_lug_gd_yamate'; }),
-      'a Day-6 guest return-luggage omission is visible on Return and cannot score 100/A clean');
+      'a Day-6 guest return-luggage omission is visible on Return and costs the existing Return custody lane point');
   }
 })();
 
@@ -1363,11 +1361,11 @@ console.log('\n=== VOYAGE §3 — named guests & VIP buddies ===');
 
     // (b) assigned buddy -> the task is staffed and earns its pts
     var oneBuddyCfg = trueCanonCfgV();
-    oneBuddyCfg.overrides.buddies = {}; oneBuddyCfg.overrides.buddies[vip0.id] = 'p06';
+    oneBuddyCfg.overrides.buddies = {}; oneBuddyCfg.overrides.buddies[vip0.id] = 'p08';
     var oneBuddyPlan = P.mergePlan(oneBuddyCfg);
     var obById = {}; P.tasksForSeg(oneBuddyPlan, 'voyage').forEach(function (t) { obById[t.id] = t; });
     var t0starB = obById[starId(vip0.id)];
-    ok(t0starB && t0starB.assignedIds && t0starB.assignedIds.indexOf('p06') >= 0, 'assigning buddy p06 to VIP ' + vip0.id + ' staffs ' + starId(vip0.id) + ' with p06');
+    ok(t0starB && t0starB.assignedIds && t0starB.assignedIds.indexOf('p08') >= 0, 'assigning available buddy p08 to VIP ' + vip0.id + ' staffs ' + starId(vip0.id) + ' with p08');
     var a0b = atomForTask(P.scoreTrip(oneBuddyPlan).atoms, starId(vip0.id));
     ok(!!a0b && a0b.earned === a0b.maxPts, 'assigned VIP ' + vip0.id + ': its priced atom earns its full maxPts (' + (a0b && a0b.earned) + '/' + (a0b && a0b.maxPts) + ')');
 
@@ -1385,9 +1383,9 @@ console.log('\n=== VOYAGE §3 — named guests & VIP buddies ===');
     var cleanGateCfg = trueCanonCfgV();
     cleanGateCfg.overrides.buddies = { gd_watanabe: 'p08', gd_nagatani: 'p08', gd_kadou: 'p07', gd_maeda: 'p04' };
     var cleanGatePlan = P.mergePlan(cleanGateCfg), cleanGateTrip = P.scoreTrip(cleanGatePlan);
-    ok(cleanGateTrip.total === 100 && cleanGateTrip.grade === 'B' && cleanGateTrip.gate.withheldA && !cleanGateTrip.gate.clean &&
+    ok(cleanGateTrip.total < 100 && cleanGateTrip.grade === 'B' && cleanGateTrip.gate.withheldA && !cleanGateTrip.gate.clean &&
        P.dayReadiness(cleanGatePlan, 'voyage').some(function (r) { return r.type === 'OVERLOAD'; }),
-      'a care-task overload can retain 100 points but the zero-known-gaps gate withholds the A');
+      'a care-task overload now loses an existing per-guest care point, so 100 remains mastery-only');
 
     var overCapCfg = trueCanonCfgV();
     overCapCfg.overrides.buddies = { gd_watanabe: 'p06', gd_nagatani: 'p06', gd_kadou: 'p06', gd_maeda: 'p06' };
@@ -1957,6 +1955,413 @@ console.log('\n=== TEACHING MVP — readiness, channel feasibility, and scenario
   ok(redundantOutageDs.missing.length === 0 && redundantOutageDs.late.length === 0 && redundantOutageDs.idleTotal === 0 &&
       redundantOutageTrip.total === 100 && redundantOutageTrip.gate.clean,
     'an unavailable duplicate never voids the same socket\'s feasible radio path or inflates its score');
+})();
+
+// ============================================================================
+// CLUSTER-FIRST PLAN — deterministic causal roots + 100 means mastery.
+// ============================================================================
+console.log('\n=== CLUSTER-FIRST PLAN — score rollup, causal roots, stable editor targets ===');
+(function () {
+  var IDS = ['frame', 'load', 'voyage', 'arrival', 'ops', 'fishday', 'return'];
+  var MAX = [11, 10, 11, 12, 13, 34, 9];
+  function canonCfg() {
+    var cfg = P.applyAllFixes({ seed: 1, overrides: {} });
+    ['load', 'voyage', 'arrival', 'ops', 'return'].forEach(function (seg) { cfg = P.applyDayFix(cfg, seg); });
+    return cfg;
+  }
+  function clusterOf(list, id) { return list.filter(function (c) { return c.id === id; })[0]; }
+  function rootsOf(list) { var out = []; list.forEach(function (c) { c.rootIssues.forEach(function (r) { out.push(r); }); }); return out; }
+  function sum(list, field) { var n = 0; list.forEach(function (x) { n += Number(x[field]) || 0; }); return n; }
+  function counts(values) { var out = {}; values.forEach(function (v) { out[v] = (out[v] || 0) + 1; }); return out; }
+  function sameCounts(a, b) { return JSON.stringify(counts(a)) === JSON.stringify(counts(b)); }
+  function sortedUnique(a) {
+    if (!Array.isArray(a)) return false;
+    for (var i = 1; i < a.length; i++) if (a[i - 1] >= a[i]) return false;
+    return true;
+  }
+  function checkPartition(plan, label) {
+    var trip = P.scoreTrip(plan), clusters = P.planClusters(plan), roots = rootsOf(clusters);
+    ok(JSON.stringify(clusters.map(function (c) { return c.id; })) === JSON.stringify(IDS),
+      label + ': exact stable cluster order');
+    ok(sum(clusters, 'maxPts') === 100 && sum(clusters, 'earned') === trip.total,
+      label + ': cluster earned/max roll up exactly to scoreTrip ' + trip.total + '/100');
+    ok(clusters.every(function (c, i) {
+      return c.maxPts === trip.byBucket[c.id].maxPts && c.earned === trip.byBucket[c.id].earned &&
+        c.maxPts === MAX[i] && c.lostPoints === c.maxPts - c.earned &&
+        sum(c.rootIssues, 'lostPoints') === c.lostPoints;
+    }), label + ': every bucket is lossless and root losses exactly explain its missing points');
+
+    var failed = trip.atoms.filter(function (a) { return a.earned < a.maxPts; }).map(function (a) { return a.id; }).sort();
+    var homed = []; roots.forEach(function (r) { homed = homed.concat(r.atomIds); }); homed.sort();
+    ok(JSON.stringify(failed) === JSON.stringify(homed) && Object.keys(counts(homed)).every(function (id) { return counts(homed)[id] === 1; }),
+      label + ': every failed score atom belongs to exactly one root (no omission/duplication)');
+
+    var expectedReady = 0; IDS.slice(1).forEach(function (seg) { expectedReady += P.dayReadiness(plan, seg).length; });
+    var actualReady = 0; roots.forEach(function (r) { actualReady += r.readiness.length; });
+    ok(actualReady === expectedReady, label + ': every detailed readiness row is partitioned once (' + actualReady + ')');
+    var activeDet = P.detect(plan).map(function (d) { return d.id; }).sort(), homedDet = [];
+    roots.forEach(function (r) { homedDet = homedDet.concat(r.detectorIds); }); homedDet.sort();
+    ok(JSON.stringify(activeDet) === JSON.stringify(homedDet) && Object.keys(counts(homedDet)).every(function (id) { return counts(homedDet)[id] === 1; }),
+      label + ': every live clean-gate detector is covered exactly once');
+
+    var idFields = ['atomIds', 'reasonKeys', 'detectorIds', 'taskIds', 'cardIds', 'roleIds', 'itemIds', 'guestIds', 'handoffIds', 'lineIds'];
+    var targetKinds = { handoff: 1, task: 1, detector: 1, manifest: 1, guest: 1, budget: 1, card: 1, role: 1 };
+    var STR = require('./i18n.js');
+    ok(roots.every(function (r) {
+      return r.id && r.bucket && r.consequenceKey && STR.en[r.consequenceKey] != null && r.editorTarget && targetKinds[r.editorTarget.kind] &&
+        idFields.every(function (f) { return sortedUnique(r[f]); }) &&
+        (r.bucket === 'frame' || r.editorTarget.segment === r.bucket);
+    }), label + ': roots expose stable unique affected IDs, i18n consequence keys, and discriminated editor targets');
+    return { trip: trip, clusters: clusters, roots: roots };
+  }
+
+  var gappyPlan = P.mergePlan({ seed: 1, overrides: {} });
+  var gappy = checkPartition(gappyPlan, 'gappy');
+  ok(JSON.stringify(gappy.clusters.map(function (c) { return c.maxPts; })) === JSON.stringify(MAX),
+    'cluster maxima are frozen at 11/10/11/12/13/34/9');
+  var loadRoots = clusterOf(gappy.clusters, 'load').rootIssues;
+  var cabinsRoot = loadRoots.filter(function (r) { return r.cardIds.indexOf('ic_cabins') >= 0; })[0];
+  var jigRoot = loadRoots.filter(function (r) { return r.itemIds.indexOf('mi_jigcase') >= 0; })[0];
+  ok(loadRoots.length === 2 && cabinsRoot && cabinsRoot.lostPoints === 3 &&
+      cabinsRoot.atomIds.indexOf('load_info_comms_ic_cabins') >= 0 && cabinsRoot.atomIds.indexOf('load_safety_hd_l_headcount') >= 0,
+    'gappy Load folds missing cabins -> late headcount gate into one -3 causal root');
+  ok(jigRoot && jigRoot.lostPoints === 2 && jigRoot.editorTarget.kind === 'manifest' &&
+      jigRoot.editorTarget.segment === 'load' && jigRoot.editorTarget.itemId === 'mi_jigcase' && !!jigRoot.editorTarget.taskId,
+    'gappy Load keeps the independent jig custody cause separate with an exact manifest task target');
+
+  var canonicalPlan = P.mergePlan(canonCfg());
+  var before = JSON.stringify(canonicalPlan), c1 = P.planClusters(canonicalPlan), c2 = P.planClusters(canonicalPlan);
+  ok(JSON.stringify(c1) === JSON.stringify(c2), 'planClusters is byte-deterministic on repeated calls');
+  ok(before === JSON.stringify(canonicalPlan), 'planClusters does not mutate its plan input');
+  var canonical = checkPartition(canonicalPlan, 'canonical');
+  ok(canonical.trip.total === 100 && canonical.trip.gate.clean && canonical.clusters.every(function (c) {
+    return c.mastered && c.status === 'mastered' && c.earned === c.maxPts && c.rootIssues.length === 0;
+  }), 'canonical 100/A has seven mastered clusters and zero modeled roots');
+  ok(P.executionReadiness(canonicalPlan).unresolvedCount > 0 && canonical.roots.length === 0,
+    'external confirmations stay outside plan mastery/root scoring');
+
+  // One intentional fault: the food handoff delays menu, wrong-fish assumptions, and
+  // cook completion. The cascade is ONE root, not a second invented cook problem.
+  var foodCfg = canonCfg(); foodCfg.overrides.handoffs.h_food = null;
+  var foodPlan = P.mergePlan(foodCfg), foodCluster = clusterOf(P.planClusters(foodPlan), 'fishday');
+  var foodRoot = foodCluster.rootIssues[0];
+  ok(foodCluster.rootIssues.length === 1 && foodRoot.cardIds.indexOf('ic_food') >= 0 && foodRoot.lostPoints === 2 &&
+      JSON.stringify(foodRoot.atomIds) === JSON.stringify(['fishday_info_chef_ic_food', 'fishday_quality_cookblock']),
+    'single missing h_food folds its info atom + downstream cook-quality atom into one -2 root');
+  ok(foodRoot.editorTarget.kind === 'handoff' && foodRoot.editorTarget.segment === 'fishday' &&
+      foodRoot.editorTarget.taskId === 't_f_menu' && foodRoot.editorTarget.cardId === 'ic_food' &&
+      foodRoot.taskIds.indexOf('t_f_cook') >= 0,
+    'food causal root navigates to the handoff while retaining downstream cook impact');
+
+  // Alternative clean solutions stay mastered: normal canonical, outage-resilient
+  // canonical radio paths, and a harmless redundant faster arrow all produce no roots.
+  var outagePlan = P.mergePlan(P.applyScenario(canonCfg(), 'comms-outage'));
+  var outage = checkPartition(outagePlan, 'radio-resilient outage alternative');
+  ok(outage.trip.total === 100 && outage.trip.gate.clean && outage.roots.length === 0,
+    'radio-resilient comms-outage alternative remains root-free mastery');
+  var redundantCfg = canonCfg();
+  redundantCfg.overrides.handoffs.h_tackle2 = { cardId: 'ic_tackle', fromRoleId: 'logi', fromTaskId: 't_f_tackleprep',
+    toRoleId: 'specialist', toTaskId: 't_f_gearload', trigger: { type: 'onTaskDone', taskId: 't_f_tackleprep' },
+    channel: 'faceToFace', ifLate: 'idle', reworkKind: null, content: { en: 'x', jp: 'x' } };
+  var redundantPlan = P.mergePlan(redundantCfg), redundantClusters = P.planClusters(redundantPlan);
+  ok(P.scoreTrip(redundantPlan).total === 100 && rootsOf(redundantClusters).length === 0,
+    'redundant feasible arrow neither inflates score nor creates a root');
+  var futurePlan = JSON.parse(JSON.stringify(canonicalPlan)); futurePlan.futureExtension = { version: 99, data: ['unknown'] };
+  ok(JSON.stringify(P.planClusters(futurePlan)) === JSON.stringify(c1), 'unknown future plan fields are ignored safely and deterministically');
+
+  // Stable target locators across the main editor fault families.
+  var deletedCfg = canonCfg(); deletedCfg.overrides.staffing.t_f_fish = [];
+  var deletedRoot = clusterOf(P.planClusters(P.mergePlan(deletedCfg)), 'fishday').rootIssues[0];
+  ok(deletedRoot.editorTarget.kind === 'task' && deletedRoot.editorTarget.taskId === 't_f_fish' && deletedRoot.lostPoints === 4 &&
+      deletedRoot.atomIds.indexOf('fishday_info_specialist_ic_ground') >= 0 && deletedRoot.atomIds.indexOf('fishday_exec_specialist') >= 0,
+    'deleted collapsed-socket consumer groups socket+lane loss at the missing task target');
+
+  var lateCfg = canonCfg(), lateArrow = JSON.parse(JSON.stringify(P.canonHandoffs().filter(function (h) { return h.id === 'h_tackle'; })[0]));
+  lateArrow.trigger = { type: 'atMinute', value: 360 }; lateArrow.channel = 'chat'; lateCfg.overrides.handoffs.h_tackle = lateArrow;
+  var lateRoot = clusterOf(P.planClusters(P.mergePlan(lateCfg)), 'fishday').rootIssues[0];
+  ok(lateRoot.status === 'late' && lateRoot.editorTarget.kind === 'handoff' && lateRoot.editorTarget.handoffId === 'h_tackle' &&
+      lateRoot.editorTarget.cardId === 'ic_tackle' && lateRoot.editorTarget.taskId === 't_f_gearload',
+    'late arrow root carries a stable handoff/card/consumer locator');
+
+  var wrongCfg = canonCfg(); wrongCfg.overrides.staffing.t_f_route = ['p08'];
+  var wrongRoot = clusterOf(P.planClusters(P.mergePlan(wrongCfg)), 'fishday').rootIssues[0];
+  ok(wrongRoot.status === 'broken' && wrongRoot.editorTarget.kind === 'task' && wrongRoot.editorTarget.taskId === 't_f_route',
+    'wrong-role lane root navigates to the exact task');
+
+  var compactCfg = canonCfg(); compactCfg.overrides.timing = { t_f_cook: { durMin: 30 } };
+  var compactRoot = clusterOf(P.planClusters(P.mergePlan(compactCfg)), 'fishday').rootIssues[0];
+  ok(compactRoot.status === 'compressed' && compactRoot.lostPoints === 2 && compactRoot.editorTarget.taskId === 't_f_cook',
+    'compressed cook groups lane+quality loss at the cook task');
+
+  var decoyCfg = canonCfg(), decoyPlan0 = P.mergePlan(decoyCfg);
+  var decoyTask = P.tasksForSeg(decoyPlan0, 'ops').filter(function (t) { return t.id === 'hd_o_dec_sidefish'; })[0];
+  decoyCfg.overrides.days.ops.placement.hd_o_dec_sidefish = { startMin: decoyTask.startMin, durMin: decoyTask.durMin, assignedIds: ['p08'] };
+  var decoyRoot = clusterOf(P.planClusters(P.mergePlan(decoyCfg)), 'ops').rootIssues[0];
+  ok(decoyRoot.status === 'decoy' && decoyRoot.lostPoints === 2 && decoyRoot.editorTarget.kind === 'task' &&
+      decoyRoot.editorTarget.taskId === 'hd_o_dec_sidefish', 'placed decoy penalty is homed once at the decoy task');
+
+  function omitCarry(seg, taskId, itemId) {
+    var cfg = canonCfg(), plan = P.mergePlan(cfg), task = P.tasksForSeg(plan, seg).filter(function (t) { return t.id === taskId; })[0];
+    cfg.overrides.days[seg].placement[taskId] = { startMin: task.startMin, durMin: task.durMin,
+      assignedIds: task.assignedIds.slice(), carries: task.carries.filter(function (id) { return id !== itemId; }) };
+    return P.mergePlan(cfg);
+  }
+  var returnItem = 'mi_lug_gd_yamate', returnCustodyPlan = omitCarry('return', 'hd_r_hold', returnItem);
+  var returnCustodyRoot = clusterOf(P.planClusters(returnCustodyPlan), 'return').rootIssues[0];
+  ok(P.scoreTrip(returnCustodyPlan).total === 99 && returnCustodyRoot.lostPoints === 1 &&
+      returnCustodyRoot.editorTarget.kind === 'manifest' && returnCustodyRoot.editorTarget.itemId === returnItem &&
+      returnCustodyRoot.editorTarget.taskId === 'hd_r_hold' && returnCustodyRoot.taskIds.indexOf('hd_r_hold') >= 0,
+    'return custody omission costs an existing point and opens the exact item/task carry choice');
+
+  var outagePhoneCfg = P.applyScenario(canonCfg(), 'comms-outage');
+  outagePhoneCfg.overrides.handoffs.h_catch_chef = { channel: 'phone' };
+  var outagePhoneRoot = clusterOf(P.planClusters(P.mergePlan(outagePhoneCfg)), 'fishday').rootIssues[0];
+  ok(outagePhoneRoot.editorTarget.kind === 'handoff' && outagePhoneRoot.editorTarget.handoffId === 'h_catch_chef' &&
+      outagePhoneRoot.editorTarget.cardId === 'ic_catch' && outagePhoneRoot.lostPoints === 2,
+    'outage-infeasible channel groups the failed socket + downstream cook consequence at the existing handoff');
+
+  // No modeled warning may coexist with a displayed 100. Each formerly unpriced
+  // clean-gate path now docks an existing atom, preserving all maxima and 99 rows.
+  var masteryFaults = [];
+  var noReturnCfg = canonCfg(); noReturnCfg.overrides.staffing.t_ship = []; masteryFaults.push(['returnLogi', P.mergePlan(noReturnCfg), 'return']);
+  var noFerryCfg = canonCfg(); noFerryCfg.overrides.info.ic_ferry = { recipientRoleIds: ['pm'] }; masteryFaults.push(['ferry sharing', P.mergePlan(noFerryCfg), 'frame']);
+  masteryFaults.push(['arrival custody', omitCarry('arrival', 'hd_a_transfer', 'mi_lug_gd_watanabe'), 'arrival']);
+  masteryFaults.push(['return custody', returnCustodyPlan, 'return']);
+  var careCfg = canonCfg(); careCfg.overrides.buddies = { gd_watanabe: 'p08', gd_nagatani: 'p08', gd_kadou: 'p07', gd_maeda: 'p04' };
+  masteryFaults.push(['care overlap', P.mergePlan(careCfg), 'voyage']);
+  [['load', 'hd_l_breakfast'], ['voyage', 'hd_v_watch_night'], ['fishday', 't_f_flex_owner']].forEach(function (pair) {
+    var cfg = canonCfg();
+    if (pair[0] === 'fishday') cfg.overrides.staffing[pair[1]] = [];
+    else cfg.overrides.days[pair[0]].placement[pair[1]] = null;
+    masteryFaults.push(['required flex ' + pair[1], P.mergePlan(cfg), pair[0]]);
+  });
+  masteryFaults.forEach(function (entry) {
+    var trip = P.scoreTrip(entry[1]), cluster = clusterOf(P.planClusters(entry[1]), entry[2]);
+    ok(trip.total < 100 && !trip.gate.clean && cluster.lostPoints >= 1 && cluster.rootIssues.some(function (r) { return r.lostPoints >= 1; }),
+      '100=mastery audit: ' + entry[0] + ' costs an existing point in ' + entry[2]);
+  });
+})();
+
+// ============================================================================
+// DAY-3 FOOD TRADE-OFF — three authored solutions, one scored causal socket.
+// ============================================================================
+console.log('\n=== DAY-3 FOOD TRADE-OFF — direct, delegated, and redundant paths ===');
+(function () {
+  var IDS = ['direct-fast', 'delegated-relay', 'redundant-paths'];
+  function canonCfg() {
+    var cfg = P.applyAllFixes({ seed: 1, overrides: {} });
+    ['load', 'voyage', 'arrival', 'ops', 'return'].forEach(function (seg) { cfg = P.applyDayFix(cfg, seg); });
+    return cfg;
+  }
+  function fishCluster(plan) { return P.planClusters(plan).filter(function (c) { return c.id === 'fishday'; })[0]; }
+  function configured(id, scenario) {
+    var cfg = P.applyDay3FoodStrategy(canonCfg(), id);
+    return scenario ? P.applyScenario(cfg, scenario) : cfg;
+  }
+  function planFor(id, scenario) { return P.mergePlan(configured(id, scenario)); }
+  function handoff(plan, id) { return P.handoffsForSeg(plan, 'fishday').filter(function (h) { return h.id === id; })[0]; }
+  function sumMax(atoms) { return atoms.reduce(function (n, a) { return n + a.maxPts; }, 0); }
+
+  ok(JSON.stringify(P.DAY3_FOOD_STRATEGY_IDS) === JSON.stringify(IDS) &&
+      JSON.stringify(P.DAY3_FOOD_ROOT) === JSON.stringify({ segment: 'fishday', taskId: 't_f_menu', cardId: 'ic_food' }) &&
+      typeof P.applyDay3FoodStrategy === 'function' && typeof P.day3FoodStrategy === 'function',
+    'Day-3 food strategy API exports stable ids, root locator, applicator, and projection');
+
+  var canonicalCfg = canonCfg(), canonicalJson = JSON.stringify(canonicalCfg);
+  var applications = IDS.map(function (id) { return P.applyDay3FoodStrategy(canonicalCfg, id); });
+  ok(JSON.stringify(canonicalCfg) === canonicalJson && applications.every(function (cfg) {
+    return cfg !== canonicalCfg && cfg.overrides !== canonicalCfg.overrides && cfg.overrides.handoffs !== canonicalCfg.overrides.handoffs;
+  }), 'strategy application deep-clones and never mutates caller-owned config/overrides');
+  ok(applications.every(function (cfg, i) {
+    return JSON.stringify(cfg) === JSON.stringify(P.applyDay3FoodStrategy(canonicalCfg, IDS[i])) &&
+      JSON.stringify(cfg) === JSON.stringify(P.applyDay3FoodStrategy(cfg, IDS[i]));
+  }), 'all three applicators are deterministic and idempotent');
+  ok(JSON.stringify(P.applyDay3FoodStrategy(P.applyDay3FoodStrategy(canonicalCfg, 'direct-fast'), 'delegated-relay')) ===
+      JSON.stringify(P.applyDay3FoodStrategy(canonicalCfg, 'delegated-relay')),
+    'switching direct-fast to delegated-relay cleans sibling recipe keys exactly');
+  var unknownCfg = P.applyDay3FoodStrategy(canonicalCfg, 'telepathy');
+  ok(unknownCfg !== canonicalCfg && JSON.stringify(unknownCfg) === canonicalJson,
+    'unknown strategy fails safely as an unchanged deep clone');
+
+  var plans = {}, projections = {}, baselineAtoms = P.scoreTrip(P.mergePlan(canonicalCfg)).atoms.length;
+  IDS.forEach(function (id) {
+    var plan = plans[id] = planFor(id), before = JSON.stringify(plan);
+    var projection = projections[id] = P.day3FoodStrategy(plan), projection2 = P.day3FoodStrategy(plan);
+    var trip = P.scoreTrip(plan), cluster = fishCluster(plan);
+    ok(trip.total === 100 && trip.grade === 'A' && trip.gate.clean && trip.atoms.length === baselineAtoms &&
+        trip.atoms.length === 99 && sumMax(trip.atoms) === 100 && trip.atoms.every(function (a) { return a.earned === a.maxPts; }),
+      id + ': reaches exact 100/A mastery with the frozen 99-atom/100-point ledger');
+    ok(projection.strategyId === id && projection.topologyStrategyId === id && projection.recipeComplete && !projection.degraded &&
+        projection.resolved && projection.rootCleared && projection.mastered &&
+        projection.wholePlanScore === 100 && projection.clusterEarned === 34 && projection.clusterMaxPts === 34 &&
+        cluster.rootIssues.length === 0,
+      id + ': clears the food causal root and leaves the whole Fishing-Day cluster mastered');
+    ok(before === JSON.stringify(plan) && JSON.stringify(projection) === JSON.stringify(projection2),
+      id + ': trade-off projection is pure and byte-deterministic');
+  });
+
+  var direct = projections['direct-fast'], relay = projections['delegated-relay'], redundant = projections['redundant-paths'];
+  ok(direct.arrivalMin === 285 && direct.latencyMin === 0 && direct.marginMin === 15 &&
+      direct.transmissions === 1 && direct.pathCount === 1 && direct.relaySteps === 0 &&
+      direct.senderWorkload.budgetLead === 1 && direct.singlePathFailureTolerance === 0,
+    'direct-fast exposes the fastest one-send consequence (04:45 arrival, 15-minute margin)');
+  ok(relay.arrivalMin === 292 && relay.latencyMin === 7 && relay.marginMin === 8 &&
+      relay.transmissions === 2 && relay.pathCount === 1 && relay.relaySteps === 1 &&
+      relay.senderWorkload.budgetLead === 1 && relay.senderWorkload.comms === 1 &&
+      relay.paths[0].kind === 'relay' && JSON.stringify(relay.paths[0].handoffIds) ===
+        JSON.stringify(['h_food_relay_intake', 'h_food_relay_delivery']),
+    'delegated-relay exposes a real budgetLead→comms→chef two-hop workload and 04:52 arrival');
+  ok(redundant.arrivalMin === 286 && redundant.latencyMin === 1 && redundant.marginMin === 14 &&
+      redundant.transmissions === 2 && redundant.pathCount === 2 && redundant.relaySteps === 0 &&
+      redundant.senderWorkload.budgetLead === 2 && redundant.singlePathFailureTolerance === 1 &&
+      redundant.redundancyEffort === 1 && redundant.onTimePathCount === 2,
+    'redundant-paths exposes two independent sends, one extra effort, and one-path failure tolerance');
+  ok(new Set(IDS.map(function (id) {
+    var x = projections[id]; return [x.arrivalMin, x.relaySteps, x.pathCount, x.singlePathFailureTolerance,
+      JSON.stringify(x.senderWorkload)].join('|');
+  })).size === 3, 'the three mastered choices have genuinely distinct measurable consequence vectors');
+
+  IDS.forEach(function (id) {
+    var outagePlan = planFor(id, 'comms-outage'), outageTrip = P.scoreTrip(outagePlan), outageProjection = P.day3FoodStrategy(outagePlan);
+    ok(outageTrip.total === 100 && outageTrip.gate.clean && outageProjection.resolved && outageProjection.rootCleared &&
+        outageProjection.paths.every(function (p) { return p.feasible; }),
+      id + ': remains a feasible, deterministic 100 recovery in the comms-outage scenario');
+  });
+
+  // The second relay send cannot produce food information by itself: it is
+  // accepted only after the intake path arrives at the delegated comms role.
+  var noIntakeCfg = configured('delegated-relay');
+  noIntakeCfg.overrides.handoffs.h_food_relay_intake = null;
+  var noIntakePlan = P.mergePlan(noIntakeCfg), noIntake = P.day3FoodStrategy(noIntakePlan), noIntakeTrip = P.scoreTrip(noIntakePlan);
+  ok(noIntake.strategyId === 'delegated-relay' && noIntake.topologyStrategyId === null &&
+      !noIntake.recipeComplete && noIntake.degraded && !noIntake.resolved && !noIntake.rootCleared &&
+      noIntake.paths[0].reason === 'missing-prerequisite' &&
+      noIntakeTrip.total === 98 && fishCluster(noIntakePlan).rootIssues.some(function (r) {
+        return r.cardIds.indexOf('ic_food') >= 0 && r.taskIds.indexOf('t_f_menu') >= 0 && r.lostPoints === 2;
+      }), 'delegated delivery keeps authored identity but reports degraded/incomplete without its intake hop');
+  var earlyRelayCfg = configured('delegated-relay');
+  earlyRelayCfg.overrides.handoffs.h_food_relay_delivery.trigger = { type: 'atMinute', value: 285 };
+  var earlyRelay = P.day3FoodStrategy(P.mergePlan(earlyRelayCfg));
+  ok(earlyRelay.strategyId === 'delegated-relay' && earlyRelay.topologyStrategyId === null &&
+      earlyRelay.recipeComplete && earlyRelay.degraded && !earlyRelay.resolved && earlyRelay.paths[0].reason === 'relay-not-ready',
+    'delegated delivery is rejected when forwarding is scheduled before intake arrival');
+
+  var impossibleCfg = configured('delegated-relay');
+  impossibleCfg.overrides.handoffs.h_food_relay_intake.channel = 'carrier-pigeon';
+  var impossiblePlan = P.mergePlan(impossibleCfg), impossible = P.day3FoodStrategy(impossiblePlan);
+  ok(P.channelFeasibility(impossiblePlan, handoff(impossiblePlan, 'h_food_relay_intake'), 'fishday').reason === 'unknown-channel' &&
+      impossible.strategyId === 'delegated-relay' && impossible.topologyStrategyId === null &&
+      impossible.recipeComplete && impossible.degraded && !impossible.resolved && !impossible.rootCleared &&
+      impossible.paths[0].reason === 'unknown-channel' &&
+      P.scoreTrip(impossiblePlan).total === 98,
+    'an infeasible relay channel is rejected end-to-end and cannot claim food mastery');
+
+  var mixedCfg = configured('redundant-paths');
+  mixedCfg.overrides.handoffs.h_food = JSON.parse(JSON.stringify(configured('direct-fast').overrides.handoffs.h_food));
+  var mixedPlan = P.mergePlan(mixedCfg), mixed = P.day3FoodStrategy(mixedPlan);
+  ok(mixed.strategyId === null && mixed.topologyStrategyId === 'redundant-paths' &&
+      !mixed.recipeComplete && mixed.degraded && mixed.resolved && P.scoreTrip(mixedPlan).total === 100,
+    'mixed valid direct/redundant recipe metadata fails identity closed while preserving actual topology metrics');
+  var invalidMetaCfg = configured('redundant-paths');
+  invalidMetaCfg.overrides.handoffs.h_food_backup_phone.strategyId = 'delegated-relay';
+  var invalidMeta = P.day3FoodStrategy(P.mergePlan(invalidMetaCfg));
+  ok(invalidMeta.strategyId === null && invalidMeta.topologyStrategyId === 'redundant-paths' &&
+      !invalidMeta.recipeComplete && invalidMeta.degraded && invalidMeta.pathCount === 2 && invalidMeta.resolved,
+    'handoff metadata that claims the wrong recipe id fails identity closed without falsifying graph metrics');
+
+  ['h_food_primary_radio', 'h_food_backup_phone'].forEach(function (failedId) {
+    var onePathCfg = configured('redundant-paths'); onePathCfg.overrides.handoffs[failedId] = null;
+    var onePathPlan = P.mergePlan(onePathCfg), onePathTrip = P.scoreTrip(onePathPlan), onePath = P.day3FoodStrategy(onePathPlan);
+    ok(onePath.strategyId === 'redundant-paths' && onePath.topologyStrategyId === 'direct-fast' &&
+        !onePath.recipeComplete && onePath.degraded && onePathTrip.total === 100 && onePathTrip.gate.clean &&
+        onePath.resolved && onePath.rootCleared &&
+        onePath.pathCount === 1 && onePath.onTimePathCount === 1 && onePath.singlePathFailureTolerance === 0,
+      'redundant recipe retains authored identity but reports degraded topology after loss of ' + failedId);
+  });
+  var bothLostCfg = configured('redundant-paths');
+  bothLostCfg.overrides.handoffs.h_food_primary_radio = null; bothLostCfg.overrides.handoffs.h_food_backup_phone = null;
+  var bothLostPlan = P.mergePlan(bothLostCfg), bothLostProjection = P.day3FoodStrategy(bothLostPlan);
+  ok(P.scoreTrip(bothLostPlan).total === 98 && bothLostProjection.strategyId === null &&
+      bothLostProjection.topologyStrategyId === null && !bothLostProjection.recipeComplete && bothLostProjection.degraded &&
+      !bothLostProjection.resolved && !bothLostProjection.rootCleared,
+    'losing both redundant paths restores the same single -2 socket root, never duplicate penalties');
+})();
+
+// ============================================================================
+// MASTERY P0 — every authored dependency break must cost an existing point.
+// ============================================================================
+console.log('\n=== MASTERY P0 — Return shipping must finish before headcount ===');
+(function () {
+  function canonCfg() {
+    var cfg = P.applyAllFixes({ seed: 1, overrides: {} });
+    ['load', 'voyage', 'arrival', 'ops', 'return'].forEach(function (seg) { cfg = P.applyDayFix(cfg, seg); });
+    return cfg;
+  }
+  function clone(x) { return JSON.parse(JSON.stringify(x)); }
+  function movedProducer(cfg, plan, seg, taskId, startMin) {
+    var out = clone(cfg), task = P.tasksForSeg(plan, seg).filter(function (t) { return t.id === taskId; })[0];
+    if (seg === 'fishday') {
+      out.overrides.timing = out.overrides.timing || {};
+      out.overrides.timing[taskId] = { startMin: startMin };
+    } else {
+      out.overrides.days = out.overrides.days || {}; out.overrides.days[seg] = out.overrides.days[seg] || {};
+      out.overrides.days[seg].placement = out.overrides.days[seg].placement || {};
+      out.overrides.days[seg].placement[taskId] = { startMin: startMin, durMin: task.durMin,
+        assignedIds: task.assignedIds.slice(), carries: (task.carries || []).slice() };
+    }
+    return out;
+  }
+  function sumMax(atoms) { return atoms.reduce(function (n, a) { return n + a.maxPts; }, 0); }
+
+  var baseCfg = canonCfg(), basePlan = P.mergePlan(baseCfg);
+  var brokenCfg = movedProducer(baseCfg, basePlan, 'return', 'hd_r_ship', 540);
+  var brokenPlan = P.mergePlan(brokenCfg), rd = P.dayReadiness(brokenPlan, 'return');
+  ok(JSON.stringify(rd) === JSON.stringify([{ type: 'DEP_BROKEN', taskId: 'hd_r_headcount', depId: 'hd_r_ship' }]),
+    'moving hd_r_ship 480→540 creates the exact headcount<-shipping dependency break');
+
+  var trip = P.scoreTrip(brokenPlan), failed = trip.atoms.filter(function (a) { return a.earned < a.maxPts; });
+  var atom = failed[0], ret = trip.byBucket.return;
+  ok(trip.atoms.length === 99 && sumMax(trip.atoms) === 100 && trip.total === 99 && trip.grade === 'B' &&
+      !trip.gate.clean && trip.gate.withheldA && ret.earned === 8 && ret.maxPts === 9,
+    'late Return shipping preserves 99 atoms/100 maxima but scores exactly 99 with Return 8/9');
+  ok(failed.length === 1 && atom.id === 'return_exec_logi' && atom.maxPts === 1 && atom.earned === 0 &&
+      atom.status === 'broken' && atom.reasonKey === 'scr_exec_broken' && atom.itemRef.roleId === 'logi' &&
+      atom.itemRef.taskId.indexOf('hd_r_ship') >= 0,
+    'the existing 1-point Return Logistics atom owns the dependency failure exactly once');
+
+  var cluster = P.planClusters(brokenPlan).filter(function (c) { return c.id === 'return'; })[0], root = cluster.rootIssues[0];
+  ok(cluster.earned === 8 && cluster.lostPoints === 1 && cluster.rootIssues.length === 1 && root.lostPoints === 1 &&
+      JSON.stringify(root.atomIds) === JSON.stringify(['return_exec_logi']) && root.reasonKeys[0] === 'scr_exec_broken' &&
+      root.readiness.length === 1 && root.readiness[0].taskId === 'hd_r_headcount' && root.readiness[0].depId === 'hd_r_ship' &&
+      root.editorTarget.kind === 'task' && root.editorTarget.segment === 'return' && root.editorTarget.taskId === 'hd_r_ship',
+    'cluster projection folds the warning and lost point into one exact hd_r_ship repair root');
+
+  // Matrix audit: force every direct dependency edge in every authorable segment
+  // to overlap by moving its producer to the consumer's start. Every modeled edge
+  // must surface DEP_BROKEN and lose at least one existing atom; Voyage has no deps.
+  var audited = 0, auditFailures = [];
+  P.AUTHORABLE.forEach(function (seg) {
+    var canonicalCfg = canonCfg(), canonicalPlan = P.mergePlan(canonicalCfg);
+    var tasks = P.tasksForSeg(canonicalPlan, seg), byTask = {};
+    tasks.forEach(function (t) { byTask[t.id] = t; });
+    tasks.filter(function (t) { return t.required !== false; }).forEach(function (consumer) {
+      (consumer.deps || []).forEach(function (depId) {
+        audited++;
+        var cfg = movedProducer(canonicalCfg, canonicalPlan, seg, depId, consumer.startMin);
+        var plan = P.mergePlan(cfg), readiness = P.dayReadiness(plan, seg), score = P.scoreTrip(plan);
+        var hasExactRow = readiness.some(function (r) {
+          return r.type === 'DEP_BROKEN' && r.taskId === consumer.id && r.depId === depId;
+        });
+        if (!hasExactRow || score.total >= 100 || score.gate.clean ||
+            !score.atoms.some(function (a) { return a.earned < a.maxPts; })) {
+          auditFailures.push(seg + ':' + depId + '>' + consumer.id + ':' + score.total);
+        }
+      });
+    });
+  });
+  ok(audited === 52 && auditFailures.length === 0,
+    'all 52 authorable dependency-edge overlap variants surface a cause and withhold 100' +
+      (auditFailures.length ? ' (' + auditFailures.join(', ') + ')' : ''));
 })();
 
 console.log('\n' + (fail === 0 ? 'ALL ' + pass + ' CHECKS PASSED ✓' : pass + ' passed, ' + fail + ' FAILED ✗'));

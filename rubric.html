@@ -42,6 +42,7 @@
     <p><a href="./index.html" id="r-back"></a></p>
   </div>
   <div class="card"><h2 id="r-mx-h"></h2><div style="overflow-x:auto"><table class="rub-matrix" id="r-matrix"></table></div><div class="rub-note" id="r-mx-note"></div></div>
+  <div class="card"><h2 id="r-cluster-h"></h2><div id="r-cluster"></div></div>
   <div class="card"><h2 id="r-gate-h"></h2><div id="r-gate"></div></div>
   <div class="card"><h2 id="r-inv-h"></h2><div class="rub-legend" id="r-legend"></div><div class="ledger rub-atoms" id="r-atoms"></div></div>
 </div>
@@ -60,20 +61,22 @@
   var R = {
     en: {
       title: 'The 100-Point Framework', back: '← back to the game',
-      sub: 'Every point is one named, checkable decision. This page is rendered live from the same engine that scores your plan — it cannot drift.',
+      sub: 'Every point is one named, checkable decision. 100 / 100 means mastery of the clean modeled plan. This page is rendered live from the same engine that scores your plan — it cannot drift.',
       mxh: 'The frozen matrix — 7 phases × 6 dimensions', mxnote: 'Fishing Day and Information carry the most points because they contain the most clocked decisions — the heart of the game is that information has a deadline.',
+      clusterh: 'How the cluster-first planner uses this framework',
+      cluster: '<p>The planner shows these same seven phase totals as expandable clusters: <b>11 · 10 · 11 · 12 · 13 · 34 · 9 = 100</b>. A collapsed cluster shows earned/max, mastery state, and its root count. Expand it to see grouped causal roots, affected work, human consequence, and points unavailable.</p><p><b>Open plan</b> and report-side <b>Take me there</b> focus the exact decision, budget line, role, guest buddy, custody item, task, information socket, or arrow. Clustering is an explanation layer only: it never changes, duplicates, or reallocates a score row.</p><p>Help is navigation-only. No player-facing auto-fix awards points; the learner must author the repair.</p>',
       vipCare: 'Outbound main-guest care (Starlink + meal escorts)',
-      gateh: 'How the grade works',
-      gate: '<p><b>A</b> requires <b>90+ points AND zero known gaps</b> — a plan can score 97 and still read “97 · B — an A requires zero known gaps.”</p><p><b>B</b> ≥ 75 · <b>C</b> ≥ 60 · otherwise <b>D</b>.</p><p>The Score answers “is the plan sound?” (causes). A separate <b>Efficiency %</b> answers “does it waste anyone’s time?” (effects). One late hand-off honestly bills both.</p><p>Riskable information (3 pts) splits: 1 for <i>specifying</i> the hand-off at all, 2 for it <i>arriving on time</i> — never drawn loses all 3, drawn-but-late keeps 1.</p>',
+      gateh: 'How mastery works',
+      gate: '<p><b>Plan Mastery</b> requires <b>100 / 100, clean, and no causal root in any cluster</b>. Anything below 100 shows progress toward mastery; the player-facing framework has no letter bands and no hidden numeric cap.</p><p>Known modeled requirements cannot hide behind a 100: existing atoms also enforce return ownership, ferry-plan sharing, all three custody handovers, non-overlapping guest care, and required flex/standby coverage. These are gates on existing rows, so the inventory remains 99 atoms and 100 points.</p><p>The Score answers “is the modeled plan mastered?” (causes). A separate <b>Efficiency %</b> answers “does it waste anyone’s time?” (effects). <b>Real-execution readiness</b> is separate again: a mastered plan can still await hotel, vessel, connection, Day-6 exchange, and return-timetable confirmations.</p><p>Riskable information (3 pts) splits: 1 for <i>specifying</i> the hand-off at all, 2 for it <i>arriving on time</i> — never drawn loses all 3, drawn-but-late keeps 1.</p>',
       invh: 'The full inventory — every point, named',
       lgSocket: '● information hand-off', lgLane: '■ execution lane', lgGate: '◆ gate / authority', lgDecoy: '⊘ decoy (−2/−3 if placed)', lgRisk: '★ wrong-fish riskable (3 pts)',
       total: 'Total', decoyPts: 'debit',
       mxClick: 'Click any cell to see exactly which decisions it is made of.',
       why: {
         info: 'One point per information hand-off this phase requires (a card reaching the person whose task needs it). Hand-offs that trigger wrong-fish rework if mistimed carry 3 points each (★).',
-        exec: 'One point per person-lane: every task on that person\'s day placed, staffed on the right role, in dependency order, uncompressed.',
-        safety: 'Go/no-go calls, abort authority, health checks — priced by consequence; the dawn go/no-go is the heaviest single gate of the trip.',
-        quality: 'The meal actually lands: cook time ≥ 5 min × portions, dinner by 18:00, the shellfish allergy respected, portions = 13 guests + add-ons.',
+        exec: 'One point per role-lane: every required task in that lane is placed, staffed on the right role, dependency-consistent, non-overlapping, and uncompressed. Existing Arrival/Return lanes also enforce their custody and return-ownership duties.',
+        safety: 'Go/no-go calls, abort authority, health checks, hold custody, and required flex coverage — priced by consequence; the dawn go/no-go is the heaviest single gate of the trip.',
+        quality: 'Quality checks include on-time/uncompressed work, each outbound guest\'s complete non-overlapping care chain, cook timing, and allergy compatibility.',
         money: 'Spending that works when needed: named approvers, usable pay methods, the cash reserve, books settled.',
         people: 'Load relief for the overloaded seat — priced by content; it grows only when the game models more people-decisions.'
       },
@@ -81,20 +84,22 @@
     },
     ja: {
       title: '100点の設計図', back: '← ゲームへ戻る',
-      sub: 'すべての得点は、名前のある検証可能な意思決定です。このページは採点エンジンそのものから描画されるため、実際の採点と食い違うことはありません。',
+      sub: 'すべての得点は、名前のある検証可能な意思決定です。100/100はクリーンなモデル計画のマスタリーを意味します。このページは採点エンジンそのものから描画されるため、実際の採点と食い違うことはありません。',
       mxh: '固定マトリクス——7つの局面 × 6つの側面', mxnote: '釣行日と「情報」が最も重いのは、時刻を持つ意思決定が最も多く含まれるからです——情報には締切がある、がこのゲームの核心です。',
+      clusterh: 'クラスタ中心の計画画面での使い方',
+      cluster: '<p>計画画面では、同じ7局面の点数を展開可能なクラスタとして表示します：<b>11・10・11・12・13・34・9 = 100</b>。閉じた状態では獲得点／最大点、マスタリー状態、根本原因数を示し、開くと原因グループ、影響する作業、人への影響、失う点数を確認できます。</p><p><b>計画を開く</b>とレポートの<b>該当箇所へ</b>は、判断・予算・役割・ゲスト担当・現物引継ぎ・タスク・情報ソケット・矢印の正確な編集箇所へ移動します。クラスタは説明の層であり、採点項目を変更・重複・再配分しません。</p><p>支援機能は移動だけを行います。自動修正で得点は入らず、修正は学習者が作成します。</p>',
       vipCare: '往路の主要ゲスト対応（Starlink登録＋食事エスコート）',
-      gateh: '評価の仕組み',
-      gate: '<p><b>A評価</b>には<b>90点以上かつ既知のギャップゼロ</b>が必要です——97点でも「97点・B——A評価には既知のギャップゼロが条件」と表示されます。</p><p><b>B</b> ≥ 75点 ・ <b>C</b> ≥ 60点 ・ それ未満は<b>D</b>。</p><p>スコアは「計画は健全か」(原因)に、別枠の<b>稼働効率%</b>は「誰かの時間を無駄にしていないか」(結果)に答えます。遅れた受け渡しは正直に両方へ計上されます。</p><p>誤釣リスクのある情報(3点)は分割されます：受け渡しを<i>設計した</i>ことに1点、<i>時間内に届いた</i>ことに2点——未設計は3点全損、設計済みでも遅延なら1点のみ。</p>',
+      gateh: 'マスタリーの仕組み',
+      gate: '<p><b>計画マスタリー</b>には<b>100/100、clean、全クラスタの根本原因ゼロ</b>が必要です。100未満はマスタリーへの進捗として表示し、利用者向けの段階評価や隠れた点数上限はありません。</p><p>既知のモデル課題が100点に隠れないよう、既存の採点項目が帰路の責任者、船便計画の共有、3つの現物引継ぎ、ゲスト対応の重複負荷、必須の待機／柔軟作業も確認します。既存項目へのゲートなので、99項目・100点は変わりません。</p><p>スコアは「モデル計画を習得したか」(原因)に、別枠の<b>稼働効率%</b>は「誰かの時間を無駄にしていないか」(結果)に答えます。さらに<b>実旅行の実行準備</b>は別判定で、100点でもホテル・船名・乗継・6日目交代・帰路時刻の確認待ちになり得ます。</p><p>誤釣リスクのある情報(3点)は分割されます：受け渡しを<i>設計した</i>ことに1点、<i>時間内に届いた</i>ことに2点——未設計は3点全損、設計済みでも遅延なら1点のみ。</p>',
       invh: '全項目一覧——すべての得点に名前',
       lgSocket: '● 情報の受け渡し', lgLane: '■ 実行レーン', lgGate: '◆ ゲート・権限', lgDecoy: '⊘ ダミー（配置すると−2/−3）', lgRisk: '★ 誤釣リスク枠（3点）',
       total: '合計', decoyPts: '減点',
       mxClick: 'セルをクリックすると、その点数を構成する意思決定の内訳が見られます。',
       why: {
         info: 'その局面が必要とする情報の受け渡し1件につき1点（カードが、それを必要とする担当者に届くこと）。時刻を誤ると誤釣の手戻りを生む受け渡しは1件3点（★）。',
-        exec: '担当者レーン1本につき1点：その人のその日の全タスクが配置され、正しい役割に割り当てられ、依存順で、圧縮されていないこと。',
-        safety: '出港判断・中止権限・健康確認——影響の大きさで価格付け。夜明けの出港判断はこの旅で最も重い単一ゲートです。',
-        quality: '食事が実際に成立すること：調理時間 ≥ 5分×食数、夕食は18:00まで、貝アレルギーの回避、食数 = ゲスト13名+追加分。',
+        exec: '役割レーン1本につき1点：そのレーンの全必須タスクが配置され、正しい役割に割り当てられ、依存関係・重複・所要時間が成立すること。既存の到着／帰路レーンは現物引継ぎと帰路責任も確認します。',
+        safety: '出港判断・中止権限・健康確認・船倉の現物引継ぎ・必須の待機作業——影響の大きさで価格付け。夜明けの出港判断はこの旅で最も重い単一ゲートです。',
+        quality: '時間内かつ圧縮されていない作業、往路ゲストごとの重複しない対応一式、調理時刻、アレルギー適合を確認します。',
         money: '必要な時に使えるお金：承認者の指名、使える支払い手段、現金リザーブ、精算の完了。',
         people: '過負荷の担当への負荷分散——内容ベースの価格付け。人に関わる意思決定が増えれば、この枠も増えます。'
       },
@@ -157,6 +162,8 @@
     document.getElementById('r-back').textContent = r.back;
     document.getElementById('r-mx-h').textContent = r.mxh;
     document.getElementById('r-mx-note').textContent = r.mxnote + ' ' + r.mxClick;
+    document.getElementById('r-cluster-h').textContent = r.clusterh;
+    document.getElementById('r-cluster').innerHTML = r.cluster;
     document.getElementById('r-gate-h').textContent = r.gateh;
     document.getElementById('r-gate').innerHTML = r.gate;
     document.getElementById('r-inv-h').textContent = r.invh + ' (' + trip.atoms.length + ')';

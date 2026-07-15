@@ -21,18 +21,30 @@
       </div>
     </div>
     <div class="toprow">
-      <div class="modesw" id="modesw">
-        <button id="mode-live" class="on" data-mode="live" data-i18n="modeLive"></button>
-        <button id="mode-morning" data-mode="morning" data-i18n="modeMorning"></button>
+      <div class="modesw" id="modesw" role="group">
+        <button id="mode-live" class="on" data-mode="live" data-i18n="modeLive" aria-pressed="true"></button>
+        <button id="mode-morning" data-mode="morning" data-i18n="modeMorning" aria-pressed="false"></button>
       </div>
       <div class="row2">
-        <div class="lang">
-          <button id="lang-en" class="on" data-lang="en">English</button>
-          <button id="lang-ja" data-lang="ja">日本語</button>
+        <div class="lang" role="group" aria-label="Language / 言語">
+          <button id="lang-en" class="on" data-lang="en" aria-pressed="true">English</button>
+          <button id="lang-ja" data-lang="ja" aria-pressed="false">日本語</button>
         </div>
         <button class="btn sm ghost" id="snd-toggle"></button>
         <button class="btn sm ghost" id="cast-open" data-i18n="btnCast"></button>
         <button class="btn sm ghost" id="rules-open" data-i18n="rulesBtn"></button>
+        <details class="plan-session" id="plan-session">
+          <summary class="btn sm ghost" data-i18n="planSessionSummary"></summary>
+          <div class="plan-session-menu">
+            <div class="plan-session-status" id="plan-session-status"></div>
+            <div class="sr-only" id="plan-session-alert" role="status" aria-live="polite"></div>
+            <button class="btn sm primary" type="button" id="plan-resume" data-i18n="planResume"></button>
+            <button class="btn sm ghost" type="button" id="plan-new" data-i18n="planNew"></button>
+            <button class="btn sm ghost" type="button" id="plan-export" data-i18n="planExport"></button>
+            <label class="btn sm ghost plan-import-label" for="plan-import" data-i18n="planImport"></label>
+            <input class="sr-only" id="plan-import" type="file" accept="application/json,.json">
+          </div>
+        </details>
       </div>
     </div>
   </div>
@@ -107,6 +119,24 @@
   <section id="setup" class="hidden">
     <div class="setup-main">
 
+    <!-- Cluster-first plan overview. The current outcome and its next authoring
+         action precede the decorative canvas in source order. -->
+    <section class="cluster-shell card" id="cluster-shell" aria-labelledby="cluster-title">
+      <div class="cluster-shell-head">
+        <div>
+          <div class="learning-kicker" data-i18n="clusterKicker"></div>
+          <h2 id="cluster-title" data-i18n="clusterTitle"></h2>
+          <p class="cluster-intro" data-i18n="clusterIntro"></p>
+        </div>
+        <div class="cluster-total">
+          <span class="cluster-total-label" data-i18n="clusterTotalLabel"></span>
+          <strong id="cluster-total-score">0 / 100</strong>
+          <span id="cluster-total-state"></span>
+        </div>
+      </div>
+      <div class="plan-clusters" id="plan-clusters"></div>
+    </section>
+
     <!-- §1/§2 PLAN STAGE — setup becomes stage-first: the pre-dawn harbor + a command tray of
          physical decision objects. #plan-stage's canvas + local rAF are created by bootPlanStage()
          and DESTROYED by killPlanStage() (never merely hidden), on every screen transition. -->
@@ -134,11 +164,13 @@
 
     <!-- day selector: while a drawer is open it is covered — the drawer's own #dd-tabs
          header row carries day switching + whole-trip close (deep-check finding) -->
-    <div class="day-bar card">
-      <div class="day-bar-h" data-i18n="designTitle"></div>
-      <div id="day-select" class="day-select"></div>
-      <div id="tracker" class="tracker"></div>
-    </div>
+    <details class="day-bar card chapter-browser" id="chapter-browser">
+      <summary class="day-bar-h" data-i18n="chapterBrowserSummary"></summary>
+      <div class="chapter-browser-body">
+        <div id="day-select" class="day-select"></div>
+        <div id="tracker" class="tracker"></div>
+      </div>
+    </details>
 
     <!-- §4 "All settings" — the Phase-1 receipt rows, org, resources & spend cards remain COMPLETE
          here, collapsed by default; anything the tray does, the fallback can do. -->
@@ -216,6 +248,11 @@
           </div>
           <div class="dash-lbl" id="fd-arrows-lbl" data-i18n="fdArrowsLbl" style="margin-top:12px;"></div>
           <div class="fd-arrowlist" id="fd-arrowlist"></div>
+          <details class="fd-custody hidden" id="fd-custody">
+            <summary id="fd-custody-summary" data-i18n="custodySummary"></summary>
+            <p data-i18n="custodyHint"></p>
+            <div class="fd-custody-body" id="fd-custody-body"></div>
+          </details>
           <div class="planready" id="fd-ready"></div>
         </div>
       </div>
@@ -268,13 +305,24 @@
       </div>
 
       <div class="legend" id="legend"></div>
-      <div class="speedrow"><span class="muted2" data-i18n="speedLbl"></span>
-        <button class="spd" data-spd="0.5">0.5×</button>
-        <button class="spd on" data-spd="1">1×</button>
-        <button class="spd" data-spd="2">2×</button>
-        <button class="spd" data-spd="4">4×</button>
-        <button class="spd" data-spd="8">8×</button>
-      </div>
+      <details class="run-options" id="run-options">
+        <summary data-i18n="runOptionsSummary"></summary>
+        <div class="run-options-body">
+          <span class="sr-only" id="pace-switch-label" data-i18n="paceLabel"></span>
+          <div class="pace-switch" role="group" aria-labelledby="pace-switch-label">
+            <button class="pace on" id="pace-events" type="button" data-pace="events" data-i18n="paceEvents"></button>
+            <button class="pace" id="pace-full" type="button" data-pace="full" data-i18n="paceFull"></button>
+          </div>
+          <p class="muted2" id="pace-description" data-i18n="paceEventsDesc"></p>
+          <div class="speedrow" role="group" aria-labelledby="speed-label"><span class="muted2" id="speed-label" data-i18n="speedLbl"></span>
+            <button class="spd" data-spd="0.5" aria-pressed="false">0.5×</button>
+            <button class="spd on" data-spd="1" aria-pressed="true">1×</button>
+            <button class="spd" data-spd="2" aria-pressed="false">2×</button>
+            <button class="spd" data-spd="4" aria-pressed="false">4×</button>
+            <button class="spd" data-spd="8" aria-pressed="false">8×</button>
+          </div>
+        </div>
+      </details>
 
       <div class="controls">
         <button class="btn" id="btn-pause" type="button"></button>
@@ -292,7 +340,7 @@
         <div class="dash-head"><span class="dash-day" id="dash-day"></span><span class="dash-phase" id="dash-phase"></span></div>
         <div class="dash-sec">
           <div class="dash-lbl" data-i18n="railLbl"></div>
-          <div class="bigreadout"><span id="dash-ready">100</span><span class="rail-of">/ 100</span><span class="rail-grade" id="dash-grade"></span></div>
+          <div class="bigreadout"><span id="dash-ready">100</span><span class="rail-of">/ 100</span></div>
           <div class="rail-rows" id="rail-run"></div>
         </div>
         <div class="dash-sec hidden" id="dash-fd">
@@ -338,7 +386,7 @@
     <div class="card report">
       <div class="grade-wrap">
         <div class="muted" id="r-grade-label" data-i18n="gradeLbl"></div>
-        <div class="grade" id="r-grade">B</div>
+        <div class="grade" id="r-grade">0 / 100</div>
         <div class="r-badge" id="r-badge"></div>
         <div class="verdict" id="r-verdict"></div>
       </div>

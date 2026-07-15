@@ -52,7 +52,6 @@
   function persistAttempts() { try { localStorage.setItem(ATTEMPTS_KEY, JSON.stringify(learningAttempts.slice(0, 5))); } catch (e) { } }
   function learningNeedsPrediction() { return learningLevel === 'practice' || learningLevel === 'challenge'; }
   function learningHidesExact() { return learningNeedsPrediction() && !learningObserved; }
-  function challengeAutoFixLocked() { return learningLevel === 'challenge' && !learningObserved; }
 
   // detectors, in display order, mapped to their fix
   var DETS = ['safety', 'budgetAuth', 'info', 'report', 'fatigue', 'reserve', 'returnLogi', 'handoffTiming'];
@@ -68,13 +67,15 @@
   // detector happens to point at it.
   function dayStatus(seg) {
     var plan = currentPlan();
+    var trip = P.scoreTrip(plan);
     if (seg === 'all') {
-      var trip = P.scoreTrip(plan);
-      return { score: trip.total, grade: trip.grade, gaps: trip.atoms.filter(function (a) { return a.earned < a.maxPts; }).length,
-        clean: !!(trip.gate && trip.gate.clean) };
+      var allGaps = trip.atoms.filter(function (a) { return a.earned < a.maxPts; }).length;
+      var allMastered = trip.total === 100 && !!(trip.gate && trip.gate.clean) && allGaps === 0;
+      return { earned: trip.total, maxPts: 100, gaps: allGaps, clean: allMastered, mastered: allMastered };
     }
-    var sc = P.scoreDay(plan, seg), gaps = P.dayReadiness(plan, seg);
-    return { score: sc.score, grade: sc.grade, gaps: gaps.length, clean: !!sc.clean && gaps.length === 0 };
+    var b = trip.byBucket[seg] || { earned: 0, maxPts: 0 }, hints = P.dayReadiness(plan, seg);
+    return { earned: b.earned, maxPts: b.maxPts, gaps: hints.length, clean: b.earned === b.maxPts && hints.length === 0,
+      mastered: b.earned === b.maxPts && hints.length === 0 };
   }
   function dayGapCount(seg) { return dayStatus(seg).gaps; }
   // Rail/ledger bucket label (sb_* keys carry all 7 buckets incl. load/voyage since W2a)
@@ -121,6 +122,284 @@
   // schema that buildCfg folds into overrides.days[seg] (§20.3).
   function freshDayOv(seg) { return seg === 'fishday' ? { timing: {}, staffing: {}, handoffs: {} } : { placement: {}, handoffs: {} }; }
   var dayOv = { load: freshDayOv('load'), voyage: freshDayOv('voyage'), arrival: freshDayOv('arrival'), ops: freshDayOv('ops'), 'return': freshDayOv('return'), fishday: freshDayOv('fishday') };
+
+  // Versioned authoring persistence. Only Morning-plan state belongs here:
+  // Guided Live deliberately mutates the same in-memory stores to stage its
+  // lesson, so captureAuthoringState() reads morningSnap while Live is active.
+  // Imports are accepted only after a full structural/domain validation.
+  var PLAN_STORAGE_KEY = 'prs_authoring_plan', PLAN_LEGACY_KEYS = ['prs_authoring_plan_v1'];
+  var PLAN_KIND = 'ogasawara-rehearsal-plan', PLAN_VERSION = 1;
+  var savedPlanRecord = null, planSaveTimer = null, persistenceMuted = false, sessionNotice = '';
+  var AUTHORING_SEGS = ['load', 'voyage', 'arrival', 'ops', 'fishday', 'return'];
+  var SEAT_DEFAULTS = { owner: 'p01', pm: 'p02', siteLead: 'p03', budgetLead: 'p04', safetyLead: 'p05', logi: 'p06', comms: 'p07', specialist: 'p08' };
+
+  function plainObject(v) { return !!v && typeof v === 'object' && !Array.isArray(v) && (Object.getPrototypeOf(v) === Object.prototype || Object.getPrototypeOf(v) === null); }
+  function hasOnlyKeys(v, allowed, required) {
+    if (!plainObject(v)) return false;
+    var ks = Object.keys(v), i;
+    for (i = 0; i < ks.length; i++) if (allowed.indexOf(ks[i]) < 0) return false;
+    for (i = 0; i < (required || []).length; i++) if (!Object.prototype.hasOwnProperty.call(v, required[i])) return false;
+    return true;
+  }
+  function safeNum(v, lo, hi) { return typeof v === 'number' && isFinite(v) && v >= lo && v <= hi; }
+  function safeId(v) { return typeof v === 'string' && !Object.prototype.hasOwnProperty.call(Object.prototype, v) && ['__proto__', 'prototype', 'constructor'].indexOf(v) < 0 && /^[A-Za-z0-9_-]{1,100}$/.test(v); }
+  function jsonCopy(v) { return JSON.parse(JSON.stringify(v)); }
+  function setOf(arr, key) { var out = Object.create(null); (arr || []).forEach(function (x) { out[key ? x[key] : x] = true; }); return out; }
+
+  function planValidationDomain() {
+    var tpl = P.makeTemplate(), taskIds = {}, segTasks = {}, i;
+    AUTHORING_SEGS.forEach(function (seg) {
+      segTasks[seg] = setOf(P.tasksForSeg(tpl, seg), 'id');
+      Object.keys(segTasks[seg]).forEach(function (id) { taskIds[id] = true; });
+    });
+    return {
+      template: tpl, taskIds: taskIds, segTasks: segTasks,
+      people: setOf(tpl.participants, 'id'), organizers: setOf(tpl.participants.filter(function (p) { return p.company === 'co_aibos'; }), 'id'),
+      guests: setOf(tpl.guests || [], 'id'), careGuests: setOf((tpl.guests || []).filter(isVoyageCareGuest), 'id'), cards: setOf(tpl.infoCards || [], 'id'),
+      manifest: setOf(tpl.manifest || [], 'id'),
+      roles: setOf(['owner', 'pm', 'siteLead', 'budgetLead', 'safetyLead', 'logi', 'comms', 'specialist', 'chef']),
+      lines: setOf(tpl.budget && tpl.budget.lines || [], 'id'), resources: setOf(tpl.budget && tpl.budget.resources || [], 'id'),
+      channels: setOf(Object.keys(P.CHANNELS || {})), foodStrategies: setOf(P.DAY3_FOOD_STRATEGY_IDS || [])
+    };
+  }
+  function validLocalized(v) {
+    return hasOnlyKeys(v, ['en', 'jp']) && (!Object.prototype.hasOwnProperty.call(v, 'en') || (typeof v.en === 'string' && v.en.length <= 500)) &&
+      (!Object.prototype.hasOwnProperty.call(v, 'jp') || (typeof v.jp === 'string' && v.jp.length <= 500));
+  }
+  function validTrigger(v, domain) {
+    if (!hasOnlyKeys(v, ['type', 'taskId', 'value', 'leadMin'], ['type'])) return false;
+    if (['onTaskDone', 'beforeTaskStart', 'atMinute'].indexOf(v.type) < 0) return false;
+    if (v.taskId != null && !domain.taskIds[v.taskId]) return false;
+    if (v.value != null && !safeNum(v.value, -1440, 30000)) return false;
+    if (v.leadMin != null && !safeNum(v.leadMin, 0, 10080)) return false;
+    return v.type !== 'atMinute' || safeNum(v.value, -1440, 30000);
+  }
+  function validHandoff(v, domain) {
+    if (v === null) return true;
+    var keys = ['id', 'cardId', 'fromRoleId', 'fromTaskId', 'toRoleId', 'toTaskId', 'trigger', 'channel', 'ifLate', 'reworkKind', 'content',
+      'strategyId', 'pathId', 'relayRoleId', 'requiresHandoffId'];
+    if (!hasOnlyKeys(v, keys, ['cardId', 'fromRoleId', 'fromTaskId', 'toRoleId', 'toTaskId', 'trigger', 'channel'])) return false;
+    if (v.id != null && !safeId(v.id)) return false;
+    if (!domain.cards[v.cardId] || !domain.roles[v.fromRoleId] || !domain.roles[v.toRoleId] || !domain.taskIds[v.fromTaskId] || !domain.taskIds[v.toTaskId]) return false;
+    if (!validTrigger(v.trigger, domain) || !domain.channels[v.channel]) return false;
+    if (v.ifLate != null && ['idle', 'assume'].indexOf(v.ifLate) < 0) return false;
+    if (v.reworkKind != null && typeof v.reworkKind !== 'string') return false;
+    if (v.strategyId != null && !domain.foodStrategies[v.strategyId]) return false;
+    if (v.pathId != null && !safeId(v.pathId)) return false;
+    if (v.relayRoleId != null && !domain.roles[v.relayRoleId]) return false;
+    if (v.requiresHandoffId != null && !safeId(v.requiresHandoffId)) return false;
+    return v.content == null || validLocalized(v.content);
+  }
+  function validMap(v, keySet, check) {
+    if (!plainObject(v)) return false;
+    var ks = Object.keys(v);
+    for (var i = 0; i < ks.length; i++) if ((keySet && !keySet[ks[i]]) || !check(v[ks[i]], ks[i])) return false;
+    return true;
+  }
+  function validDayState(v, seg, domain) {
+    var tasks = domain.segTasks[seg];
+    if (seg === 'fishday') {
+      if (!hasOnlyKeys(v, ['timing', 'staffing', 'handoffs'], ['timing', 'staffing', 'handoffs'])) return false;
+      if (!validMap(v.timing, tasks, function (x) { return hasOnlyKeys(x, ['startMin', 'durMin'], ['startMin', 'durMin']) && safeNum(x.startMin, -1440, 30000) && safeNum(x.durMin, 1, 10080); })) return false;
+      if (!validMap(v.staffing, tasks, function (x) { return Array.isArray(x) && x.length <= 20 && x.every(function (pid) { return !!domain.people[pid]; }); })) return false;
+    } else {
+      if (!hasOnlyKeys(v, ['placement', 'handoffs'], ['placement', 'handoffs'])) return false;
+      if (!validMap(v.placement, tasks, function (x) {
+        return x === null || (hasOnlyKeys(x, ['startMin', 'durMin', 'assignedIds', 'carries'], ['startMin', 'durMin', 'assignedIds']) && safeNum(x.startMin, -1440, 30000) &&
+          safeNum(x.durMin, 1, 10080) && Array.isArray(x.assignedIds) && x.assignedIds.length <= 20 && x.assignedIds.every(function (pid) { return !!domain.people[pid]; }) &&
+          (x.carries == null || (Array.isArray(x.carries) && x.carries.length <= 50 && x.carries.every(function (id) { return !!domain.manifest[id]; }) && (new Set(x.carries)).size === x.carries.length)));
+      })) return false;
+    }
+    var handoffsValid = validMap(v.handoffs, null, function (x, id) {
+      return safeId(id) && validHandoff(x, domain) && (x === null || ((x.id == null || x.id === id) && tasks[x.fromTaskId] && tasks[x.toTaskId]));
+    });
+    if (!handoffsValid) return false;
+    // Relay prerequisites are data, not executable references: keep them in
+    // this same segment/map, reject self-links, and require the same recipe.
+    return Object.keys(v.handoffs).every(function (id) {
+      var h = v.handoffs[id]; if (!h) return true;
+      if (h.relayRoleId != null && h.relayRoleId !== h.fromRoleId && h.relayRoleId !== h.toRoleId) return false;
+      if (h.requiresHandoffId == null) return true;
+      var req = v.handoffs[h.requiresHandoffId];
+      // A learner may deliberately delete or not yet draw the prerequisite;
+      // that incomplete route is valid authoring state and must survive Resume.
+      // When the dependency is present, however, it must stay in this segment
+      // map and belong to the same recipe.
+      return h.requiresHandoffId !== id && (!req || !h.strategyId || req.strategyId === h.strategyId);
+    });
+  }
+  function validateAuthoringState(v) {
+    var domain = planValidationDomain(), fixedKeys = Object.keys(fixed), seatKeys = Object.keys(SEAT_DEFAULTS), i;
+    if (!hasOnlyKeys(v, ['fixed', 'mcOv', 'dayOv', 'orgOv', 'buddyOv', 'daySel'], ['fixed', 'mcOv', 'dayOv', 'orgOv', 'buddyOv', 'daySel'])) return null;
+    if (AUTHORING_SEGS.concat(['all']).indexOf(v.daySel) < 0) return null;
+    if (!hasOnlyKeys(v.fixed, fixedKeys, fixedKeys) || fixedKeys.some(function (k) { return typeof v.fixed[k] !== 'boolean'; })) return null;
+    if (!hasOnlyKeys(v.mcOv, ['lines', 'resources', 'reserve'], ['lines', 'resources', 'reserve'])) return null;
+    if (!(v.mcOv.reserve === null || safeNum(v.mcOv.reserve, 0, 1000000000))) return null;
+    if (!validMap(v.mcOv.lines, domain.lines, function (x) {
+      if (!hasOnlyKeys(x, ['approverRoleId', 'payMethod'])) return false;
+      if (x.approverRoleId != null && !domain.roles[x.approverRoleId]) return false;
+      return x.payMethod == null || ['cash', 'card', 'invoice'].indexOf(x.payMethod) >= 0;
+    })) return null;
+    if (!validMap(v.mcOv.resources, domain.resources, function (x) { return hasOnlyKeys(x, ['planned'], ['planned']) && safeNum(x.planned, 0, 1000000000); })) return null;
+    if (!hasOnlyKeys(v.dayOv, AUTHORING_SEGS, AUTHORING_SEGS)) return null;
+    for (i = 0; i < AUTHORING_SEGS.length; i++) if (!validDayState(v.dayOv[AUTHORING_SEGS[i]], AUTHORING_SEGS[i], domain)) return null;
+    if (!hasOnlyKeys(v.orgOv, seatKeys, seatKeys)) return null;
+    var seenSeats = {};
+    for (i = 0; i < seatKeys.length; i++) {
+      var pid = v.orgOv[seatKeys[i]];
+      if (!domain.organizers[pid] || seenSeats[pid]) return null;
+      seenSeats[pid] = true;
+    }
+    if (!validMap(v.buddyOv, domain.careGuests, function (pid2) { return pid2 === null || !!domain.organizers[pid2]; })) return null;
+    var loads = {};
+    Object.keys(v.buddyOv).forEach(function (gid) { var bp = v.buddyOv[gid]; if (bp) loads[bp] = (loads[bp] || 0) + 1; });
+    if (Object.keys(loads).some(function (p2) { return loads[p2] > 2; })) return null;
+    return jsonCopy(v);
+  }
+  function validatePlanEnvelope(v) {
+    v = migratePlanEnvelope(v); if (!v) return null;
+    if (!hasOnlyKeys(v, ['kind', 'version', 'savedAt', 'state'], ['kind', 'version', 'savedAt', 'state'])) return null;
+    if (v.kind !== PLAN_KIND || v.version !== PLAN_VERSION || !safeNum(v.savedAt, 0, 9007199254740991)) return null;
+    var state = validateAuthoringState(v.state); if (!state) return null;
+    return { kind: PLAN_KIND, version: PLAN_VERSION, savedAt: v.savedAt, state: state };
+  }
+  function migratePlanEnvelope(v) {
+    // Explicit identity migration for the first schema. Future versions add a
+    // case here; unknown versions always fail closed instead of being guessed.
+    if (plainObject(v) && v.kind === PLAN_KIND && v.version === 1) return v;
+    return null;
+  }
+  function captureAuthoringState() {
+    var src = (appMode === 'live' && morningSnap) ? morningSnap : { fixed: fixed, mcOv: mcOv, dayOv: dayOv, orgOv: orgOv, buddyOv: buddyOv, daySel: daySel };
+    return jsonCopy({ fixed: src.fixed, mcOv: src.mcOv, dayOv: src.dayOv, orgOv: src.orgOv, buddyOv: src.buddyOv || {}, daySel: src.daySel });
+  }
+  function applyAuthoringState(state) {
+    var clean = validateAuthoringState(state); if (!clean) return false;
+    persistenceMuted = true;
+    fixed = clean.fixed; mcOv = clean.mcOv; dayOv = clean.dayOv; orgOv = clean.orgOv; buddyOv = clean.buddyOv; daySel = clean.daySel;
+    placingChip = null; morningSnap = null; lastFoodStrategyApplied = null;
+    persistenceMuted = false;
+    return true;
+  }
+  function planEnvelopeNow() { return { kind: PLAN_KIND, version: PLAN_VERSION, savedAt: Date.now(), state: captureAuthoringState() }; }
+  function readSavedPlan() {
+    try {
+      var raw = localStorage.getItem(PLAN_STORAGE_KEY), legacyKey = null;
+      if (!raw) for (var i = 0; i < PLAN_LEGACY_KEYS.length; i++) {
+        raw = localStorage.getItem(PLAN_LEGACY_KEYS[i]); if (raw) { legacyKey = PLAN_LEGACY_KEYS[i]; break; }
+      }
+      if (!raw) return null;
+      var parsed = validatePlanEnvelope(JSON.parse(raw));
+      if (!parsed) sessionNotice = 'corrupt';
+      else if (legacyKey) {
+        // A valid legacy record remains resumable even when quota/security
+        // policy prevents opportunistic key migration. Migration failure is a
+        // save warning, not evidence that the record itself is corrupt.
+        try { localStorage.setItem(PLAN_STORAGE_KEY, JSON.stringify(parsed)); localStorage.removeItem(legacyKey); }
+        catch (migrationError) { sessionNotice = 'save-error'; }
+      }
+      return parsed;
+    } catch (e) { sessionNotice = 'corrupt'; return null; }
+  }
+  function writeSavedPlan() {
+    planSaveTimer = null;
+    if (persistenceMuted || appMode !== 'morning') return;
+    try {
+      var rec = planEnvelopeNow(); localStorage.setItem(PLAN_STORAGE_KEY, JSON.stringify(rec)); savedPlanRecord = rec;
+      renderPlanSessionChrome(false);
+    } catch (e) { sessionNotice = 'save-error'; renderPlanSessionChrome(true); }
+  }
+  function queuePlanSave() {
+    if (persistenceMuted || appMode !== 'morning') return;
+    if (planSaveTimer) clearTimeout(planSaveTimer);
+    planSaveTimer = setTimeout(writeSavedPlan, 500);
+  }
+  function flushPlanSave() {
+    if (!planSaveTimer) return;
+    clearTimeout(planSaveTimer); planSaveTimer = null; writeSavedPlan();
+  }
+  function sessionTime(ms) {
+    try { return new Intl.DateTimeFormat(L === 'ja' ? 'ja-JP' : 'en', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(ms)); }
+    catch (e) { return new Date(ms).toLocaleString(); }
+  }
+  function announceSession(msg) {
+    var el = $('plan-session-alert'); if (!el) return;
+    el.textContent = ''; setTimeout(function () { el.textContent = msg; }, 0);
+  }
+  function renderPlanSessionChrome(announce) {
+    var status = $('plan-session-status'), resume = $('plan-resume'); if (!status || !resume) return;
+    var t = T(), msg;
+    if (sessionNotice === 'corrupt') msg = t.planCorrupt;
+    else if (sessionNotice === 'save-error') msg = t.planSaveError;
+    else if (sessionNotice === 'imported') msg = t.planImported;
+    else if (savedPlanRecord) msg = t.planSaved(sessionTime(savedPlanRecord.savedAt));
+    else msg = t.planNoSaved;
+    status.textContent = msg;
+    resume.disabled = !savedPlanRecord;
+    resume.setAttribute('aria-disabled', resume.disabled ? 'true' : 'false');
+    if (announce) announceSession(msg);
+  }
+  function resumeSavedPlan() {
+    if (!savedPlanRecord || !applyAuthoringState(savedPlanRecord.state)) return;
+    sessionNotice = '';
+    var d = $('plan-session'); if (d) d.open = false;
+    enterMode('morning'); collapsePlanningExtras(); focusPlannerHome();
+  }
+  function resetAuthoringState() {
+    persistenceMuted = true;
+    fixed = { setSafety: false, grantAuth: false, shareInfo: false, setReport: false, rebalance: false, fixReserve: false, setReturn: false, fixHandoffs: false };
+    mcReset(); fdReset(); orgSeatReset(); buddyReset(); daySel = 'load'; placingChip = null; morningSnap = null; lastFoodStrategyApplied = null;
+    persistenceMuted = false;
+  }
+  function newRehearsal() {
+    if ((savedPlanRecord || appMode === 'morning') && !window.confirm(T().planResetConfirm)) return;
+    if (planSaveTimer) { clearTimeout(planSaveTimer); planSaveTimer = null; }
+    try {
+      localStorage.removeItem(PLAN_STORAGE_KEY);
+      PLAN_LEGACY_KEYS.forEach(function (key) { localStorage.removeItem(key); });
+    } catch (e) {
+      sessionNotice = 'save-error'; renderPlanSessionChrome(true); return;
+    }
+    savedPlanRecord = null; sessionNotice = '';
+    resetAuthoringState();
+    var d = $('plan-session'); if (d) d.open = false;
+    enterMode('morning'); collapsePlanningExtras(); queuePlanSave(); focusPlannerHome();
+    announceSession(T().planNoSaved);
+  }
+  function exportAuthoringPlan() {
+    var rec = planEnvelopeNow(), blob = new Blob([JSON.stringify(rec, null, 2)], { type: 'application/json' });
+    var url = URL.createObjectURL(blob), a = document.createElement('a');
+    a.href = url; a.download = 'ogasawara-rehearsal-plan-v' + PLAN_VERSION + '.json';
+    document.body.appendChild(a); a.click(); a.parentNode.removeChild(a); setTimeout(function () { URL.revokeObjectURL(url); }, 0);
+  }
+  function rejectPlanImport() {
+    sessionNotice = ''; renderPlanSessionChrome(false); announceSession(T().planImportInvalid);
+  }
+  function importAuthoringPlan(file) {
+    if (!file || file.size > 1024 * 1024) { rejectPlanImport(); return; }
+    var reader = new FileReader();
+    reader.onerror = rejectPlanImport;
+    reader.onload = function () {
+      var rec = null;
+      try { rec = validatePlanEnvelope(JSON.parse(String(reader.result || ''))); } catch (e) { rec = null; }
+      if (!rec) { rejectPlanImport(); return; }
+      rec.savedAt = Date.now();
+      // Commit the validated candidate before touching the current authoring
+      // session. Quota/security failures therefore leave both the visible plan
+      // and savedPlanRecord exactly as they were; an import is never half-applied.
+      try { localStorage.setItem(PLAN_STORAGE_KEY, JSON.stringify(rec)); }
+      catch (e2) { sessionNotice = 'save-error'; renderPlanSessionChrome(true); return; }
+      // validatePlanEnvelope already returned a sanitized deep copy, so this
+      // cannot fail unless the validator/applicator contract is broken.
+      if (!applyAuthoringState(rec.state)) {
+        sessionNotice = 'save-error'; renderPlanSessionChrome(true); return;
+      }
+      savedPlanRecord = rec; sessionNotice = 'imported';
+      var d = $('plan-session'); if (d) d.open = false;
+      enterMode('morning'); collapsePlanningExtras(); renderPlanSessionChrome(true); focusPlannerHome();
+    };
+    reader.readAsText(file);
+  }
   // Reset ALL four days (not just fishday) — "Reset to gappy" / "Auto-fix all" must clear coarse-day
   // deck authoring too, or a hand-authored arrival/ops/return arrangement would survive underneath a
   // reset button that visibly claims to start over.
@@ -208,6 +487,7 @@
   }
 
   var sim = null, timer = null, paused = false, BASE_TICK = 520, speedMult = 1, lastResult = null;
+  var runPacing = 'events';
   var wholeRun = null;                    // authored Load→…→Return orchestration for Whole Trip
   var appMode = 'live', runFn = null, livePausedForFix = false, liveState = null;
   var finishTimer = null;                  // finish()'s 700ms report reveal — cleared on any screen change
@@ -221,6 +501,38 @@
   var pawnCardInvoker = null;              // element focus is restored to when the popover closes
   var RM = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : { matches: false };
   function tickMs() { return Math.round(BASE_TICK / speedMult); }
+  function updatePacingControls() {
+    ['events', 'full'].forEach(function (mode) {
+      var b = $('pace-' + mode); if (!b) return;
+      var on = runPacing === mode; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    var desc = $('pace-description'); if (desc) desc.textContent = runPacing === 'events' ? T().paceEventsDesc : T().paceFullDesc;
+  }
+  function updateSpeedControls() {
+    document.querySelectorAll('.spd').forEach(function (b) {
+      var on = parseFloat(b.getAttribute('data-spd')) === speedMult;
+      b.classList.toggle('on', on); b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+  }
+  function setRunPacing(mode) {
+    if (['events', 'full'].indexOf(mode) < 0 || mode === runPacing) return;
+    runPacing = mode; updatePacingControls(); restartTimer();
+  }
+  function runBeatSignature(s) {
+    var tasks = (s.tasks || []).map(function (task) { return task.id + ':' + task.state + ':' + (task.problem || ''); }).join('|');
+    var problems = (s.problems || []).map(function (p) { return p.id + ':' + p.severity; }).join('|');
+    var due = 0;
+    if (typeof anim !== 'undefined' && anim && anim.motes) for (var i = 0; i < anim.motes.length; i++) if (anim.motes[i].send <= s.clockMin) due++;
+    return [s.segment, tasks, problems, due, s.paused ? (s.checkpoint && s.checkpoint.id || 'paused') : '', s.bannerOn ? 1 : 0, s.finished || ''].join('~');
+  }
+  function advanceAuthoredClock(s) {
+    if (runPacing === 'full') { P.tick(s); return; }
+    var before = runBeatSignature(s), guard = 0;
+    do {
+      P.tick(s); guard++;
+      if (s.paused || s.finished || runBeatSignature(s) !== before) break;
+    } while (guard < 500);
+  }
   function clearFinishTimer() { if (finishTimer) { clearTimeout(finishTimer); finishTimer = null; } }
 
   var BUB = { confused: '❓', meeting: '💬', waiting: '⏳', tired: '😣', onFire: '🔥', resolved: '✅', working: '', idle: '', waitInfo: '⏳', rework: '🔁' };
@@ -295,8 +607,17 @@
     document.querySelectorAll('[data-i18n]').forEach(function (el) { var v = T()[el.getAttribute('data-i18n')]; if (typeof v === 'string') el.textContent = v; });
     document.querySelectorAll('[data-i18n-placeholder]').forEach(function (el) { var v = T()[el.getAttribute('data-i18n-placeholder')]; if (typeof v === 'string') el.setAttribute('placeholder', v); });
     $('lang-en').classList.toggle('on', L === 'en'); $('lang-ja').classList.toggle('on', L === 'ja');
+    $('lang-en').setAttribute('aria-pressed', L === 'en' ? 'true' : 'false'); $('lang-ja').setAttribute('aria-pressed', L === 'ja' ? 'true' : 'false');
+    $('modesw').setAttribute('aria-label', T().modeSwitchLabel);
+    ['live', 'morning'].forEach(function (mode) {
+      var b = $('mode-' + mode), on = appMode === mode;
+      b.classList.toggle('on', on); b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    updateSpeedControls();
     renderLearningChrome();
+    renderPlanSessionChrome(false);
     updateRunButtons();   // keep the pause/guests/drawer imperative labels (and aria-labels) in sync with the language
+    updatePacingControls();
     paintSetup(); buildRules(); buildLegend();
     if (!$('intro').classList.contains('hidden')) { renderIntro(); bootVignette(vigLastAuto); }   // cast grid re-render + vignette re-boot (§W4 lifecycle) in the new language
     if (!$('setup').classList.contains('hidden')) {
@@ -351,19 +672,198 @@
   // =========================================================================
   // SETUP
   // =========================================================================
-  function paintSetup() { buildDaySelect(); buildCanvas(); buildOrg(); buildBuddyCard(); buildTimeline(); buildMissionControl(); buildEditors(); buildDayGrid(); updatePlanUI(); }
+  function paintSetup() { buildPlanClusters(); buildDaySelect(); buildCanvas(); buildOrg(); buildBuddyCard(); buildTimeline(); buildMissionControl(); buildEditors(); buildDayGrid(); updatePlanUI(); }
 
   function buildDaySelect() {
     var box = $('day-select'); if (!box) return;
+    box.setAttribute('role', 'group'); box.setAttribute('aria-label', T().chapterBrowserSummary);
     var opts = ['load', 'voyage', 'arrival', 'ops', 'fishday', 'return', 'all'];   // chronological display order
     box.innerHTML = opts.map(function (seg) {
       var st = dayStatus(seg), n = st.gaps, clean = st.clean;
-      if (learningHidesExact()) return '<button class="day-btn' + (seg === daySel ? ' on' : '') + '" data-day="' + seg + '">' +
+      if (learningHidesExact()) return '<button class="day-btn' + (seg === daySel ? ' on' : '') + '" data-day="' + seg + '" aria-pressed="' + (seg === daySel ? 'true' : 'false') + '">' +
         '<span class="db-name">' + dayLabel(seg) + '</span><span class="db-gaps pending">' + T().learningProjectionHidden + '</span></button>';
-      var gapTxt = clean ? '✓' : n + ' ' + (n === 1 ? T().fixGapLbl : T().fixGapLblN);
-      return '<button class="day-btn' + (seg === daySel ? ' on' : '') + '" data-day="' + seg + '">' +
+      var gapTxt = clean ? T().clusterMastered : n + ' ' + (n === 1 ? T().fixGapLbl : T().fixGapLblN);
+      return '<button class="day-btn' + (seg === daySel ? ' on' : '') + '" data-day="' + seg + '" aria-pressed="' + (seg === daySel ? 'true' : 'false') + '">' +
         '<span class="db-name">' + dayLabel(seg) + '</span>' +
-        '<span class="db-gaps ' + (clean ? 'ok' : 'bad') + '">' + st.score + '/' + st.grade + ' · ' + gapTxt + '</span></button>';
+        '<span class="db-gaps ' + (clean ? 'ok' : 'bad') + '">' + st.earned + ' / ' + st.maxPts + ' · ' + gapTxt + '</span></button>';
+    }).join('');
+  }
+
+  var faultTargets = {}, faultTargetSeq = 0, openClusterId = null, lastFaultTarget = null;
+  function registerFaultTarget(target) {
+    var id = 'ft-' + (++faultTargetSeq);
+    faultTargets[id] = target && typeof target === 'object' ? jsonCopy(target) : {};
+    return id;
+  }
+  function fallbackPlanClusters(plan, trip) {
+    return LEDGER_BUCKETS.map(function (id) {
+      var b = trip.byBucket[id] || { earned: 0, maxPts: 0 };
+      var roots = [];
+      if (id !== 'frame') (P.dayReadiness(plan, id) || []).slice(0, 1).forEach(function (h) {
+        roots.push({ id: id + '-fallback', lostPoints: b.maxPts - b.earned, readiness: [h], taskIds: h.taskId ? [h.taskId] : [], cardIds: h.cardId ? [h.cardId] : [],
+          editorTarget: { kind: h.cardId ? 'handoff' : 'task', segment: id, taskId: h.taskId || null, cardId: h.cardId || null } });
+      });
+      if (!roots.length && b.earned < b.maxPts) {
+        var atom = (trip.atoms || []).filter(function (a) { return a.bucket === id && a.earned < a.maxPts; })[0];
+        if (atom) roots.push({ id: atom.id, lostPoints: atom.maxPts - atom.earned, atomIds: [atom.id], reasonKeys: atom.reasonKey ? [atom.reasonKey] : [],
+          editorTarget: atom.itemRef || { kind: id === 'frame' ? 'detector' : 'task', segment: id } });
+      }
+      return { id: id, earned: b.earned, maxPts: b.maxPts, lostPoints: b.maxPts - b.earned, mastered: b.earned === b.maxPts, rootIssues: roots };
+    });
+  }
+  function planClustersFor(plan, trip) {
+    if (typeof P.planClusters === 'function') {
+      try {
+        var raw = P.planClusters(plan);
+        if (Array.isArray(raw) && raw.length) return raw;
+      } catch (e) { }
+    }
+    return fallbackPlanClusters(plan, trip);
+  }
+  function rootIssueText(root, plan, seg, trip) {
+    var i, value, atom, entity;
+    if (root.detectorIds && root.detectorIds[0] && typeof T()['p_' + root.detectorIds[0] + '_title'] === 'string') return T()['p_' + root.detectorIds[0] + '_title'];
+    if (root.readiness && root.readiness.length) return readinessText(plan, seg, root.readiness[0]);
+    if (root.kind === 'manifest' && root.itemIds && root.itemIds[0]) {
+      entity = byId(plan.manifest || [], root.itemIds[0]); return T().rhCarryGap(entity ? nm(entity.name) : root.itemIds[0]);
+    }
+    if (root.kind === 'guest' && root.guestIds && root.guestIds[0]) {
+      entity = byId(plan.guests || [], root.guestIds[0]); return T().clusterGuestIssue(entity ? nm(entity.name) : root.guestIds[0]);
+    }
+    if (root.kind === 'budget' && root.lineIds && root.lineIds[0]) {
+      entity = byId(plan.budget && plan.budget.lines || [], root.lineIds[0]); return T().clusterBudgetIssue(entity ? nm(entity.name) : root.lineIds[0]);
+    }
+    if (root.kind === 'card' && root.cardIds && root.cardIds[0]) {
+      entity = byId(plan.infoCards || [], root.cardIds[0]); return T().clusterCardIssue(entity ? nm(entity.name) : root.cardIds[0]);
+    }
+    if (root.taskIds && root.taskIds[0]) {
+      entity = byId(P.tasksForSeg(plan, seg) || [], root.taskIds[0]) || byId(plan.tasks || [], root.taskIds[0]);
+      if (entity) return T().clusterTaskIssue(nm(entity.name));
+    }
+    for (i = 0; i < (root.reasonKeys || []).length; i++) {
+      value = T()[root.reasonKeys[i]];
+      if (typeof value === 'string') return value;
+    }
+    for (i = 0; i < (root.atomIds || []).length; i++) {
+      atom = (trip.atoms || []).filter(function (a) { return a.id === root.atomIds[i]; })[0];
+      if (atom) return ledgerReason(atom);
+    }
+    return T().clusterRootFallback;
+  }
+  function rootConsequenceText(root) {
+    var touched = {}, fields = ['taskIds', 'cardIds', 'roleIds', 'itemIds', 'guestIds', 'handoffIds'];
+    fields.forEach(function (f) { (root[f] || []).forEach(function (id) { touched[f + ':' + id] = true; }); });
+    var count = Object.keys(touched).length, lost = Math.max(0, Number(root.lostPoints) || 0);
+    var consequence = root.consequenceKey && T()[root.consequenceKey];
+    return [typeof consequence === 'string' ? consequence : '', count ? T().clusterConsequence(count) : '', lost ? T().clusterLostPoints(lost) : ''].filter(Boolean).join(' · ');
+  }
+  function normalizedEditorTarget(root, clusterId) {
+    var target = root && root.editorTarget && typeof root.editorTarget === 'object' ? jsonCopy(root.editorTarget) : {};
+    if (!target.segment && clusterId !== 'frame') target.segment = clusterId;
+    if (!target.taskId && root && root.taskIds && root.taskIds[0]) target.taskId = root.taskIds[0];
+    if (!target.cardId && root && root.cardIds && root.cardIds[0]) target.cardId = root.cardIds[0];
+    if (!target.handoffId && root && root.handoffIds && root.handoffIds[0]) target.handoffId = root.handoffIds[0];
+    return target;
+  }
+  var FOOD_STRATEGY_HANDOFF_IDS = ['h_food', 'h_food_relay_intake', 'h_food_relay_delivery', 'h_food_primary_radio', 'h_food_backup_phone'];
+  var FOOD_STRATEGY_KEY = { 'direct-fast': 'Direct', 'delegated-relay': 'Relay', 'redundant-paths': 'Redundant' };
+  var lastFoodStrategyApplied = null;
+  function foodStrategySupported() {
+    return Array.isArray(P.DAY3_FOOD_STRATEGY_IDS) && typeof P.applyDay3FoodStrategy === 'function' && typeof P.day3FoodStrategy === 'function';
+  }
+  function foodStrategyName(id) { var key = FOOD_STRATEGY_KEY[id]; return key ? T()['foodStrategy' + key] : id; }
+  function foodStrategyDescription(id) { var key = FOOD_STRATEGY_KEY[id]; return key ? T()['foodStrategy' + key + 'Desc'] : ''; }
+  function foodChannelName(id) {
+    var key = { faceToFace: 'chFaceToFace', radio: 'chRadio', phone: 'chPhone', chat: 'chChat', board: 'chBoard' }[id];
+    var label = key && T()[key];
+    return typeof label === 'string' ? label.replace(/\s*[（(].*$/, '') : id;
+  }
+  function projectFoodStrategy(id) {
+    if (!foodStrategySupported() || P.DAY3_FOOD_STRATEGY_IDS.indexOf(id) < 0) return null;
+    try {
+      var cfg = P.applyDay3FoodStrategy(buildCfg(), id);
+      return P.day3FoodStrategy(P.mergePlan(cfg));
+    } catch (e) { return null; }
+  }
+  function foodStrategyChoicesHTML(plan, concealed) {
+    if (!foodStrategySupported()) return '';
+    var current = null;
+    try { current = P.day3FoodStrategy(plan); } catch (e) { current = null; }
+    var currentId = current && current.strategyId;
+    var cards = P.DAY3_FOOD_STRATEGY_IDS.map(function (id) {
+      var selected = id === currentId;
+      var projection = selected && current ? current : projectFoodStrategy(id);
+      var currentComplete = !!(selected && current && current.rootCleared && current.recipeComplete && !current.degraded), route = '';
+      if (projection && Array.isArray(projection.paths)) route = projection.paths.map(function (path) {
+        return (path.channels || []).map(foodChannelName).join(' → ');
+      }).join(' + ');
+      var metrics = concealed ? '<div class="food-strategy-locked">' + esc(T().clusterProjectionHidden) + '</div>' : (projection ?
+        '<div class="food-strategy-metrics"><span>' + esc(T().foodStrategyTiming(hhmm(projection.arrivalMin), projection.marginMin == null ? '—' : projection.marginMin)) + '</span>' +
+        '<span>' + esc(T().foodStrategyWork(projection.transmissions, projection.relaySteps)) + '</span>' +
+        '<span>' + esc(T().foodStrategyPaths(projection.onTimePathCount, projection.pathCount, projection.singlePathFailureTolerance)) + '</span>' +
+        '<span>' + esc(T().foodStrategyChannels(route || '—')) + '</span></div>' +
+        '<div class="food-strategy-effect">' + (selected && projection.degraded ? '<span class="bad">' + esc(T().foodStrategyDegraded) + '</span>' : '') + '<span class="' + (projection.rootCleared ? 'ok' : 'bad') + '">' +
+        esc(projection.rootCleared ? T().foodStrategyRootCleared : T().foodStrategyRootOpen) + '</span><span>' +
+        esc(T().foodStrategyScore(projection.wholePlanScore, projection.clusterEarned, projection.clusterMaxPts)) + '</span></div>' : '');
+      return '<article role="listitem" class="food-strategy-card' + (selected ? ' current' : '') + '" data-food-card="' + esc(id) + '"' + (selected ? ' aria-current="true"' : '') + '>' +
+        '<h4 tabindex="-1">' + esc(foodStrategyName(id)) + '</h4><p>' + esc(foodStrategyDescription(id)) + '</p>' + metrics +
+        '<button type="button" class="btn sm ' + (currentComplete ? 'ghost' : 'primary') + ' food-strategy-apply" data-food-strategy="' + esc(id) + '"' +
+        (currentComplete ? ' disabled aria-disabled="true"' : '') + '>' + esc(currentComplete ? T().foodStrategyCurrent : T().foodStrategyApply) + '</button></article>';
+    }).join('');
+    var applied = lastFoodStrategyApplied ? '<p class="food-strategy-applied" role="status">' + esc(T().foodStrategyApplied(foodStrategyName(lastFoodStrategyApplied))) + '</p>' : '';
+    return '<section class="food-strategy-panel" aria-labelledby="food-strategy-title"><div class="food-strategy-head"><span>' +
+      esc(T().foodStrategyKicker) + '</span><h3 id="food-strategy-title">' + esc(T().foodStrategyTitle) + '</h3><p>' + esc(T().foodStrategyIntro) + '</p></div>' +
+      '<div class="food-strategy-grid" role="list">' + cards + '</div>' + applied + '</section>';
+  }
+  function applyFoodStrategyChoice(id) {
+    if (!foodStrategySupported() || P.DAY3_FOOD_STRATEGY_IDS.indexOf(id) < 0 || appMode !== 'morning') return;
+    var cfg;
+    try { cfg = P.applyDay3FoodStrategy(buildCfg(), id); } catch (e) { return; }
+    var hs = cfg && cfg.overrides && cfg.overrides.handoffs; if (!plainObject(hs)) return;
+    // Commit only the five handoff primitives owned by this explicit choice.
+    // Existing unrelated arrows and all other planning decisions remain intact.
+    FOOD_STRATEGY_HANDOFF_IDS.forEach(function (hid) {
+      dayOv.fishday.handoffs[hid] = Object.prototype.hasOwnProperty.call(hs, hid) ? jsonCopy(hs[hid]) : null;
+    });
+    openClusterId = 'fishday'; lastFoodStrategyApplied = id; paintSetup();
+    var focusChoice = function () {
+      var heading = document.querySelector('.food-strategy-card.current h4'); if (heading) focusPlanningTarget(heading);
+    };
+    if (RM.matches) focusChoice(); else setTimeout(focusChoice, 80);
+  }
+  function buildPlanClusters() {
+    var box = $('plan-clusters'), shell = $('cluster-shell'); if (!box || !shell) return;
+    var existing = box.querySelector('.plan-cluster[open]');
+    if (existing) openClusterId = existing.getAttribute('data-cluster');
+    else if (box.children.length && openClusterId !== null) openClusterId = '';
+    faultTargets = {}; faultTargetSeq = 0;
+    var plan = currentPlan(), trip = P.scoreTrip(plan), clusters = planClustersFor(plan, trip), concealed = learningHidesExact();
+    var total = $('cluster-total-score'), state = $('cluster-total-state'), totalWrap = total && total.parentNode;
+    if (total) total.textContent = concealed ? '— / 100' : trip.total + ' / 100';
+    var wholeMastered = trip.total === 100 && !!(trip.gate && trip.gate.clean) && clusters.every(function (c) { return Number(c.earned) === Number(c.maxPts) && (!c.rootIssues || c.rootIssues.length === 0); });
+    if (state) state.textContent = concealed ? T().clusterProjectionHidden : (wholeMastered ? T().clusterMastered : T().clusterNeedsWork);
+    if (totalWrap) totalWrap.classList.toggle('mastered', !concealed && wholeMastered);
+    shell.classList.toggle('concealed', concealed);
+    box.innerHTML = clusters.map(function (cluster) {
+      var id = cluster.id, roots = Array.isArray(cluster.rootIssues) ? cluster.rootIssues : [];
+      var earned = isFinite(Number(cluster.earned)) ? Number(cluster.earned) : 0;
+      var max = isFinite(Number(cluster.maxPts)) ? Number(cluster.maxPts) : 0;
+      var mastered = earned === max && roots.length === 0;
+      var open = openClusterId === id || (!openClusterId && id === daySel);
+      var rootsHtml = roots.map(function (root) {
+        var targetId = registerFaultTarget(normalizedEditorTarget(root, id));
+        return '<div class="cluster-root"><div class="cluster-root-copy"><b>' + esc(rootIssueText(root, plan, id, trip)) + '</b>' +
+          '<span>' + esc(rootConsequenceText(root)) + '</span></div>' +
+          '<button type="button" class="btn sm primary cluster-open-plan" data-fault="' + targetId + '">' + T().clusterOpenPlan + '</button></div>';
+      }).join('');
+      if (!rootsHtml) rootsHtml = '<div class="cluster-empty">✓ ' + T().clusterMastered + '</div>';
+      var strategyHtml = id === 'fishday' ? foodStrategyChoicesHTML(plan, concealed) : '';
+      return '<details class="plan-cluster' + (mastered ? ' mastered' : '') + '" data-cluster="' + esc(id) + '"' + (open ? ' open' : '') + '>' +
+        '<summary><span class="cluster-name">' + esc(sbLabel(id)) + '</span><span class="cluster-score">' +
+        (concealed ? T().clusterProjectionHidden : earned + ' / ' + max) + '</span>' +
+        '<span class="cluster-state"><strong>' + (concealed ? '' : (mastered ? T().clusterMastered : T().clusterNeedsWork)) + '</strong>' +
+        '<span>' + (concealed ? '' : T().clusterIssueCount(roots.length)) + '</span></span></summary>' +
+        '<div class="cluster-body">' + rootsHtml + strategyHtml + '</div></details>';
     }).join('');
   }
 
@@ -500,12 +1000,9 @@
     }).join('');
     var resources = br.resources.map(function (r) {
       var pct = Math.max(0, Math.min(100, Math.round(r.planned / Math.max(1, r.target) * 100)));
-      // spec §2: the strongbox's one-tap "fill the reserve" lives on the cash row itself
-      var fill = (r.id === 'res_cash' && !fixed.fixReserve && !challengeAutoFixLocked())
-        ? '<button type="button" class="btn sm primary mc-fill-reserve">' + (learningHidesExact() ? t.rcCloseBlind : t.rcClose(Math.max(0, receiptAltTotal('reserve') - P.scoreTrip(P.mergePlan(buildCfg())).total))) + '</button>' : '';
       return '<div class="mc-res' + (!conceal && !r.ok ? ' bad' : '') + '"><div class="mc-res-top"><b>' + nm(r.name) + '</b><span>' + nf(r.planned) + ' / ' + nf(r.target) + ' ' + nm(r.unit) + '</span></div>' +
         '<input class="mc-range" type="range" min="0" max="' + Math.max(r.target * 2, r.planned, 1) + '" step="' + (r.unit.en === 'yen' ? 10000 : 1) + '" value="' + r.planned + '" data-mc="resource" data-resource="' + r.id + '">' +
-        '<div class="mc-res-bar">' + (conceal ? '' : '<i style="width:' + pct + '%"></i>') + '</div>' + fill + '</div>';
+        '<div class="mc-res-bar">' + (conceal ? '' : '<i style="width:' + pct + '%"></i>') + '</div></div>';
     }).join('');
     var events = br.events.map(function (ev) {
       var line = br.envelopes.filter(function (ln) { return ln.id === ev.lineId; })[0];
@@ -584,13 +1081,16 @@
       if (pts) { pts.textContent = delta == null ? '✓' : (isOpen ? '+' + delta : '✓ +' + delta); pts.className = 'rc-pts ' + (isOpen ? 'zero' : 'full'); }
       if (cause) cause.style.display = learningHidesExact() ? 'none' : (isOpen ? 'block' : 'none');
       if (act) {
-        // the fishday-arrows row NEVER fakes a one-click — it routes to the real editor (spec §2)
-        var showOpen = learningHidesExact() ? !hasFlag : isOpen;
-        if (showOpen && d === 'handoffTiming') act.innerHTML = '<button type="button" class="btn sm rc-route" data-det="' + d + '">' + t.rcRouteFishday + '</button>';
-        else if (showOpen && challengeAutoFixLocked()) act.innerHTML = '';
-        else if (showOpen) act.innerHTML = '<button type="button" class="btn sm primary rc-close" data-det="' + d + '">' + (learningHidesExact() ? t.rcCloseBlind : t.rcClose(delta)) + '</button>';
-        else act.innerHTML = '<span class="rc-earned">' + (learningHidesExact() ? t.rcClosedBlind : (delta != null && delta > 0 ? t.rcClosed(delta) : '✓')) + '</span>' +
-          (hasFlag ? '<button type="button" class="btn sm ghost rc-undo" data-det="' + d + '">' + t.rcUndo + '</button>' : '');
+        // Help never commits a scored fix. Binary design decisions are exposed as
+        // real plan choices; handoff timing routes to the detailed arrow editor.
+        if (d === 'handoffTiming') {
+          act.innerHTML = '<button type="button" class="btn sm rc-route" data-det="' + d + '">' + t.rcRouteFishday + '</button>';
+        } else {
+          var group = 'decision-' + d;
+          act.innerHTML = '<fieldset class="rc-choices"><legend>' + t.decisionChoiceLabel + '</legend>' +
+            '<label class="rc-choice"><input class="rc-choice-input" type="radio" name="' + group + '" data-det="' + d + '" value="off"' + (!hasFlag ? ' checked' : '') + '><span>' + t['e_' + d + '_off'] + '</span></label>' +
+            '<label class="rc-choice"><input class="rc-choice-input" type="radio" name="' + group + '" data-det="' + d + '" value="on"' + (hasFlag ? ' checked' : '') + '><span>' + t['e_' + d + '_on'] + '</span></label></fieldset>';
+        }
       }
     });
   }
@@ -610,7 +1110,7 @@
     }
     updatePlanUI();
     // keep keyboard flow alive across the innerHTML swap: land on the row's new action
-    var nb = document.querySelector((on ? '.rc-undo' : '.rc-close') + '[data-det="' + d + '"]');
+    var nb = document.querySelector('.rc-choice-input[data-det="' + d + '"][value="' + (on ? 'on' : 'off') + '"]');
     if (nb) nb.focus();
   }
 
@@ -663,7 +1163,7 @@
     } else {
       box = $('rail-report'); if (!box) return;
       trip = tripIn || P.scoreTrip(currentPlan());
-      box.innerHTML = '<div class="rail-tense" style="color:' + GRADE_COLOR[trip.grade] + '">' + t.railFinal(trip.total, trip.grade) + '</div>' +
+      box.innerHTML = '<div class="rail-tense">' + t.railFinal(trip.total) + '</div>' +
         '<div class="rail-rows">' + railRowsHtml(trip, t, false) + '</div>' + railGateHtml(trip, t);
     }
   }
@@ -677,6 +1177,7 @@
     buildBuddyCard();
     $('plan-hint').textContent = learningHidesExact() ? t.learningDiagnoseFirst : (gaps ? t.hintGaps(gaps) : t.hintReadyDay(dayLabel(daySel)));
     $('plan-hint').className = 'planhint' + (!learningHidesExact() && !gaps ? ' good' : '');
+    buildPlanClusters();
     buildDaySelect();
     $('launch').textContent = t.runDayBtn(dayLabel(daySel));
     buildMissionControl();
@@ -685,6 +1186,7 @@
     renderTray();          // the tray/tokens are a VIEW of fixed[]/orgOv — repaint on every edit
     syncPlanStage();       // a seat swap re-homes pawns; other edits leave positions put
     psPositionOverlays();
+    queuePlanSave();
   }
 
   // =========================================================================
@@ -696,6 +1198,13 @@
   // =========================================================================
   var PXM = 0.8, FD_T0 = P.DAY_START_MIN, FD_T1 = P.DAY_END_MIN, LANE_H = 40, LBL_W = 108, RULER_H = 26, FD_TRACK_PITCH = 28;
   var fdDrag = null, fdWire = null, fdGhost = null, arrowEdit = null, arrowEditSeg = null, placingChip = null, fdUid = 1;
+  function nextHandoffId(base, seg) {
+    var used = {};
+    Object.keys((dayOv[seg] && dayOv[seg].handoffs) || {}).forEach(function (id) { used[id] = true; });
+    (P.handoffsForSeg(currentPlan(), seg) || []).forEach(function (h) { if (h && h.id) used[h.id] = true; });
+    var id; do { id = base + (fdUid++); } while (used[id]);
+    return id;
+  }
   // AoE-style resource-tick: float a "+N" over the projection when a fix raises the score
   function floatDelta(host, txt, cls) {
     if (!host) return;
@@ -785,25 +1294,37 @@
   }
   function arrivalInSeg(segT, h) { var s = sendMinInSeg(segT, h); return s == null ? null : s + (P.CHANNELS[h.channel] || 0); }
   function arrowsToInSeg(segH, roleId, cid) { var out = []; segH.forEach(function (h) { if (h.cardId === cid && h.toRoleId === roleId) out.push(h); }); return out; }
+  function resolvedHandoffState(plan, seg, segT, h) {
+    var channel = handoffFeasibility(plan, h, seg);
+    if (!channel.ok) return { ok: false, reason: channel.reason, arrival: null };
+    var arrival = null;
+    if (seg === 'fishday' && typeof P.staticArrival === 'function') {
+      try { arrival = P.staticArrival(plan, h); } catch (e) { arrival = null; }
+      if (arrival == null) return { ok: false, reason: h && h.requiresHandoffId ? 'relay-prerequisite' : 'unresolved-path', arrival: null };
+    } else arrival = arrivalInSeg(segT, h);
+    return arrival == null ? { ok: false, reason: 'unresolved-path', arrival: null } : { ok: true, reason: 'ok', arrival: arrival };
+  }
   function feasibleArrivalInSeg(plan, seg, segT, h) {
-    return handoffFeasibility(plan, h, seg).ok ? arrivalInSeg(segT, h) : null;
+    return resolvedHandoffState(plan, seg, segT, h).arrival;
   }
   function infoArrivalSeg(plan, seg, segT, segH, cid, roleId) {
     var hs = arrowsToInSeg(segH, roleId, cid), best = null;
     hs.forEach(function (h) { var a = feasibleArrivalInSeg(plan, seg, segT, h); if (a != null && (best == null || a < best)) best = a; });
     return best;
   }
-  function feedArrowInSeg(segH, segT, toTaskId, cardId) {
-    var to = byId(segT, toTaskId), best = null, bestArr = Infinity, bestTask = null, bestTaskArr = Infinity;
+  function feedArrowInSeg(plan, seg, segH, segT, toTaskId, cardId) {
+    var to = byId(segT, toTaskId), best = null, bestArr = Infinity, bestTask = null, bestTaskArr = Infinity, fallback = null, fallbackTask = null;
     if (!to) return null;
     segH.forEach(function (h) {
       if (h.cardId !== cardId || h.toRoleId !== to.ownerRoleId) return;
-      var a = arrivalInSeg(segT, h);
+      if (!fallback) fallback = h;
+      if (h.toTaskId === toTaskId && !fallbackTask) fallbackTask = h;
+      var a = feasibleArrivalInSeg(plan, seg, segT, h);
       if (a == null) return;
       if (h.toTaskId === toTaskId && a < bestTaskArr) { bestTaskArr = a; bestTask = h; }
       if (a < bestArr) { bestArr = a; best = h; }
     });
-    return bestTask || best;
+    return bestTask || best || fallbackTask || fallback;
   }
   function producedAtSeg(segT, h) { var from = byId(segT, h.fromTaskId); return (from && P.isPlaced(from)) ? from.startMin + from.durMin : segWin(daySel)[0]; }
 
@@ -812,7 +1333,11 @@
   // overrides channel). This is the ONE place that branches by seg for block placement. ----
   function writeMove(taskId, startMin, durMin, assignedIds) {
     if (daySel === 'fishday') dayOv.fishday.timing[taskId] = { startMin: startMin, durMin: durMin };
-    else dayOv[daySel].placement[taskId] = { startMin: startMin, durMin: durMin, assignedIds: (assignedIds || []).slice() };
+    else {
+      var prev = dayOv[daySel].placement[taskId], next = { startMin: startMin, durMin: durMin, assignedIds: (assignedIds || []).slice() };
+      if (prev && Array.isArray(prev.carries)) next.carries = prev.carries.slice();
+      dayOv[daySel].placement[taskId] = next;
+    }
   }
   // Day 3 (fishday) is NEVER deck-authorable — its puzzle is block-timing + info-arrows only, so a
   // fishday task's crew can never become []. Deck/unplace/Clear-day/drag-to-deck/Delete are coarse-
@@ -823,7 +1348,18 @@
   }
   function writePlace(taskId, startMin, durMin, personId) {
     if (daySel === 'fishday') { dayOv.fishday.staffing[taskId] = [personId]; dayOv.fishday.timing[taskId] = { startMin: startMin, durMin: durMin }; }
-    else dayOv[daySel].placement[taskId] = { startMin: startMin, durMin: durMin, assignedIds: [personId] };
+    else {
+      var prev = dayOv[daySel].placement[taskId], next = { startMin: startMin, durMin: durMin, assignedIds: [personId] };
+      if (prev && Array.isArray(prev.carries)) next.carries = prev.carries.slice();
+      dayOv[daySel].placement[taskId] = next;
+    }
+  }
+  function writeCarries(seg, taskId, carries) {
+    if (seg === 'fishday' || AUTHORING_SEGS.indexOf(seg) < 0) return;
+    var plan = currentPlan(), task = byId(P.tasksForSeg(plan, seg), taskId); if (!task || !task.assignedIds.length) return;
+    var prev = dayOv[seg].placement[taskId];
+    var next = prev && prev !== null ? Object.assign({}, prev) : { startMin: task.startMin, durMin: task.durMin, assignedIds: task.assignedIds.slice() };
+    next.carries = carries.slice(); dayOv[seg].placement[taskId] = next;
   }
 
   // ---- Task Deck rail (#fd-deck): every unplaced task (required + decoys) for the active seg.
@@ -920,8 +1456,29 @@
     if (sc2 && sc2.scrollLeft) box.querySelectorAll('.fd-lbl').forEach(function (lb) { lb.style.transform = 'translateX(' + sc2.scrollLeft + 'px)'; });
     drawFdArrows(plan, seg, laneGeo);
     buildFdArrowList(plan, seg);
+    buildCustodyEditor(plan, seg);
     buildFdReady(plan, fd, seg);
     if (placingChip) renderDropSlots();                    // keep the tap-to-place slots visible across repaints
+  }
+
+  function custodyFlagFor(seg) { return seg === 'load' ? 'custody' : (seg === 'arrival' ? 'transferCustody' : (seg === 'return' ? 'returnCustody' : null)); }
+  function buildCustodyEditor(plan, seg) {
+    var details = $('fd-custody'), body = $('fd-custody-body'); if (!details || !body) return;
+    var flag = custodyFlagFor(seg);
+    if (!flag) { details.classList.add('hidden'); body.innerHTML = ''; return; }
+    var tasks = P.tasksForSeg(plan, seg).filter(function (task) { return !!task[flag]; });
+    var items = (plan.manifest || []).filter(function (item) { return seg === 'return' ? item.returnRequired !== false : item.outboundRequired !== false; });
+    if (!tasks.length || !items.length) { details.classList.add('hidden'); body.innerHTML = ''; return; }
+    details.classList.remove('hidden');
+    body.innerHTML = tasks.map(function (task) {
+      var carried = setOf(task.carries || []), disabled = !task.assignedIds.length;
+      return '<div class="custody-task" data-task="' + task.id + '"><strong>' + esc(nm(task.name)) + '</strong><div class="custody-items">' +
+        items.map(function (item) {
+          return '<label class="custody-item"><input type="checkbox" data-custody-task="' + task.id + '" data-custody-item="' + item.id + '"' +
+            (carried[item.id] ? ' checked' : '') + (disabled ? ' disabled' : '') + ' aria-label="' + esc(T().custodyItemAria(nm(item.name), nm(task.name))) + '">' +
+            '<span>' + esc(nm(item.name)) + '</span></label>';
+        }).join('') + '</div></div>';
+    }).join('');
   }
 
   function arrowEnds(plan, seg, h, laneGeo) {
@@ -971,7 +1528,9 @@
     hints.forEach(function (h) {
       if (h.type === 'MISSING_ARROW') {
         var blocked = unavailableHandoffFor(plan, seg, h);
-        chips.push(chip(h.type, blocked ? t.rhChannelUnavailable(cn(h.cardId), tn(h.taskId), channelText(blocked.channel)) : t.rhMissing(cn(h.cardId), tn(h.taskId))));
+        var blockedState = blocked && resolvedHandoffState(plan, seg, segT, blocked);
+        chips.push(chip(h.type, blockedState && blockedState.reason === 'relay-prerequisite' ? t.rhRelayPrerequisite(cn(h.cardId), tn(h.taskId)) :
+          (blocked && blockedState && blockedState.reason !== 'unresolved-path' ? t.rhChannelUnavailable(cn(h.cardId), tn(h.taskId), channelText(blocked.channel)) : t.rhMissing(cn(h.cardId), tn(h.taskId)))));
       }
       else if (h.type === 'ARROW_LATE') chips.push(chip(h.type, t.rhLate(cn(h.cardId), tn(h.taskId), h.lateMin)));
       else if (h.type === 'WRONG_FISH_RISK') chips.push(chip(h.type, t.rhWrongFish(cn(h.cardId), tn(h.taskId))));
@@ -1029,7 +1588,7 @@
   // ---- block drag / resize / chip placement / arrow wire (Pointer Events) ----
   function fdSocketTap(sock) {
     var plan = currentPlan(), segT = P.tasksForSeg(plan, daySel), segH = P.handoffsForSeg(plan, daySel);
-    var ex = feedArrowInSeg(segH, segT, sock.dataset.task, sock.dataset.card);
+    var ex = feedArrowInSeg(plan, daySel, segH, segT, sock.dataset.task, sock.dataset.card);
     if (ex) openArrowPanel(ex.id);                          // an existing infeasible path must be repaired, not duplicated
     else fdAutoDraw(sock.dataset.task, sock.dataset.card);
   }
@@ -1162,10 +1721,10 @@
       fdDrag = null; fdWireClear();
       if (sock) {
         var plan = currentPlan(), segT = P.tasksForSeg(plan, daySel), segH = P.handoffsForSeg(plan, daySel);
-        var ex = feedArrowInSeg(segH, segT, sock.dataset.task, sock.dataset.card);
+        var ex = feedArrowInSeg(plan, daySel, segH, segT, sock.dataset.task, sock.dataset.card);
         var to2 = byId(segT, sock.dataset.task);
-        var exFeas = ex && handoffFeasibility(plan, ex, daySel);
-        var onTime = ex && to2 && exFeas.ok && arrivalInSeg(segT, ex) <= to2.startMin;
+        var exFeas = ex && resolvedHandoffState(plan, daySel, segT, ex);
+        var onTime = ex && to2 && exFeas.ok && exFeas.arrival <= to2.startMin;
         if (onTime || (exFeas && !exFeas.ok)) openArrowPanel(ex.id); // edit an existing sound or infeasible path; don't duplicate it
         else fdAutoDraw(sock.dataset.task, sock.dataset.card);      // missing or late — draw (a faster duplicate is a legit fix)
       }
@@ -1206,7 +1765,7 @@
     if (!to || !from) return;
     var card = byId(plan.infoCards, cardId);
     var assume = (to.assumeOn || []).indexOf(cardId) >= 0;
-    var id = 'h_' + cardId.replace('ic_', '') + '_' + to.ownerRoleId + '_' + (fdUid++);
+    var id = nextHandoffId('h_' + cardId.replace('ic_', '') + '_' + to.ownerRoleId + '_', seg);
     dayOv[seg].handoffs[id] = { cardId: cardId, fromRoleId: from.ownerRoleId, fromTaskId: from.id, toRoleId: to.ownerRoleId, toTaskId: to.id,
       trigger: { type: 'onTaskDone', taskId: from.id }, channel: 'faceToFace', ifLate: assume ? 'assume' : 'idle',
       reworkKind: assume ? 'wrongFish' : null, content: { en: nm2(card.name, 'en'), jp: nm2(card.name, 'jp') } };
@@ -1224,7 +1783,8 @@
   }
   function feasibilityText(reason) {
     return { ok: T().feasibilityOk, 'unknown-channel': T().feasibilityUnknown,
-      'requires-colocation': T().feasibilityColocation, 'scenario-channel-unavailable': T().feasibilityOutage }[reason] || T().feasibilityBlocked;
+      'requires-colocation': T().feasibilityColocation, 'scenario-channel-unavailable': T().feasibilityOutage,
+      'relay-prerequisite': T().feasibilityRelayPrerequisite, 'unresolved-path': T().feasibilityUnresolvedPath }[reason] || T().feasibilityBlocked;
   }
   function channelText(channel) {
     channel = String(channel || '');
@@ -1232,11 +1792,11 @@
     return typeof value === 'string' ? value : channel;
   }
   function unavailableHandoffFor(plan, seg, hint) {
-    var target = byId(P.tasksForSeg(plan, seg), hint.taskId), hs = P.handoffsForSeg(plan, seg) || [];
+    var segT = P.tasksForSeg(plan, seg), target = byId(segT, hint.taskId), hs = P.handoffsForSeg(plan, seg) || [];
     for (var i = 0; i < hs.length; i++) {
       var h = hs[i];
       if (h.cardId !== hint.cardId || (h.toTaskId !== hint.taskId && (!target || h.toRoleId !== target.ownerRoleId))) continue;
-      if (!handoffFeasibility(plan, h, seg).ok) return h;
+      if (!resolvedHandoffState(plan, seg, segT, h).ok) return h;
     }
     return null;
   }
@@ -1258,8 +1818,8 @@
     var chOpts = CH_LIST.map(function (c) {
       return '<option value="' + c + '"' + (h.channel === c ? ' selected' : '') + '>' + t['ch' + c.charAt(0).toUpperCase() + c.slice(1)] + ' (+' + P.CHANNELS[c] + t.chMin + ')</option>';
     }).join('');
-    var feas = handoffFeasibility(plan, h, seg);
-    var arr = feas.ok ? arrivalInSeg(segT, h) : null, needBy = to ? to.startMin : 0, late = arr == null || arr > needBy;
+    var feas = resolvedHandoffState(plan, seg, segT, h);
+    var arr = feas.arrival, needBy = to ? to.startMin : 0, late = arr == null || arr > needBy;
     var authorMin = authoringSend(seg, minSend, minSend);
     var authorSeed = typeof sendMin === 'number' && isFinite(sendMin) ? sendMin : needBy;
     var authorValue = authoringSend(seg, authorSeed, minSend);
@@ -1290,7 +1850,7 @@
       mm = authoringSend(seg, mm, producedAtSeg(segT, h)); // can't precede production; obeys this day's blocks
       patch.trigger = { type: 'atMinute', value: mm };
     }
-    var candidate = Object.assign({}, h, patch), feas = handoffFeasibility(plan, candidate, seg);
+    var candidate = Object.assign({}, h, patch), feas = resolvedHandoffState(plan, seg, segT, candidate);
     if (!feas.ok && !learningHidesExact()) {
       var note = $('ar-feasibility'); if (note) { note.className = 'ar-feasibility bad'; note.textContent = feasibilityText(feas.reason); }
     }
@@ -1852,11 +2412,13 @@
       // coarse days only fly PLACED→PLACED (matches the animated cast); fishday keeps its original reach
       if (coarse && (!(from.assignedIds || []).length || !(to.assignedIds || []).length ||
                      typeof from.startMin !== 'number' || typeof to.startMin !== 'number')) return;
-      // A visual delivery is evidence. Never animate a channel the engine says cannot carry
-      // the message; a redundant feasible arrow for the same socket may still win below.
-      if (!handoffFeasibility(plan, h, seg).ok) return;
+      // A visual delivery is evidence. Fishday uses the engine's full static
+      // path resolver, including requiresHandoffId ordering; an impossible
+      // forwarding step must never fly merely because its own channel works.
+      var resolved = resolvedHandoffState(plan, seg, tasks, h);
+      if (!resolved.ok) return;
       var send = sendOf(h); if (send == null) return;
-      var arr = send + (P.CHANNELS[h.channel] || 0);
+      var arr = resolved.arrival;
       var key = h.toRoleId + '|' + h.cardId;
       if (!pairs[key] || arr < pairs[key].arr) pairs[key] = { arr: arr, send: send, h: h, from: from, to: to };
     });
@@ -1999,12 +2561,13 @@
     paused = false; livePausedForFix = false; document.body.classList.add('running');
     closeModals();
     $('live-dock').classList.add('hidden');               // a morning run never shows the live dock
-    // A truthful Whole Trip contains roughly two days of clocked travel. Start that
-    // orchestration at an explicit, user-visible 8× speed so it completes in about
-    // 90 seconds while still rendering every five-minute tick and every checkpoint.
-    // Standalone rehearsals retain the calmer 1× default.
-    speedMult = wholeRun ? 8 : 1;
-    document.querySelectorAll('.spd').forEach(function (x) { x.classList.toggle('on', parseFloat(x.getAttribute('data-spd')) === speedMult); });
+    // Authored runs default to event beats: engine ticks remain deterministic,
+    // while the view skips spans in which no task/handoff/stall/outcome changes.
+    // Full-clock playback remains available in the collapsed run options.
+    runPacing = 'events'; speedMult = 1;
+    if ($('run-options')) $('run-options').open = false;
+    updatePacingControls();
+    updateSpeedControls();
     enterScreen('run');
     $('figs').innerHTML = ''; $('banner').classList.remove('show');
     var ff = $('fanfare'); if (ff) ff.classList.remove('show');
@@ -2022,7 +2585,7 @@
   function step() {
     if (paused || !sim) return;
     if (sim.paused) return;                       // checkpoint: wait for Resume
-    P.tick(sim); renderSim(sim); if (RM.matches) drawRunOnce();
+    advanceAuthoredClock(sim); renderSim(sim); if (RM.matches) drawRunOnce();
     if (sim.paused && sim.checkpoint) {
       if (window.PRS_SOUND) window.PRS_SOUND.cue('freeze');   // coarse/fishday-morning freeze point (sound.js §W3)
       if (sim.checkpoint.id === 'cp_stall') camPunchStall(sim);   // §3: punch in on the coarse-day stall
@@ -2444,8 +3007,8 @@
     // kept on the total element) + grade + the 5 bucket rows + the grade-gate line.
     var readyVal = trip.total;
     tweenNum($('dash-ready'), readyVal, '');
-    $('dash-ready').style.color = GRADE_COLOR[trip.grade];
-    var gEl = $('dash-grade'); if (gEl) { gEl.textContent = trip.grade; gEl.style.color = GRADE_COLOR[trip.grade]; }
+    $('dash-ready').style.color = readyVal === 100 ? 'var(--build)' : (readyVal >= 70 ? 'var(--idle)' : 'var(--wait)');
+    var gEl = $('dash-grade'); if (gEl) gEl.textContent = '';
     renderRail('run', trip);
     var bpct = Math.round(s.budget.spent / s.budget.total * 100);
     $('dash-budget-txt').textContent = '¥' + nf(s.budget.spent) + ' / ¥' + nf(s.budget.total);
@@ -2763,10 +3326,8 @@
       if (sim !== simAt || wholeRun !== wholeAt) return;      // a mode/screen change won the race — don't pop the report over it
       closePawnCard();
       stopAnim(); enterScreen('report'); renderReport(lastResult); focusReportScreen();
-    }, 700);
+    }, RM.matches ? 0 : 700);
   }
-
-  var GRADE_COLOR = { A: 'var(--build)', B: 'var(--leader)', C: 'var(--idle)', D: 'var(--wait)' };
 
   // =========================================================================
   // §Phase3b — SCORE LEDGER: the whole-trip 100 (P.scoreTrip) rendered as a
@@ -2886,7 +3447,9 @@
     if (h.type === 'SCENARIO_CHANNEL_UNAVAILABLE') return t.rhChannelUnavailable(cn(h.cardId), tn(h.taskId), channelText(h.channel));
     if (h.type === 'MISSING_ARROW') {
       var blocked = unavailableHandoffFor(plan, seg, h);
-      return blocked ? t.rhChannelUnavailable(cn(h.cardId), tn(h.taskId), channelText(blocked.channel)) : t.rhMissing(cn(h.cardId), tn(h.taskId));
+      var blockedState = blocked && resolvedHandoffState(plan, seg, segTasks, blocked);
+      return blockedState && blockedState.reason === 'relay-prerequisite' ? t.rhRelayPrerequisite(cn(h.cardId), tn(h.taskId)) :
+        (blocked && blockedState && blockedState.reason !== 'unresolved-path' ? t.rhChannelUnavailable(cn(h.cardId), tn(h.taskId), channelText(blocked.channel)) : t.rhMissing(cn(h.cardId), tn(h.taskId)));
     }
     if (h.type === 'ARROW_LATE') return t.rhLate(cn(h.cardId), tn(h.taskId), h.lateMin);
     if (h.type === 'WRONG_FISH_RISK') return t.rhWrongFish(cn(h.cardId), tn(h.taskId));
@@ -3005,11 +3568,7 @@
     if (run.observed && run.observed.cause && run.observed.item) {
       actual = { cause: run.observed.cause, count: 1, items: [run.observed.item] };
     }
-    var lessonScore = trip.total, lessonGrade = trip.grade;
-    if (run.observed && (res.segment || run.segment) === 'fishday' && typeof P.scoreDay === 'function') {
-      var observedDayScore = P.scoreDay(plan, 'fishday');
-      lessonScore = observedDayScore.score; lessonGrade = observedDayScore.grade;
-    }
+    var lessonScore = trip.total, lessonGrade = '';
     var attempt = { id: run.id, at: run.at, level: run.level, segment: res.segment || run.segment || 'all', seed: run.seed,
       scenario: (plan && plan.scenarioId) || run.scenario || 'normal', prediction: run.prediction || null,
       score: lessonScore, grade: lessonGrade, gapCount: actual.count, actualCause: actual.cause, evidence: actual.items,
@@ -3073,8 +3632,15 @@
     if (debrief) debrief.open = learningLevel !== 'learn';
   }
 
+  function reportIssueRows(rows) {
+    if (!rows.length) return '';
+    if (rows.length === 1) return rows[0];
+    return rows[0] + '<details class="fix-more"><summary>' + T().fdMoreIssues(rows.length - 1) + '</summary><div class="fix-more-body">' + rows.slice(1).join('') + '</div></details>';
+  }
+
   function renderReport(res) {
     resetReportDisclosures(res);
+    faultTargets = {}; faultTargetSeq = 0;
     // the individuals table has no coarse-day analogue — hide its card for a coarse report, and
     // restore it for the animated fishday/whole-trip paths (idempotent either way).
     var indivCard = $('individuals').closest('.card');
@@ -3089,31 +3655,35 @@
     // the legacy per-run scorer (sc) for their own content — never its total/grade.
     var reportPlan = res._learningSnapshot ? res._learningSnapshot.plan : currentPlan();
     var trip = res._learningSnapshot ? res._learningSnapshot.trip : P.scoreTrip(reportPlan);
-    var guidedDayScore = guidedReport ? P.scoreDay(reportPlan, 'fishday') : null;
-    var displayTrip = guidedReport ? Object.assign({}, trip, { total: guidedDayScore.score, grade: guidedDayScore.grade,
-      gate: { clean: guidedDayScore.clean, withheldA: false } }) : trip;
-    $('r-grade-label').textContent = guidedReport ? t.guidedGradeLbl : t.gradeLbl;
-    $('r-grade').textContent = displayTrip.grade; $('r-grade').style.color = GRADE_COLOR[displayTrip.grade];
     var authoredClean = !res.wholeTrip || !!res.authoredClean;
-    var perfect = guidedReport ? guidedDayScore.clean : (trip.gate.clean && trip.grade === 'A' && authoredClean);
-    var badge = $('r-badge'); badge.textContent = perfect ? (day ? t.badgeDayClean : t.badgePerfect) : ''; badge.classList.toggle('show', perfect);
+    var reportClusters = planClustersFor(reportPlan, trip);
+    var reportCluster = reportClusters.filter(function (c) { return c.id === res.segment; })[0];
     var guidedBucket = guidedReport ? trip.byBucket.fishday : null;
+    var dayBucket = day ? trip.byBucket[res.segment] : null;
+    var dayMastered = !!(dayBucket && dayBucket.earned === dayBucket.maxPts && day && day.clean && reportCluster && (!reportCluster.rootIssues || reportCluster.rootIssues.length === 0));
+    var wholeMastered = trip.total === 100 && !!(trip.gate && trip.gate.clean) && authoredClean && reportClusters.every(function (c) {
+      return c.earned === c.maxPts && (!c.rootIssues || c.rootIssues.length === 0);
+    });
+    var perfect = day ? dayMastered : wholeMastered;
+    $('r-grade-label').textContent = guidedReport ? t.guidedGradeLbl : (day ? dayLabel(res.segment) + ' · ' + t.gradeLbl : t.gradeLbl);
+    $('r-grade').textContent = dayBucket ? (dayBucket.earned + ' / ' + dayBucket.maxPts) : (trip.total + ' / 100');
+    $('r-grade').style.color = perfect ? 'var(--build)' : 'var(--wait)';
+    var badge = $('r-badge'); badge.textContent = perfect ? (day ? t.badgeDayClean : t.badgePerfect) : ''; badge.classList.toggle('show', perfect);
     if (guidedReport) {
-      $('r-verdict').textContent = t.guidedReportVerdict(guidedBucket.earned, guidedBucket.maxPts, guidedDayScore.clean);
+      $('r-verdict').textContent = t.guidedReportVerdict(guidedBucket.earned, guidedBucket.maxPts, dayMastered);
     } else if (res.wholeTrip && !authoredClean) {
       $('r-verdict').textContent = trip.total + ' / 100 — ' + t.rIncomplete;
-    } else if (trip.gate.withheldA) {
-      $('r-verdict').textContent = t.gradeGateB(trip.total);
     } else if (day) {
-      $('r-verdict').textContent = day.clean ? t.rDayScoreOk(dayLabel(res.segment), trip.total) : t.rDayScoreGaps(dayLabel(res.segment), trip.total, day.gaps);
+      $('r-verdict').textContent = dayMastered ? t.rDayScoreOk(dayLabel(res.segment), dayBucket.earned, dayBucket.maxPts) :
+        t.rDayScoreGaps(dayLabel(res.segment), dayBucket.earned, dayBucket.maxPts, day.gaps);
     } else {
-      $('r-verdict').textContent = trip.total + ' / 100 — ' + (trip.gate.clean ? t.rDone : t.rIncomplete);
+      $('r-verdict').textContent = trip.total + ' / 100 — ' + (wholeMastered ? t.rDone : t.rIncomplete);
     }
     var readinessVerdict = guidedReport ? null : reportReadinessVerdict(reportPlan, perfect);
-    if (readinessVerdict) $('r-verdict').textContent = trip.total + ' / 100 — ' + readinessVerdict;
+    if (readinessVerdict) $('r-verdict').textContent = readinessVerdict;
     if (guidedReport) {
-      $('r-conds').innerHTML = '<span class="cond ' + (guidedDayScore.clean ? 'met' : 'unmet') + '">' +
-        (guidedDayScore.clean ? '✓ ' : '✗ ') + t.dayTasksLine(day.tasksDone, day.tasksTotal) + '</span>' +
+      $('r-conds').innerHTML = '<span class="cond ' + (day.clean ? 'met' : 'unmet') + '">' +
+        (day.clean ? '✓ ' : '✗ ') + t.dayTasksLine(day.tasksDone, day.tasksTotal) + '</span>' +
         '<span class="cond ' + (guidedBucket.earned === guidedBucket.maxPts ? 'met' : 'unmet') + '">' +
         t.daySliceLine(guidedBucket.earned, guidedBucket.maxPts, dayLabel('fishday')) + '</span>';
     } else if (day) {
@@ -3145,11 +3715,17 @@
     appendAssumptionCondition(reportPlan, guidedReport);
     // fix-pack: the rehearsed day's gaps (or all gaps for a whole-trip run)
     var fixes = day ? day.fixes : sc.fixes, authoredHints = [];
+    // A single authored-day run must expose the same exact readiness roots as
+    // its planning cluster. Legacy detector fixes alone are often too broad
+    // (for example, they cannot identify one missing custody item or socket).
+    if (day && !guidedReport) P.dayReadiness(reportPlan, res.segment).forEach(function (h) {
+      authoredHints.push({ segment: res.segment, hint: h });
+    });
     if (res.wholeTrip) res.segmentResults.forEach(function (r) {
       r.readiness.forEach(function (h) { authoredHints.push({ segment: r.segment, hint: h }); });
     });
     if (guidedReport) {
-      $('fixpack').innerHTML = guidedDayScore.clean
+      $('fixpack').innerHTML = dayMastered
         ? '<div class="fix-clean">' + t.fixpackCleanDay(dayLabel('fishday')) + '</div>'
         : '<div class="fix-row sev-high"><div class="fix-main"><div class="fix-title">⚠️ ' + t.guidedFixTitle + '</div>' +
           '<div class="fix-body">' + t.guidedFixBody + '</div></div>' +
@@ -3157,14 +3733,18 @@
     } else if (!fixes.length && !authoredHints.length) {
       $('fixpack').innerHTML = '<div class="fix-clean">' + (day ? t.fixpackCleanDay(dayLabel(res.segment)) : t.fixpackClean) + '</div>';
     } else {
-      $('fixpack').innerHTML = fixes.map(function (f) {
+      var reportRows = fixes.map(function (f) {
+        var targetId = registerFaultTarget(targetForDetector(f.id, res.segment === 'all' ? null : res.segment));
         return '<div class="fix-row sev-' + f.severity + '"><div class="fix-main"><div class="fix-title">' + (f.severity === 'high' ? '⛔ ' : '⚠️ ') + t['p_' + f.id + '_title'] + '</div>' +
           '<div class="fix-body">' + t['p_' + f.id + '_fix'] + '</div></div>' +
-          '<button class="btn sm primary fix-apply" data-fix="' + f.fixId + '">' + t.applyFixBtn + '</button></div>';
-      }).join('') + authoredHints.map(function (x) {
+          '<button class="btn sm primary fault-open" data-fault="' + targetId + '">' + t.applyFixBtn + '</button></div>';
+      }).concat(authoredHints.map(function (x) {
+        var targetId = registerFaultTarget(targetForReadiness(x.segment, x.hint));
         return '<div class="fix-row"><div class="fix-main"><div class="fix-title">' + dayLabel(x.segment) + '</div>' +
-          '<div class="fix-body">' + readinessText(reportPlan, x.segment, x.hint) + '</div></div></div>';
-      }).join('');
+          '<div class="fix-body">' + readinessText(reportPlan, x.segment, x.hint) + '</div></div>' +
+          '<button class="btn sm primary fault-open" data-fault="' + targetId + '">' + t.applyFixBtn + '</button></div>';
+      }));
+      $('fixpack').innerHTML = reportIssueRows(reportRows);
     }
     // individuals table
     var head = ['ivName', 'ivAction', 'ivDecision', 'ivLoad', 'ivFatigue', 'ivCoop', 'ivContribution'];
@@ -3177,7 +3757,7 @@
     $('individuals').innerHTML = th + rows;
     renderRail('report', trip);
     renderLedger(trip, res.segment, reportPlan);
-    bootReportStage(res, displayTrip);   // guided report stamps its Day-3 result; full reports stamp the trip
+    bootReportStage(res, trip);
     renderLearningDebrief(res, reportPlan, trip);
   }
 
@@ -3186,23 +3766,20 @@
   // whole-trip report renders into (renderReport branches to this for res.coarse).
   function renderDayReport(res) {
     var t = T(), seg = res.segment, plan = res._learningSnapshot ? res._learningSnapshot.plan : currentPlan();
-    $('r-grade-label').textContent = t.gradeLbl;
+    $('r-grade-label').textContent = dayLabel(seg) + ' · ' + t.gradeLbl;
     var hints = P.dayReadiness(plan, seg), ds = P.daySchedule(plan, seg);
     // §7.2 — headline grade/score/verdict come from the whole-trip ledger (scoreTrip); the day's own
     // efficiency chips come from that day's daySchedule (§7.3); the fix-list is dayReadiness. scoreDay's
     // grade/score/89-cap and its 8-category scorecard are gone from this player-facing path.
     var trip = res._learningSnapshot ? res._learningSnapshot.trip : P.scoreTrip(plan);
     var dayClean = hints.length === 0 && ds.unresolved === 0;
-    $('r-grade').textContent = trip.grade; $('r-grade').style.color = GRADE_COLOR[trip.grade];
-    if (trip.gate.withheldA) {
-      $('r-verdict').textContent = t.gradeGateB(trip.total);
-    } else {
-      $('r-verdict').textContent = dayClean ? t.rDayScoreOk(dayLabel(seg), trip.total) : t.rDayScoreGaps(dayLabel(seg), trip.total, hints.length);
-    }
-    var perfectD = trip.gate.clean && trip.grade === 'A';
+    var b = trip.byBucket[seg] || { earned: 0, maxPts: 0 };
+    var cluster = planClustersFor(plan, trip).filter(function (c) { return c.id === seg; })[0];
+    var perfectD = dayClean && b.earned === b.maxPts && !!cluster && (!cluster.rootIssues || cluster.rootIssues.length === 0);
+    $('r-grade').textContent = b.earned + ' / ' + b.maxPts; $('r-grade').style.color = perfectD ? 'var(--build)' : 'var(--wait)';
+    $('r-verdict').textContent = perfectD ? t.rDayScoreOk(dayLabel(seg), b.earned, b.maxPts) : t.rDayScoreGaps(dayLabel(seg), b.earned, b.maxPts, hints.length);
     var bd = $('r-badge'); bd.textContent = perfectD ? t.badgeDayClean : ''; bd.classList.toggle('show', perfectD);
     // the day-slice line: this segment's earned/max share of the whole-trip 100
-    var b = trip.byBucket[seg];
     $('r-conds').innerHTML =
       (b ? '<span class="cond">' + t.daySliceLine(b.earned, b.maxPts, dayLabel(seg)) + '</span>' : '') +
       '<span class="cond ' + (ds.efficiency === 100 ? 'met' : 'unmet') + '">' + t.rcEff(ds.efficiency) + '</span>' +
@@ -3210,7 +3787,7 @@
       '<span class="cond ' + (ds.reworkTotal === 0 ? 'met' : 'unmet') + '">' + t.rcRework(ds.reworkTotal) + '</span>' +
       (ds.dinnerMin != null ? '<span class="cond ' + (ds.dinnerMin <= 1080 ? 'met' : 'unmet') + '">' + t.rcDinner(hhmm(ds.dinnerMin)) + '</span>' : '');
     var dayVerdict = reportReadinessVerdict(plan, perfectD && dayClean);
-    if (dayVerdict) $('r-verdict').textContent = trip.total + ' / 100 — ' + dayVerdict;
+    if (dayVerdict) $('r-verdict').textContent = dayVerdict;
     appendAssumptionCondition(plan);
     // fix-list: every dayReadiness hint, worded with the same rh* strings the live editor uses
     var segT = P.tasksForSeg(plan, seg);
@@ -3228,40 +3805,16 @@
       return '';
     }
     if (!hints.length) $('fixpack').innerHTML = '<div class="fix-clean">' + t.fixpackCleanDay(dayLabel(seg)) + '</div>';
-    else $('fixpack').innerHTML = hints.map(function (h) {
-      return '<div class="fix-row" data-type="' + h.type + '"><div class="fix-main"><div class="fix-body">' + hintTxt(h) + '</div></div></div>';
-    }).join('') + '<button class="btn primary" id="btn-day-autofix">' + t.autoArrangeBtn + '</button>';
+    else $('fixpack').innerHTML = reportIssueRows(hints.map(function (h) {
+      var targetId = registerFaultTarget(targetForReadiness(seg, h));
+      return '<div class="fix-row" data-type="' + h.type + '"><div class="fix-main"><div class="fix-body">' + hintTxt(h) + '</div></div>' +
+        '<button class="btn sm primary fault-open" data-fault="' + targetId + '">' + t.applyFixBtn + '</button></div>';
+    }));
     $('individuals').innerHTML = '';
     renderRail('report', trip);
     renderLedger(trip, seg, plan);
     bootReportStage(res, trip);   // §S3 report-on-stage (coarse animated day): same dusk harbor
     renderLearningDebrief(res, plan, trip);
-  }
-
-  // "Auto-arrange the arrows ▶" — the coarse-day analogue of the fishday fix-pack: heal this
-  // day's arrows to face-to-face AND place any unplaced required tasks (P.applyDayFix), persist
-  // BOTH patches into dayOv (so a gappy day can reach 100, not cap ~92 on a dropped placement),
-  // then re-score.
-  function applyDayFixAndRerun() {
-    var seg = daySel, cfg = P.applyDayFix(buildCfg(), seg);
-    var d = (cfg.overrides.days && cfg.overrides.days[seg]) || {};
-    var hpatch = d.handoffs || {}, ppatch = d.placement || {};
-    for (var k in hpatch) dayOv[seg].handoffs[k] = Object.assign({}, dayOv[seg].handoffs[k], hpatch[k]);
-    for (var pk in ppatch) dayOv[seg].placement[pk] = ppatch[pk];
-    launch();
-  }
-
-  function applyFixAndRerun(fixId) {
-    // Guided reports teach one controlled handoff. Re-enter that same decision;
-    // applying the broad legacy fix would remove it and create a long run with
-    // nothing left for the learner to do.
-    if (appMode === 'live') { startLive(); return; }
-    if (fixId && fixed.hasOwnProperty(fixId)) {
-      fixed[fixId] = true;
-      if (fixId === 'fixHandoffs') fdClearFixConflicts();
-      mcClearFixConflicts(fixId);
-    }
-    launch();
   }
 
   // =========================================================================
@@ -3524,18 +4077,20 @@
     rsBuildRoster();
     // hanko stamp: lands once per fresh report (thock); a re-render (language switch) keeps it seated
     var stampEl = $('rs-stamp');
-    var key = trip.grade + '|' + trip.total + '|' + (res.segment || '') + (res.coarse ? '|c' : '');
+    var key = trip.total + '|' + (res.segment || '') + (res.coarse ? '|c' : '');
     var fresh = key !== rsStampKey;
     rsStampKey = key;
     if (stampEl) {
-      stampEl.textContent = trip.grade;
-      stampEl.setAttribute('aria-label', t.rsStampAria(trip.grade, trip.total));
+      stampEl.textContent = trip.total + '/100';
+      stampEl.setAttribute('aria-label', t.rsStampAria(trip.total));
       stampEl.classList.remove('hidden');
       stampEl.classList.remove('thock');
       if (fresh && !RM.matches) { void stampEl.offsetWidth; stampEl.classList.add('thock'); }
     }
     if (fresh && window.PRS_SOUND) window.PRS_SOUND.cue('thock');   // the hanko stamp (sound.js §W3)
-    RSTG.stamp = { grade: trip.grade, at: fresh ? (window.performance ? performance.now() : 0) / 1000 : 0 };
+    // stage.js names this legacy field `grade`; it now carries the same mastery
+    // number as every other surface, never an A/B/C/D currency.
+    RSTG.stamp = { grade: String(trip.total), at: fresh ? (window.performance ? performance.now() : 0) / 1000 : 0 };
     if (RM.matches) { PRS_STAGE.scene(RSTG.ctx, RSTG.sim, 1, rsView(true)); rsPositionOverlays(); return; }
     RSTG.last = 0; RSTG.raf = requestAnimationFrame(rsFrame);
   }
@@ -3620,30 +4175,9 @@
     var mk = RSTG.markers[idx]; if (!mk || !mk.primary) return;
     var it = mk.primary, seg = it.segment || RSTG.seg;
     closePawnCard();
-    if (appMode === 'live') enterMode('morning'); else toSetup();   // the report's own btn-tweak routing
-    if (it.kind === 'frame') {
-      // frame gap → its receipt row (the rail's 'frame' jump-link pattern): the row may be
-      // filtered off the current day tab — fall back to the 'all' tab where every row exists
-      if (!$('ed-' + it.det)) { daySel = 'all'; placingChip = null; removeGhost(); removeDropSlot(); paintSetup(); }
-      expandAllSettings();
-      var card = $('ed-' + it.det);
-      if (card) {
-        if (card.scrollIntoView) card.scrollIntoView({ behavior: RM.matches ? 'auto' : 'smooth', block: 'center' });
-        var fb = card.querySelector('.rc-close, .rc-route, .rc-undo');
-        if (fb) { try { fb.focus({ preventScroll: true }); } catch (e2) { fb.focus(); } }
-      }
-    } else {
-      // day gap → the day's drawer, pre-scrolled to the hollow (or late) socket
-      openDayDrawer(seg, null);
-      var go = function () {
-        if (!it.cardId) return;   // dep-chain wait: the drawer itself is the fixing surface
-        var sock = document.querySelector('#fd-canvas .fd-socket[data-task="' + it.taskId + '"][data-card="' + it.cardId + '"]');
-        if (!sock) return;
-        if (sock.scrollIntoView) sock.scrollIntoView({ behavior: RM.matches ? 'auto' : 'smooth', block: 'center', inline: 'center' });
-        try { sock.focus({ preventScroll: true }); } catch (e3) { sock.focus(); }
-      };
-      if (RM.matches) go(); else setTimeout(go, 90);   // let the drawer's slide land before scrolling inside it
-    }
+    if (it.kind === 'frame') navigateToFault(targetForDetector(it.det || it.detectorId, seg));
+    else navigateToFault({ kind: it.cardId ? 'handoff' : 'task', segment: seg, taskId: it.taskId || null,
+      cardId: it.cardId || null, handoffId: it.handoffId || null });
   }
   // ---- pawn hit-test + end-of-day inspection (shared #pawn-card) ----
   function rsPawnAt(cx, cy) {
@@ -3734,6 +4268,93 @@
   // =========================================================================
   // EVENTS
   // =========================================================================
+  function targetForReadiness(seg, h) {
+    var kind = h.type === 'CARRY_GAP' ? 'manifest' : (h.cardId ? 'handoff' : (h.roleId ? 'role' : 'task'));
+    return { kind: kind, segment: seg, taskId: h.taskId || null, cardId: h.cardId || null, handoffId: h.handoffId || null,
+      itemId: h.itemId || null, roleId: h.roleId || null, personId: h.personId || null };
+  }
+  function targetForDetector(detectorId, segment) {
+    return { kind: 'detector', detectorId: detectorId, segment: segment || null };
+  }
+  function focusPlanningTarget(el) {
+    if (!el) return false;
+    if (el.scrollIntoView) el.scrollIntoView({ behavior: RM.matches ? 'auto' : 'smooth', block: 'center', inline: 'center' });
+    try { el.focus({ preventScroll: true }); } catch (e) { try { el.focus(); } catch (e2) { } }
+    el.classList.add('target-pulse'); setTimeout(function () { el.classList.remove('target-pulse'); }, 1400);
+    return true;
+  }
+  function ensureSetupForFault() {
+    if (appMode === 'live') enterMode('morning');
+    else if ($('setup').classList.contains('hidden')) toSetup();
+  }
+  function navigateToFault(target) {
+    if (!target || typeof target !== 'object') return;
+    target = jsonCopy(target); lastFaultTarget = target;
+    ensureSetupForFault(); closePawnCard();
+    var kind = target.kind || '', seg = target.segment;
+    if (AUTHORING_SEGS.indexOf(seg) < 0) seg = null;
+    if (kind === 'detector' || (kind === 'card' && !seg)) {
+      var det = target.detectorId || (kind === 'card' ? 'info' : null);
+      if (DETS.indexOf(det) < 0) det = 'info';
+      daySel = seg || 'all'; openClusterId = seg || 'frame'; placingChip = null; paintSetup(); expandAllSettings();
+      var card = $('ed-' + det), control = card && (card.querySelector('.rc-choice-input[value="on"]') || card.querySelector('.rc-route'));
+      focusPlanningTarget(control || card || $('editors')); return;
+    }
+    if (kind === 'budget') {
+      daySel = seg || 'all'; openClusterId = seg || 'frame'; paintSetup(); expandAllSettings();
+      var budgetTarget = target.lineId ? document.querySelector('.mc-env[data-line="' + target.lineId + '"] select') :
+        (target.resourceId ? document.querySelector('[data-resource="' + target.resourceId + '"]') : $('mission-control'));
+      focusPlanningTarget(budgetTarget || $('mission-control')); return;
+    }
+    if (kind === 'guest') {
+      daySel = seg || 'voyage'; openClusterId = daySel; paintSetup(); expandAllSettings();
+      focusPlanningTarget(document.querySelector('.buddy-sel[data-guest="' + target.guestId + '"]') || $('buddy-card')); return;
+    }
+    if (kind === 'role') {
+      daySel = seg || 'all'; openClusterId = seg || 'frame'; paintSetup(); expandAllSettings();
+      focusPlanningTarget(document.querySelector('.org-sel[data-role="' + target.roleId + '"]') || $('org')); return;
+    }
+    if (kind === 'manifest') {
+      seg = seg || 'load'; daySel = seg; openClusterId = seg; placingChip = null; paintSetup(); openDayDrawer(seg, null);
+      var showCustody = function () {
+        var details = $('fd-custody'); if (details) details.open = true;
+        var candidates = document.querySelectorAll('input[data-custody-item="' + target.itemId + '"]'), node = null;
+        if (target.taskId) {
+          var preferred = document.querySelector('input[data-custody-task="' + target.taskId + '"][data-custody-item="' + target.itemId + '"]');
+          if (preferred && !preferred.checked && !preferred.disabled) node = preferred;
+        }
+        for (var ci = 0; ci < candidates.length; ci++) if (!candidates[ci].checked && !candidates[ci].disabled) { node = candidates[ci]; break; }
+        focusPlanningTarget(node || candidates[0] || details || $('fd-card'));
+      };
+      if (RM.matches) showCustody(); else setTimeout(showCustody, 100);
+      return;
+    }
+    if (!seg) seg = daySel !== 'all' ? daySel : 'load';
+    daySel = seg; openClusterId = seg; placingChip = null; paintSetup(); openDayDrawer(seg, null);
+    var reveal = function () {
+      if (kind === 'handoff' && target.handoffId) {
+        var chip = document.querySelector('.fd-ar-chip[data-h="' + target.handoffId + '"]');
+        if (chip) { focusPlanningTarget(chip); openArrowPanel(target.handoffId); return; }
+      }
+      var node = null;
+      if (target.taskId && target.cardId) node = document.querySelector('.fd-socket[data-task="' + target.taskId + '"][data-card="' + target.cardId + '"]');
+      if (!node && target.taskId) node = document.querySelector('.fd-block[data-task="' + target.taskId + '"],.fd-chip[data-task="' + target.taskId + '"]');
+      if (!node && target.cardId) node = document.querySelector('.fd-socket[data-card="' + target.cardId + '"]');
+      focusPlanningTarget(node || $('fd-card'));
+    };
+    if (RM.matches) reveal(); else setTimeout(reveal, 100);
+  }
+  function takeMeToNextIssue() {
+    var plan = currentPlan(), trip = P.scoreTrip(plan), clusters = planClustersFor(plan, trip), root = null, cluster = null;
+    for (var i = 0; i < clusters.length && !root; i++) {
+      if (clusters[i].rootIssues && clusters[i].rootIssues.length) { cluster = clusters[i]; root = clusters[i].rootIssues[0]; }
+    }
+    if (root) navigateToFault(normalizedEditorTarget(root, cluster.id));
+    else focusPlanningTarget($('launch'));
+  }
+  window.PRS_UI = window.PRS_UI || {};
+  window.PRS_UI.navigateToFault = navigateToFault;
+
   function toSetup() {
     if (timer) { clearInterval(timer); timer = null; }
     clearFinishTimer();
@@ -3797,11 +4418,12 @@
       var segs = ['load', 'voyage', 'arrival', 'ops', 'fishday', 'return'];
       var html = '';
       for (var ti = 0; ti < segs.length; ti++) {
-        html += '<button type="button" class="btn sm dd-tab' + (segs[ti] === seg ? ' on' : '') + '" data-dseg="' + segs[ti] + '" data-day="' + segs[ti] + '">' +
+        html += '<button type="button" class="btn sm dd-tab' + (segs[ti] === seg ? ' on' : '') + '" data-dseg="' + segs[ti] + '" data-day="' + segs[ti] + '" aria-pressed="' + (segs[ti] === seg ? 'true' : 'false') + '">' +
           dayLabel(segs[ti]) + '</button>';
       }
-      html += '<button type="button" class="btn sm ghost dd-tab" data-dseg="all" data-day="all">' + T().wholeTrip + '</button>';
+      html += '<button type="button" class="btn sm ghost dd-tab" data-dseg="all" data-day="all" aria-pressed="false">' + T().wholeTrip + '</button>';
       tabs.innerHTML = html;
+      tabs.setAttribute('role', 'group'); tabs.setAttribute('aria-label', T().ddTitle(dayLabel(seg)));
     }
     // integration seam: the shell ships aria-hidden="true" and a display:none guard keys off it —
     // flip it (and force a reflow) BEFORE .open so the slide transition starts from the base state
@@ -3859,6 +4481,20 @@
   function bind() {
     ensureDrawerShell();
     document.querySelectorAll('.lang button').forEach(function (b) { b.addEventListener('click', function () { L = b.getAttribute('data-lang'); applyLang(); }); });
+    $('plan-resume').addEventListener('click', resumeSavedPlan);
+    $('plan-new').addEventListener('click', newRehearsal);
+    $('plan-export').addEventListener('click', exportAuthoringPlan);
+    $('plan-import').addEventListener('change', function () { var file = this.files && this.files[0]; this.value = ''; if (file) importAuthoringPlan(file); });
+    window.addEventListener('pagehide', flushPlanSave);
+    document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'hidden') flushPlanSave(); });
+    $('plan-clusters').addEventListener('click', function (e) {
+      var choice = e.target.closest('.food-strategy-apply'); if (choice) { applyFoodStrategyChoice(choice.dataset.foodStrategy); return; }
+      var b = e.target.closest('.cluster-open-plan'); if (b && faultTargets[b.dataset.fault]) navigateToFault(faultTargets[b.dataset.fault]);
+    });
+    $('plan-clusters').addEventListener('toggle', function (e) {
+      var d = e.target.closest && e.target.closest('.plan-cluster'); if (!d) return;
+      openClusterId = d.open ? d.getAttribute('data-cluster') : '';
+    }, true);
     $('learning-levels').addEventListener('click', function (e) { var b = e.target.closest('button[data-level]'); if (b) setLearningLevel(b.dataset.level); });
     // header 🔊 toggle: the ONE real user-gesture handler allowed to resume the AudioContext (sound.js §W3)
     var sndBtn = $('snd-toggle');
@@ -3896,7 +4532,7 @@
       var seg = b.dataset.day;
       // re-clicking the tab whose drawer is already open closes it (whole-trip has no drawer)
       var reclick = (seg !== 'all' && seg === daySel && drawerSeg === seg);
-      daySel = seg; placingChip = null; removeGhost(); removeDropSlot();
+      daySel = seg; openClusterId = seg === 'all' ? '' : seg; placingChip = null; removeGhost(); removeDropSlot();
       paintSetup();
       if (seg === 'all' || reclick) closeDayDrawer();   // whole-trip closes any drawer; the stage IS that surface
       else openDayDrawer(seg, b);                        // the four days each slide their editor up
@@ -3919,12 +4555,15 @@
       e.stopImmediatePropagation();                     // drawer precedence over the pawn popover
       closeDayDrawer();
     }, true);
-    // §W1 receipt rows: Close / Undo / route-to-fishday (the dropdowns are gone)
+    // Receipt rows: explicit plan choices, plus route-to-fishday for the
+    // detailed handoff graph. No hint action writes a scored answer.
     $('editors').addEventListener('click', function (e) {
       var b = e.target.closest('button'); if (!b || !b.dataset.det) return;
-      if (b.classList.contains('rc-close')) applyReceiptFix(b.dataset.det, true);
-      else if (b.classList.contains('rc-undo')) applyReceiptFix(b.dataset.det, false);
-      else if (b.classList.contains('rc-route')) openFishdayEditor();   // satchel behavior (openDayDrawer when WB lands, tab-switch fallback)
+      if (b.classList.contains('rc-route')) openFishdayEditor();   // satchel behavior (openDayDrawer when WB lands, tab-switch fallback)
+    });
+    $('editors').addEventListener('change', function (e) {
+      var choice = e.target.closest('.rc-choice-input'); if (!choice) return;
+      applyReceiptFix(choice.dataset.det, choice.value === 'on');
     });
     // §W1 rail bucket rows are jump-links: a day bucket switches to that day's tab; the frame
     // bucket scrolls to the first still-open receipt row (falling back to the 'all' tab if the
@@ -3941,7 +4580,7 @@
         }
         var tgt = oc || $('editors');
         if (tgt.scrollIntoView) tgt.scrollIntoView({ behavior: RM.matches ? 'auto' : 'smooth', block: 'center' });
-        var fb = tgt.querySelector && tgt.querySelector('.rc-close, .rc-route');
+        var fb = tgt.querySelector && tgt.querySelector('.rc-choice-input, .rc-route');
         if (fb) { try { fb.focus({ preventScroll: true }); } catch (e2) { fb.focus(); } }
       } else {
         if (bk !== daySel) { daySel = bk; placingChip = null; removeGhost(); removeDropSlot(); paintSetup(); }
@@ -3958,9 +4597,6 @@
         fixed.grantAuth = !!(m && m.approverRoleId && m.payMethod);
         updatePlanUI();
       }
-    });
-    $('mission-control').addEventListener('click', function (e) {
-      if (e.target.closest('.mc-fill-reserve')) applyReceiptFix('reserve', true);
     });
     $('mission-control').addEventListener('input', function (e) {
       var el = e.target;
@@ -3993,8 +4629,8 @@
       }
       buddyOv[gid] = pid; updatePlanUI();
     });
-    $('btn-auto').addEventListener('click', function () { for (var k in fixed) fixed[k] = true; fdReset(); mcReset(); paintSetup(); });
-    $('btn-clear').addEventListener('click', function () { for (var k in fixed) fixed[k] = false; fdReset(); mcReset(); orgSeatReset(); buddyReset(); paintSetup(); });
+    $('btn-auto').addEventListener('click', takeMeToNextIssue);
+    $('btn-clear').addEventListener('click', function () { if (window.confirm(T().resetPlanConfirm)) { resetAuthoringState(); paintSetup(); } });
     $('launch').addEventListener('click', launch);
 
     // §2 COMMAND TRAY — three input modes share the select/resolve/reject grammar.
@@ -4085,6 +4721,16 @@
       var slot = e.target.closest && e.target.closest('.fd-slot'); if (slot) commitDropSlot(slot);
     });
     $('fd-arrowlist').addEventListener('click', function (e) { var c = e.target.closest('.fd-ar-chip'); if (c) openArrowPanel(c.dataset.h); });
+    $('fd-custody-body').addEventListener('change', function (e) {
+      var input = e.target.closest('input[data-custody-task]'); if (!input) return;
+      var taskId = input.dataset.custodyTask, itemId = input.dataset.custodyItem;
+      var carried = [];
+      this.querySelectorAll('input[data-custody-task="' + taskId + '"]:checked').forEach(function (box) { carried.push(box.dataset.custodyItem); });
+      writeCarries(daySel, taskId, carried); paintSetup();
+      var details = $('fd-custody'); if (details) details.open = true;
+      var next = document.querySelector('input[data-custody-task="' + taskId + '"][data-custody-item="' + itemId + '"]');
+      if (next) next.focus();
+    });
     $('fd-clear-day').addEventListener('click', clearDayClick);
     $('ar-body') && $('arrow-modal').addEventListener('change', function (e) { if (e.target.closest('.ar-sel') || e.target.closest('.ar-time')) arrowPatch(); });
     $('ar-delete').addEventListener('click', arrowErase);
@@ -4209,14 +4855,14 @@
 
     $('fixpack').addEventListener('click', function (e) {
       if (e.target.closest('.guided-retry')) { startLive(); return; }
-      var b = e.target.closest('.fix-apply'); if (b) { applyFixAndRerun(b.dataset.fix); return; }
-      if (e.target.closest('#btn-day-autofix')) applyDayFixAndRerun();
+      var b = e.target.closest('.fault-open'); if (b && faultTargets[b.dataset.fault]) navigateToFault(faultTargets[b.dataset.fault]);
     });
     // after a LIVE run's report, every action stays in the live experience
     $('btn-tweak').addEventListener('click', function () { if (appMode === 'live') enterMode('morning'); else toSetup(); });
     $('btn-again').addEventListener('click', function () { if (appMode === 'live') startLive(); else launch(); });
 
-    document.querySelectorAll('.spd').forEach(function (b) { b.addEventListener('click', function () { speedMult = parseFloat(b.dataset.spd); document.querySelectorAll('.spd').forEach(function (x) { x.classList.toggle('on', x === b); }); restartTimer(); }); });
+    document.querySelectorAll('.spd').forEach(function (b) { b.addEventListener('click', function () { speedMult = parseFloat(b.dataset.spd); updateSpeedControls(); restartTimer(); }); });
+    document.querySelectorAll('.pace').forEach(function (b) { b.addEventListener('click', function () { setRunPacing(b.dataset.pace); }); });
 
     // ---- keyboard access: Escape closes the TOP modal (visual stacking = DOM order,
     // rules on top); Tab is trapped inside an open dialog; Enter/Space activates targets ----
@@ -5356,14 +6002,18 @@
 
   function enterMode(m) {
     if (m === 'live' && learningLevel !== 'learn') m = 'morning';
+    // A Morning edit can still be inside the 500 ms debounce when Guided Live
+    // is requested. Persist it while Morning is still the active mode, before
+    // Live stages its temporary lesson mutations in the same stores.
+    if (appMode === 'morning' && m === 'live') flushPlanSave();
     var was = appMode;
     appMode = m;
     ['live', 'morning'].forEach(function (mode) {
       document.body.classList.toggle('mode-' + mode, mode === m);
     });
     killVignette();                                               // §W4 lifecycle: the vignette dies with the intro (enterScreen repeats this; idempotent)
-    $('mode-live').classList.toggle('on', m === 'live');
-    $('mode-morning').classList.toggle('on', m === 'morning');
+    $('mode-live').classList.toggle('on', m === 'live'); $('mode-live').setAttribute('aria-pressed', m === 'live' ? 'true' : 'false');
+    $('mode-morning').classList.toggle('on', m === 'morning'); $('mode-morning').setAttribute('aria-pressed', m === 'morning' ? 'true' : 'false');
     if (timer) { clearInterval(timer); timer = null; }
     clearFinishTimer();
     stopAnim(); closeModals(); camReleaseSafe(0);   // §3 safety: a mode switch never inherits a camera offset
@@ -5408,7 +6058,7 @@
     paused = false; livePausedForFix = false; document.body.classList.add('running');
     dashboardOpen = false;
     $('runwrap').classList.add('drawer-closed');
-    closeModals(); speedMult = 2; document.querySelectorAll('.spd').forEach(function (x) { x.classList.toggle('on', x.getAttribute('data-spd') === '2'); });
+    closeModals(); speedMult = 2; updateSpeedControls();
     enterScreen('run');
     $('figs').innerHTML = ''; $('banner').classList.remove('show'); $('live-dock').classList.remove('hidden');
     var ff = $('fanfare'); if (ff) ff.classList.remove('show');
@@ -5525,7 +6175,7 @@
         finishTimer = setTimeout(function () {
           finishTimer = null;
           if (liveState && liveState.phase === 'brief' && appMode === 'live' && !$('run').classList.contains('hidden')) liveFinish();
-        }, 1600);
+        }, RM.matches ? 0 : 1600);
       }
     }
   }
@@ -5600,13 +6250,12 @@
     var matches = (hs || []).filter(function (h) { return h && h.cardId === g.cardId && to &&
       (h.toTaskId === to.id || h.toRoleId === to.ownerRoleId) && h.channel === ch; });
     var handoff = matches.length ? matches[matches.length - 1] : { cardId: g.cardId, toTaskId: g.taskId, channel: ch };
-    return { cfg: cfg, plan: plan, handoff: handoff, feas: handoffFeasibility(plan, handoff, 'fishday') };
+    return { cfg: cfg, plan: plan, handoff: handoff, feas: resolvedHandoffState(plan, 'fishday', P.tasksForSeg(plan, 'fishday'), handoff) };
   }
 
   function previewChannel(g, ch, persist) {
     var t = T(), ev = evaluateLiveChannel(g, ch), plan2 = ev.plan, fd2 = P.fishdaySchedule(plan2);
-    var to = byId(plan2.tasks, g.taskId), from = producerOf(plan2, g.cardId);
-    var sendMin = from ? from.startMin + from.durMin : to.startMin, arr = sendMin + (P.CHANNELS[ch] || 0), onTime = arr <= to.startMin;
+    var to = byId(plan2.tasks, g.taskId), onTime = ev.feas.arrival != null && ev.feas.arrival <= to.startMin;
     var assume = (to.assumeOn || []).indexOf(g.cardId) >= 0;
     paintBlast(fd2, plan2);
     var pv = $('ld-preview'), txt = $('ld-pv-txt');
@@ -5645,7 +6294,7 @@
       if (ex) dayOv.fishday.handoffs[ex.id] = Object.assign({}, ex, { channel: ch, trigger: trig });
     } else {
       var assume = (to.assumeOn || []).indexOf(g.cardId) >= 0;
-      var id = 'h_' + g.cardId.replace('ic_', '') + '_' + to.ownerRoleId + '_' + (fdUid++);
+      var id = nextHandoffId('h_' + g.cardId.replace('ic_', '') + '_' + to.ownerRoleId + '_', 'fishday');
       dayOv.fishday.handoffs[id] = { cardId: g.cardId, fromRoleId: from.ownerRoleId, fromTaskId: from.id, toRoleId: to.ownerRoleId, toTaskId: to.id, trigger: trig, channel: ch, ifLate: assume ? 'assume' : 'idle', reworkKind: assume ? 'wrongFish' : null, content: { en: '', jp: '' } };
     }
     liveState.addressed[g.taskId + '|' + g.cardId] = true; liveState.fixes++;
@@ -5747,6 +6396,10 @@
   }
 
   // ---- init ----
+  // Discover saved state for the explicit Resume action, but never apply or
+  // launch it automatically. Corrupt/incompatible data is reported and the
+  // fresh in-memory defaults remain intact.
+  savedPlanRecord = readSavedPlan();
   bind(); applyLang();
   // Every link open lands on a stable home. Nothing begins moving and no
   // rehearsal starts until the player explicitly chooses Guided Live or the

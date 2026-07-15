@@ -39,6 +39,26 @@
   var IDLE_CAP = 60;             // idle charged to a task whose needed arrow was never drawn
   var CHANNELS = { faceToFace: 0, radio: 1, phone: 2, chat: 10, board: 30 }; // send latency, minutes
 
+  // One controlled Day-3 learning root has three authored, fully deterministic
+  // solutions. The score still prices the food->menu SOCKET once; these ids only
+  // let the editor author different operational paths and compare their trade-offs.
+  var DAY3_FOOD_STRATEGY_IDS = ['direct-fast', 'delegated-relay', 'redundant-paths'];
+  var DAY3_FOOD_ROOT = { segment: 'fishday', taskId: 't_f_menu', cardId: 'ic_food' };
+  var DAY3_FOOD_HANDOFF_IDS = [
+    'h_food', 'h_food_relay_intake', 'h_food_relay_delivery',
+    'h_food_primary_radio', 'h_food_backup_phone'
+  ];
+  var DAY3_FOOD_RECIPE_HANDOFFS = {
+    'direct-fast': ['h_food'],
+    'delegated-relay': ['h_food_relay_intake', 'h_food_relay_delivery'],
+    'redundant-paths': ['h_food_primary_radio', 'h_food_backup_phone']
+  };
+  var DAY3_FOOD_HANDOFF_STRATEGY = {
+    h_food: 'direct-fast',
+    h_food_relay_intake: 'delegated-relay', h_food_relay_delivery: 'delegated-relay',
+    h_food_primary_radio: 'redundant-paths', h_food_backup_phone: 'redundant-paths'
+  };
+
   // §13.1/refinement-1: species -> allergen CATEGORY map, so the allergy gate checks a real
   // category intersection (ic_food.allergens holds category tokens like 'shellfish') instead
   // of a literal species/category string match. skipjack/mackerel are 'fish' (never intersects
@@ -295,6 +315,52 @@
       H('h_catch_comms',  'ic_catch',     'specialist', 't_f_tally',      'comms',      't_f_report',   { type: 'onTaskDone', taskId: 't_f_tally' },      'radio',      'idle',   null,
         'Catch logged · ETA dockside 14:00 on schedule', '釣果記録・帰港予定14:00 定刻')
     ];
+  }
+
+  // Authoring recipes for the food->menu socket. `requiresHandoffId` is an
+  // additive relay prerequisite understood by the delivery resolver below: the
+  // forwarding send is valid only after its intake actually arrives. Therefore
+  // the delegated option is a real two-hop path, not decorative metadata.
+  function day3FoodStrategyHandoffs(strategyId) {
+    var h, out = [];
+    if (strategyId === 'direct-fast') {
+      h = canonHandoffs().filter(function (x) { return x.id === 'h_food'; })[0];
+      h.strategyId = strategyId; out.push(h);
+    } else if (strategyId === 'delegated-relay') {
+      h = H('h_food_relay_intake', 'ic_food', 'budgetLead', 't_f_food', 'comms', 't_f_orgfood',
+        { type: 'onTaskDone', taskId: 't_f_food' }, 'radio', 'idle', null,
+        'Food and allergy list to the communications relay', '食材・アレルギー一覧を連絡担当へ中継');
+      h.strategyId = strategyId; h.pathId = 'food-relay'; h.relayRoleId = 'comms'; out.push(h);
+      h = H('h_food_relay_delivery', 'ic_food', 'comms', 't_f_orgfood', 'chef', 't_f_menu',
+        { type: 'atMinute', value: 290 }, 'phone', 'idle', null,
+        'Communications relay confirms the list with the chef', '連絡担当が料理担当へ一覧を確認');
+      h.strategyId = strategyId; h.pathId = 'food-relay'; h.relayRoleId = 'comms';
+      h.requiresHandoffId = 'h_food_relay_intake'; out.push(h);
+    } else if (strategyId === 'redundant-paths') {
+      h = H('h_food_primary_radio', 'ic_food', 'budgetLead', 't_f_food', 'chef', 't_f_menu',
+        { type: 'onTaskDone', taskId: 't_f_food' }, 'radio', 'idle', null,
+        'Primary food and allergy confirmation by radio', '食材・アレルギー確認を無線で送信');
+      h.strategyId = strategyId; h.pathId = 'food-primary'; out.push(h);
+      h = H('h_food_backup_phone', 'ic_food', 'budgetLead', 't_f_food', 'chef', 't_f_menu',
+        { type: 'onTaskDone', taskId: 't_f_food' }, 'phone', 'idle', null,
+        'Independent backup food and allergy confirmation by phone', '食材・アレルギー確認を電話でも予備送信');
+      h.strategyId = strategyId; h.pathId = 'food-backup'; out.push(h);
+    }
+    return out;
+  }
+
+  // Pure config applicator used by UI choices. Known sibling recipes are cleared
+  // before the selected path is written, so switching choices cannot silently
+  // retain an old backup and overstate resilience. Unknown ids are a no-op clone.
+  function applyDay3FoodStrategy(cfg, strategyId) {
+    var out = clone(cfg || { seed: 1, overrides: {} });
+    out.overrides = out.overrides || {};
+    if (DAY3_FOOD_STRATEGY_IDS.indexOf(strategyId) < 0) return out;
+    var ho = out.overrides.handoffs = out.overrides.handoffs || {};
+    for (var i = 0; i < DAY3_FOOD_HANDOFF_IDS.length; i++) ho[DAY3_FOOD_HANDOFF_IDS[i]] = null;
+    var authored = day3FoodStrategyHandoffs(strategyId);
+    for (i = 0; i < authored.length; i++) ho[authored[i].id] = authored[i];
+    return out;
   }
   // §7/§13.4 P2 seed re-tune: withhold MOST of the 14 canonical arrows — today's ~12/14
   // pre-drawn made the arrows a footnote; the gappy seed should make "draw the information
@@ -1462,14 +1528,159 @@
     if (h.trigger.type === 'beforeTaskStart') { t = byId(plan.tasks, h.trigger.taskId || h.toTaskId); return (t && typeof t.startMin === 'number') ? (t.startMin - (h.trigger.leadMin || 0)) : null; }
     return null;
   }
+  // Planned end-to-end delivery for either a direct arrow or a validated relay
+  // chain. This is presentation-safe evidence: every failure has a stable reason,
+  // and caller-owned handoffs/seen maps are never modified.
+  function plannedHandoffPath(plan, h, seg, seen) {
+    seg = handoffSegment(plan, h, seg);
+    if (!h || !seg) return { feasible: false, reason: 'missing-handoff', sendMin: null, arrivalMin: null, handoffIds: [], channels: [] };
+    var key = seg + '|' + h.id, trail = {}, k;
+    for (k in (seen || {})) trail[k] = seen[k];
+    if (trail[key]) return { feasible: false, reason: 'relay-cycle', sendMin: null, arrivalMin: null, handoffIds: [], channels: [] };
+    trail[key] = 1;
+    var f = channelFeasibility(plan, h, seg);
+    if (!f.ok) return { feasible: false, reason: f.reason, sendMin: null, arrivalMin: null, handoffIds: [h.id], channels: [h.channel] };
+    var send = handoffMinute(plan, h, seg, 'from');
+    if (send == null || !isFinite(send)) return { feasible: false, reason: 'unresolved-trigger', sendMin: null, arrivalMin: null, handoffIds: [h.id], channels: [h.channel] };
+    var ids = [], channels = [];
+    if (h.requiresHandoffId) {
+      var dep = byId(handoffsForSeg(plan, seg), h.requiresHandoffId);
+      if (!dep) return { feasible: false, reason: 'missing-prerequisite', sendMin: send, arrivalMin: null, handoffIds: [h.id], channels: [h.channel] };
+      if (dep.cardId !== h.cardId || dep.toRoleId !== h.fromRoleId) {
+        return { feasible: false, reason: 'relay-mismatch', sendMin: send, arrivalMin: null,
+          handoffIds: [dep.id, h.id], channels: [dep.channel, h.channel] };
+      }
+      var prior = plannedHandoffPath(plan, dep, seg, trail);
+      if (!prior.feasible) return { feasible: false, reason: prior.reason, sendMin: send, arrivalMin: null,
+        handoffIds: prior.handoffIds.concat([h.id]), channels: prior.channels.concat([h.channel]) };
+      if (prior.arrivalMin > send) return { feasible: false, reason: 'relay-not-ready', sendMin: send, arrivalMin: null,
+        handoffIds: prior.handoffIds.concat([h.id]), channels: prior.channels.concat([h.channel]) };
+      ids = prior.handoffIds.slice(); channels = prior.channels.slice();
+    }
+    ids.push(h.id); channels.push(h.channel);
+    return { feasible: true, reason: 'ok', sendMin: send, arrivalMin: send + CHANNELS[h.channel],
+      handoffIds: ids, channels: channels };
+  }
   function staticArrival(plan, h) {
-    if (!channelFeasibility(plan, h, 'fishday').ok) return null;
-    var s = resolveSendMin(plan, h); return s == null ? null : s + CHANNELS[h.channel];
+    var path = plannedHandoffPath(plan, h, 'fishday');
+    return path.feasible ? path.arrivalMin : null;
   }
   function infoArrival(plan, cardId, roleId) { // earliest static arrival over drawn arrows (null = never)
     var hs = arrowsTo(plan, roleId, cardId), best = null;
     for (var i = 0; i < hs.length; i++) { var a = staticArrival(plan, hs[i]); if (a != null && (best == null || a < best)) best = a; }
     return best;
+  }
+
+  // UI-facing trade-off lens for the controlled Day-3 food->menu root. It reads
+  // authored topology and the same feasibility/schedule/cluster engines used for
+  // scoring; it does not infer points from strategy labels. Consequently custom
+  // direct/relay/redundant paths project honestly too.
+  function day3FoodStrategy(plan) {
+    plan = plan || makeTemplate();
+    var menu = byId(fishdayTasks(plan), DAY3_FOOD_ROOT.taskId), menuStart = menu ? menu.startMin : null;
+    var segHandoffs = handoffsForSeg(plan, 'fishday');
+    var hs = segHandoffs.filter(function (h) {
+      return h.cardId === DAY3_FOOD_ROOT.cardId && h.toRoleId === 'chef' && h.toTaskId === DAY3_FOOD_ROOT.taskId;
+    });
+    var paths = [], allIds = [], allChannels = [], senderWorkload = {}, i, j;
+    for (i = 0; i < hs.length; i++) {
+      var h = hs[i], path = plannedHandoffPath(plan, h, 'fishday'), onTime = path.feasible && menuStart != null && path.arrivalMin <= menuStart;
+      var relayRoleId = path.handoffIds.length > 1 ? (h.relayRoleId || h.fromRoleId || null) : null;
+      paths.push({ id: h.pathId || h.id, kind: path.handoffIds.length > 1 ? 'relay' : 'direct',
+        channel: h.channel || null, channels: path.channels.slice(), arrivalMin: path.arrivalMin,
+        feasible: path.feasible, onTime: onTime, reason: path.feasible ? (onTime ? 'ok' : 'late') : path.reason,
+        relayRoleId: relayRoleId, handoffIds: path.handoffIds.slice() });
+      for (j = 0; j < path.handoffIds.length; j++) {
+        var ph = byId(segHandoffs, path.handoffIds[j]);
+        if (allIds.indexOf(path.handoffIds[j]) < 0) {
+          allIds.push(path.handoffIds[j]);
+          if (ph) senderWorkload[ph.fromRoleId] = (senderWorkload[ph.fromRoleId] || 0) + 1;
+        }
+      }
+      for (j = 0; j < path.channels.length; j++) if (allChannels.indexOf(path.channels[j]) < 0) allChannels.push(path.channels[j]);
+    }
+    paths.sort(function (a, b) { return a.id < b.id ? -1 : (a.id > b.id ? 1 : 0); });
+    allIds.sort(); allChannels.sort();
+    var feasiblePaths = paths.filter(function (p) { return p.feasible; });
+    var onTimePaths = paths.filter(function (p) { return p.onTime; });
+    var earliest = null, shortest = null, maxRelay = 0;
+    for (i = 0; i < feasiblePaths.length; i++) if (earliest == null || feasiblePaths[i].arrivalMin < earliest) earliest = feasiblePaths[i].arrivalMin;
+    for (i = 0; i < onTimePaths.length; i++) {
+      var plen = onTimePaths[i].handoffIds.length;
+      if (shortest == null || plen < shortest) shortest = plen;
+      if (plen - 1 > maxRelay) maxRelay = plen - 1;
+    }
+    // Maximum count of mutually handoff-disjoint on-time paths (small authored
+    // graph, exhaustive subsets). Shared relay intake therefore never masquerades
+    // as independent redundancy.
+    var independent = 0, n = onTimePaths.length;
+    if (n <= 15) for (var mask = 1; mask < (1 << n); mask++) {
+      var used = {}, count = 0, disjoint = true;
+      for (i = 0; i < n && disjoint; i++) if (mask & (1 << i)) {
+        count++;
+        for (j = 0; j < onTimePaths[i].handoffIds.length; j++) {
+          var hid = onTimePaths[i].handoffIds[j]; if (used[hid]) { disjoint = false; break; } used[hid] = 1;
+        }
+      }
+      if (disjoint && count > independent) independent = count;
+    } else independent = onTimePaths.length ? 1 : 0;
+    var topologyStrategyId = null;
+    if (independent >= 2) topologyStrategyId = 'redundant-paths';
+    else if (onTimePaths.some(function (p) { return p.kind === 'relay'; })) topologyStrategyId = 'delegated-relay';
+    else if (onTimePaths.length) topologyStrategyId = 'direct-fast';
+
+    // Recipe identity is authored intent, not the topology that happens to
+    // survive a failure. Read all controlled food handoffs (including the relay
+    // intake, which is not itself a menu endpoint). A known handoff carrying the
+    // wrong recipe tag, an unknown tag, or more than one tag is an invalid mixed
+    // identity and fails closed to null. Untagged legacy/custom plans retain the
+    // topology fallback for backwards compatibility.
+    var authoredIds = [], metadataInvalid = false, metadataSeen = false;
+    for (i = 0; i < segHandoffs.length; i++) {
+      var mh = segHandoffs[i];
+      if (mh.cardId !== DAY3_FOOD_ROOT.cardId || mh.strategyId == null) continue;
+      metadataSeen = true;
+      if (DAY3_FOOD_STRATEGY_IDS.indexOf(mh.strategyId) < 0 || DAY3_FOOD_HANDOFF_STRATEGY[mh.id] !== mh.strategyId) {
+        metadataInvalid = true; continue;
+      }
+      if (authoredIds.indexOf(mh.strategyId) < 0) authoredIds.push(mh.strategyId);
+    }
+    authoredIds.sort();
+    var metadataConflict = metadataInvalid || authoredIds.length > 1;
+    var strategyId = metadataConflict ? null : (authoredIds.length === 1 ? authoredIds[0] : topologyStrategyId);
+    var ds = daySchedule(plan, 'fishday');
+    var socketMissing = ds.missing.some(function (x) { return x.taskId === DAY3_FOOD_ROOT.taskId && x.cardId === DAY3_FOOD_ROOT.cardId; });
+    var socketLate = ds.late.some(function (x) { return x.taskId === DAY3_FOOD_ROOT.taskId && x.cardId === DAY3_FOOD_ROOT.cardId; });
+    var socketResolved = onTimePaths.length > 0 && !socketMissing && !socketLate;
+    var recipeComplete = false;
+    if (!metadataConflict && strategyId) {
+      if (!metadataSeen) recipeComplete = topologyStrategyId === strategyId && socketResolved;
+      else recipeComplete = DAY3_FOOD_RECIPE_HANDOFFS[strategyId].every(function (id) {
+        var rh = byId(segHandoffs, id); return !!rh && rh.strategyId === strategyId;
+      });
+    }
+    var degraded = metadataConflict || !recipeComplete || !socketResolved ||
+      (strategyId != null && topologyStrategyId !== strategyId);
+    var clusters = planClusters(plan), fishCluster = clusters.filter(function (c) { return c.id === 'fishday'; })[0];
+    var foodRoots = fishCluster ? fishCluster.rootIssues.filter(function (r) {
+      return r.cardIds.indexOf(DAY3_FOOD_ROOT.cardId) >= 0 && r.taskIds.indexOf(DAY3_FOOD_ROOT.taskId) >= 0;
+    }) : [];
+    var trip = scoreTrip(plan), actualMenuStart = ds.byTask[DAY3_FOOD_ROOT.taskId] ? ds.byTask[DAY3_FOOD_ROOT.taskId].start : null;
+    var producer = byId(fishdayTasks(plan), 't_f_food'), producerFinish = producer ? producer.startMin + producer.durMin : null;
+    return { root: clone(DAY3_FOOD_ROOT), strategyId: strategyId, topologyStrategyId: topologyStrategyId,
+      recipeComplete: recipeComplete, degraded: degraded, resolved: socketResolved,
+      rootCleared: foodRoots.length === 0, mastered: trip.total === 100 && trip.gate.clean === true,
+      wholePlanScore: trip.total, clusterEarned: fishCluster ? fishCluster.earned : 0,
+      clusterMaxPts: fishCluster ? fishCluster.maxPts : 0,
+      arrivalMin: earliest, latencyMin: earliest == null || producerFinish == null ? null : earliest - producerFinish,
+      menuStartMin: menuStart, marginMin: earliest == null || menuStart == null ? null : menuStart - earliest,
+      transmissions: allIds.length, coordinationWorkload: allIds.length, senderWorkload: senderWorkload,
+      relaySteps: maxRelay, pathCount: paths.length, feasiblePathCount: feasiblePaths.length,
+      onTimePathCount: onTimePaths.length, channelCount: allChannels.length,
+      singlePathFailureTolerance: Math.max(0, independent - 1),
+      redundancyEffort: onTimePaths.length > 1 && shortest != null ? Math.max(0, allIds.length - shortest) : 0,
+      timingDisplacementMin: actualMenuStart == null || menuStart == null ? null : actualMenuStart - menuStart,
+      paths: paths };
   }
 
   // The cascade: effective start = max(planned start, deps' effective ends, waited-on
@@ -1518,9 +1729,44 @@
       if (h.trigger.type === 'beforeTaskStart') { t = fdById[h.trigger.taskId || h.toTaskId] || byId(plan.tasks, h.trigger.taskId || h.toTaskId); return (t && typeof t.startMin === 'number') ? (t.startMin - (h.trigger.leadMin || 0)) : null; }
       return null;
     }
+    function deliverySeg(h, eff, dynamic, seen) {
+      if (!h) return { arrival: null, pending: false, reason: 'missing-handoff' };
+      var trail = {}, sk; for (sk in (seen || {})) trail[sk] = seen[sk];
+      var key = seg + '|' + h.id;
+      if (trail[key]) return { arrival: null, pending: true, reason: 'relay-cycle' };
+      trail[key] = 1;
+      var feasible = channelFeasibility(plan, h, seg);
+      if (!feasible.ok) return { arrival: null, pending: false, reason: feasible.reason };
+      var tr = h.trigger || {}, source = null, send = null;
+      if (tr.type === 'onTaskDone') {
+        source = fdById[tr.taskId] || byId(plan.tasks, tr.taskId);
+        if (dynamic && fdById[tr.taskId]) {
+          if (!eff || !eff[tr.taskId]) return { arrival: null, pending: true, reason: 'producer-pending' };
+          send = eff[tr.taskId].end;
+        } else if (source && typeof source.startMin === 'number') send = source.startMin + source.durMin;
+      } else if (tr.type === 'atMinute') {
+        if (typeof tr.value === 'number' && isFinite(tr.value)) send = tr.value;
+      } else if (tr.type === 'beforeTaskStart') {
+        source = fdById[tr.taskId || h.toTaskId] || byId(plan.tasks, tr.taskId || h.toTaskId);
+        if (source && typeof source.startMin === 'number') send = source.startMin - (tr.leadMin || 0);
+      }
+      if (send == null || !isFinite(send)) return { arrival: null, pending: false, reason: 'unresolved-trigger' };
+      if (h.requiresHandoffId) {
+        var dep = byId(segHandoffs, h.requiresHandoffId);
+        if (!dep) return { arrival: null, pending: false, reason: 'missing-prerequisite' };
+        if (dep.cardId !== h.cardId || dep.toRoleId !== h.fromRoleId) {
+          return { arrival: null, pending: false, reason: 'relay-mismatch' };
+        }
+        var prior = deliverySeg(dep, eff, dynamic, trail);
+        if (prior.pending) return prior;
+        if (prior.arrival == null) return prior;
+        if (prior.arrival > send) return { arrival: null, pending: false, reason: 'relay-not-ready' };
+      }
+      return { arrival: send + CHANNELS[h.channel], pending: false, reason: 'ok' };
+    }
     function arrivalSeg(h) {
-      if (!channelFeasibility(plan, h, seg).ok) return null;
-      var s = sendMinSeg(h); return s == null ? null : s + CHANNELS[h.channel];
+      var delivery = deliverySeg(h, null, false);
+      return delivery.arrival;
     }
     // static design lens (billed to info, §9), per (consuming task, card) pair — the §6.2
     // checker's unit. Delivery = the EARLIEST drawn arrow, so a redundant slow arrow never
@@ -1556,12 +1802,8 @@
             if (owner[cid] === t.ownerRoleId) continue;
             var hs = arrowsToSeg(t.ownerRoleId, cid), best = null, bestH = null, pend = false;
             for (k = 0; k < hs.length; k++) {
-              var hh = hs[k], a;
-              if (!channelFeasibility(plan, hh, seg).ok) continue;
-              if (hh.trigger.type === 'onTaskDone' && fdById[hh.trigger.taskId]) {
-                if (!eff[hh.trigger.taskId]) { pend = true; continue; }        // producer not scheduled yet (or cyclic)
-                a = eff[hh.trigger.taskId].end + (CHANNELS[hh.channel] || 0);  // DYNAMIC: producer's effective finish
-              } else { a = arrivalSeg(hh); }
+              var hh = hs[k], delivery = deliverySeg(hh, eff, true), a = delivery.arrival;
+              if (delivery.pending) { pend = true; continue; }
               if (a != null && isFinite(a) && (best == null || a < best)) { best = a; bestH = hh; }
             }
             if (injections) for (k = 0; k < injections.length; k++) { var inj = injections[k]; if (inj.cardId === cid && inj.toRoleId === t.ownerRoleId && (best == null || inj.min < best)) { best = inj.min; bestH = null; } }
@@ -2488,7 +2730,37 @@
       if (r.type === 'TASK_UNSTAFFED' && taskIds.indexOf(r.taskId) >= 0) { bad = true; status = 'missing'; reasonKey = 'scr_exec_unstaffed'; }
       else if (r.type === 'MISASSIGNED' && taskIds.indexOf(r.taskId) >= 0) { bad = true; status = 'broken'; reasonKey = 'scr_exec_misassigned'; }
       else if (r.type === 'DEP_BROKEN' && taskIds.indexOf(r.taskId) >= 0) { bad = true; status = 'broken'; reasonKey = 'scr_exec_broken'; }
+      // hd_r_headcount is priced as a safety gate rather than a Comms execution
+      // lane. Its direct prerequisite, hd_r_ship, belongs to Return Logistics;
+      // bind that one cross-class dependency break to the existing 1-point Logi
+      // lane so delaying shipping past headcount can never display 100. This is
+      // intentionally exact: other dependency consumers already belong to their
+      // own priced lane/gate, and broad producer charging would double-bill them.
+      else if (r.type === 'DEP_BROKEN' && seg === 'return' && roleId === 'logi' &&
+          r.taskId === 'hd_r_headcount' && r.depId === 'hd_r_ship' && taskIds.indexOf(r.depId) >= 0) {
+        bad = true; status = 'broken'; reasonKey = 'scr_exec_broken';
+      }
       else if (r.type === 'OVERLOAD' && (taskIds.indexOf(r.taskId) >= 0 || taskIds.indexOf(r.otherId) >= 0)) { bad = true; status = 'overlap'; reasonKey = 'scr_exec_overlap'; }
+    }
+    // 100 means mastery: three modeled handover duties that used to live only in the
+    // zero-known-gaps clean gate now bind to an EXISTING execution atom. No atom or
+    // point is minted, so the frozen 99-row / 100-point constitution is unchanged.
+    // - Arrival Logistics owns the Chichijima physical transfer custody chain.
+    // - Return Site Lead owns the inferred reverse-route custody chain.
+    // - Return Logistics also owns the legacy whole-trip ship-out/headcount duty
+    //   surfaced by the returnLogi detector (t_ship). A plan cannot display 100 while
+    //   any of these concrete duties is unresolved.
+    if (!bad && seg === 'arrival' && roleId === 'logi' && manifestTransferGaps(plan).length > 0) {
+      bad = true; status = 'broken'; reasonKey = 'scr_exec_broken';
+    }
+    if (!bad && seg === 'return' && roleId === 'siteLead' && manifestReturnGaps(plan).length > 0) {
+      bad = true; status = 'broken'; reasonKey = 'scr_exec_broken';
+    }
+    if (!bad && seg === 'return' && roleId === 'logi') {
+      var legacyShip = byId(plan.tasks || [], 't_ship');
+      if (!legacyShip || !legacyShip.assignedIds || legacyShip.assignedIds.length === 0) {
+        bad = true; status = 'missing'; reasonKey = 'scr_exec_unstaffed';
+      }
     }
     return { id: id, bucket: bucket, dimension: 'exec', itemRef: { type: 'lane', taskId: taskIds, roleId: roleId },
       maxPts: 1, earned: bad ? 0 : 1, status: status, reasonKey: reasonKey, reasonParams: {} };
@@ -2534,7 +2806,15 @@
     // MAKE-REAL (§13.1): ic_hospital.recipientRoleIds ⊇ {pm,siteLead,comms,safetyLead}
     var hosp = byId(plan.infoCards, 'ic_hospital'), hospNeed = ['pm', 'siteLead', 'comms', 'safetyLead'];
     var hospOk = !!hosp && hospNeed.every(function (r) { return hosp.recipientRoleIds.indexOf(r) >= 0; });
-    out.push(tripGateAtom('frame_hospital_shared', 'frame', 'safety', 2, hospOk, { type: 'gate', cardId: 'ic_hospital' }, 'scr_safety_ok', 'scr_safety_gap'));
+    // The existing 2-point critical-information gate covers BOTH emergency access and
+    // the route brief. The classic `info` detector already models ic_ferry distribution;
+    // binding it here removes the former 100/B state without changing weights or rows.
+    var ferry = byId(plan.infoCards, 'ic_ferry'), ferryNeed = ['siteLead', 'specialist', 'chef', 'logi', 'safetyLead'];
+    var ferryOk = !!ferry && ferryNeed.every(function (r) { return ferry.recipientRoleIds.indexOf(r) >= 0; });
+    var sharedPrimary = !ferryOk ? 'ic_ferry' : 'ic_hospital';
+    out.push(tripGateAtom('frame_hospital_shared', 'frame', 'safety', 2, hospOk && ferryOk,
+      { type: 'gate', detectorId: 'info', cardId: sharedPrimary, cardIds: ['ic_hospital', 'ic_ferry'] },
+      'scr_safety_ok', 'scr_safety_gap'));
     // Voyage repack: budget authority 3 -> 2, reserve 2 -> 1 (frame 14 -> 12).
     var meals = byId(plan.budget.lines, 'bl_meals');
     out.push(tripGateAtom('frame_budget_authority', 'frame', 'money', 2, !!(meals && meals.approverRoleId && meals.payMethod), { type: 'gate', detectorId: 'budgetAuth' }, 'scr_money_ok', 'scr_money_gap'));
@@ -2624,6 +2904,41 @@
     return out;
   }
 
+  // Flex/standby tasks intentionally do not mint their own execution lane, but they
+  // are still required authored work. Bind their completion/capacity evidence to one
+  // existing safety-readiness atom per segment so "free lane" never means a hidden
+  // 100-point gap. The anchor ids are stable and no maxima/atom counts change.
+  function tripApplyFlexCoverage(atoms, plan, seg, reqTasks, tmplDur, ds, rd) {
+    var anchorId = { load: 'load_safety_hd_l_headcount', voyage: 'voyage_safety_hd_v_watch',
+      fishday: 'fishday_safety_t_f_seawatch' }[seg];
+    if (!anchorId) return;
+    var flex = reqTasks.filter(function (t) { return !!t.flex; });
+    if (!flex.length) return;
+    var anchor = null, i, j, live, fault = null;
+    for (i = 0; i < atoms.length; i++) if (atoms[i].id === anchorId) { anchor = atoms[i]; break; }
+    if (!anchor) return;
+    var refs = pcList(anchor.itemRef.taskId);
+    for (i = 0; i < flex.length; i++) pcAdd(refs, flex[i].id);
+    anchor.itemRef.taskId = refs;
+    for (i = 0; i < flex.length && !fault; i++) {
+      live = byId(tasksForSeg(plan, seg), flex[i].id);
+      if (!live || !isPlaced(live)) fault = { status: 'missing' };
+      else if (typeof tmplDur[flex[i].id] === 'number' && live.durMin < tmplDur[flex[i].id]) fault = { status: 'compressed' };
+      else if (ds.misassigned.indexOf(flex[i].id) >= 0) fault = { status: 'broken' };
+    }
+    for (i = 0; i < rd.length && !fault; i++) {
+      var rr = rd[i], touches = false;
+      for (j = 0; j < flex.length && !touches; j++) touches = rr.taskId === flex[j].id || rr.otherId === flex[j].id;
+      if (!touches) continue;
+      if (rr.type === 'OVERLOAD') fault = { status: 'overlap' };
+      else if (rr.type === 'DEP_BROKEN' || rr.type === 'MISASSIGNED') fault = { status: 'broken' };
+      else if (rr.type === 'UNPLACED_REQUIRED' || rr.type === 'TASK_UNSTAFFED') fault = { status: 'missing' };
+    }
+    if (fault && anchor.earned === anchor.maxPts) {
+      anchor.earned = 0; anchor.status = fault.status; anchor.reasonKey = 'scr_safety_gap';
+    }
+  }
+
   // THE GENERIC DERIVER (§3) — mints every non-frame atom for one segment from the template's
   // required tasks + the §3.4 flags. ds/rd are computed ONCE here and threaded into the earn
   // functions (perf/correctness fix, §9 SP2). Atom order: sockets, then per-task safety/quality/
@@ -2696,6 +3011,15 @@
           else if (cLive.assignedIds.length !== 1 || cLive.assignedIds[0] !== cBuddy) { cOk = false; cSt = 'broken'; }
           else if (typeof cFloor === 'number' && cLive.durMin < cFloor) { cOk = false; cSt = 'compressed'; }
         }
+        // A continuous care assignment cannot be mastered by double-booking its buddy.
+        // This used to survive at 100 with only the clean gate withheld. The already-
+        // existing per-guest CARE atom now reads dayReadiness's exact overlap evidence.
+        if (cOk) for (cj = 0; cj < rd.length; cj++) {
+          var cRd = rd[cj];
+          if (cRd.type === 'OVERLOAD' && (cTids.indexOf(cRd.taskId) >= 0 || cTids.indexOf(cRd.otherId) >= 0)) {
+            cOk = false; cSt = 'overlap'; break;
+          }
+        }
         out.push({ id: 'voyage_quality_t_v_star_' + gid, bucket: 'voyage', dimension: 'quality',
           itemRef: { type: 'gate', guestId: gid, taskId: cTids }, maxPts: 1, earned: cOk ? 1 : 0,
           status: cSt, reasonKey: cOk ? 'scr_qual_ok' : 'scr_qual_fail', reasonParams: {} });
@@ -2712,6 +3036,7 @@
       var dtmpl = byId(tasksForSeg(tmpl, seg), decoyIds[i]);
       out.push(tripDecoyAtom(bucket + '_decoy_' + decoyIds[i], bucket, plan, seg, decoyIds[i], !!(dtmpl && dtmpl.safetyFlag)));
     }
+    tripApplyFlexCoverage(out, plan, seg, reqTasks, tmplDur, ds, rd);
     return out;
   }
 
@@ -2755,6 +3080,499 @@
     var grade = (total >= GRADE_BANDS.A && clean) ? 'A' : (total >= GRADE_BANDS.B ? 'B' : (total >= GRADE_BANDS.C ? 'C' : 'D'));
     return { total: total, grade: grade, gate: { clean: clean, withheldA: withheldA },
       atoms: atoms, byBucket: byBucket, byDimension: byDimension };
+  }
+
+  // planClusters(plan) — the cluster-first, causal projection of scoreTrip.
+  //
+  // This is deliberately a LENS over the existing score/readiness engines. It never
+  // mints points, re-runs a different rubric, or mutates the authored plan. The seven
+  // returned clusters are in frozen trip order, and their earned/maxPts values are the
+  // exact scoreTrip.byBucket values. Within a cluster, every failed score atom is placed
+  // in exactly one stable rootIssue; detailed day-readiness hints and the classic
+  // clean-gate detectors are also partitioned once so a UI can open one causal group
+  // instead of rendering dozens of flat warnings.
+  //
+  // A downstream Fishing-Day `late` atom is folded into an information root only when
+  // daySchedule's own wait/dependency graph traces it to exactly ONE failed socket. If
+  // two plausible upstream sockets contribute, the symptom keeps its own task root —
+  // this is the important "never invent causality" boundary.
+  var PLAN_CLUSTER_IDS = ['frame', 'load', 'voyage', 'arrival', 'ops', 'fishday', 'return'];
+
+  function pcList(v) { return v == null ? [] : (Array.isArray(v) ? v.slice() : [v]); }
+  function pcAdd(a, v) { if (v != null && a.indexOf(v) < 0) a.push(v); }
+  function pcAddAll(a, values) { values = pcList(values); for (var i = 0; i < values.length; i++) pcAdd(a, values[i]); }
+  function pcTask(plan, bucket, id) {
+    var t = bucket !== 'frame' ? byId(tasksForSeg(plan, bucket), id) : null;
+    return t || byId(plan.tasks || [], id);
+  }
+  function pcTaskIds(ref) { return ref ? pcList(ref.taskId) : []; }
+  function pcAtomLost(a) { return a.maxPts - a.earned; }
+  function pcAtomHasTask(a, id) { return pcTaskIds(a.itemRef).indexOf(id) >= 0; }
+  function pcReadinessKey(r) {
+    // Fixed field order (rather than JSON object insertion order) makes unknown/future
+    // readiness records deterministic too; unrecognised fields never crash grouping.
+    var f = ['type', 'taskId', 'otherId', 'depId', 'cardId', 'roleId', 'itemId', 'guestId',
+      'personId', 'handoffId', 'stage', 'lateMin'], out = [];
+    for (var i = 0; i < f.length; i++) if (r[f[i]] != null) out.push(f[i] + '=' + String(r[f[i]]));
+    return out.join('|');
+  }
+  function pcReadinessConsequence(type) {
+    // Keys already present in i18n.js; no English consequence copy lives in the engine.
+    var keys = {
+      MISSING_ARROW: 'rhMissing', ARROW_LATE: 'rhLate', WRONG_FISH_RISK: 'rhWrongFish',
+      DEP_BROKEN: 'rhDep', OVERLOAD: 'rhOverload', TASK_UNSTAFFED: 'rhUnstaffed',
+      DUTY_UNASSIGNED: 'rhDuty', UNPLACED_REQUIRED: 'rhUnplaced', DECOY_PLACED: 'rhDecoy',
+      MISASSIGNED: 'rhMisassigned', CARRY_GAP: 'rhCarryGap'
+    };
+    return keys[type] || 'scr_exec_broken';
+  }
+  function pcStatusForReadiness(type) {
+    if (type === 'DECOY_PLACED') return 'decoy';
+    if (type === 'ARROW_LATE') return 'late';
+    if (type === 'DEP_BROKEN' || type === 'MISASSIGNED') return 'broken';
+    if (type === 'OVERLOAD') return 'overlap';
+    if (type === 'WRONG_FISH_RISK') return 'missing';
+    if (type === 'MISSING_ARROW' || type === 'TASK_UNSTAFFED' || type === 'DUTY_UNASSIGNED' ||
+        type === 'UNPLACED_REQUIRED' || type === 'CARRY_GAP') return 'missing';
+    return 'attention';
+  }
+  function pcStatusRank(status) {
+    var rank = { decoy: 90, missing: 80, broken: 70, overlap: 65, compressed: 60,
+      'present-but-late': 55, late: 50, attention: 10, ok: 0 };
+    return rank[status] == null ? 10 : rank[status];
+  }
+  function pcDesc(key, kind, fields) {
+    var d = { key: key, kind: kind };
+    fields = fields || {};
+    for (var k in fields) d[k] = fields[k];
+    return d;
+  }
+  function pcInfoDesc(plan, bucket, atom) {
+    var ref = atom.itemRef || {}, tids = pcTaskIds(ref), unplaced = [];
+    for (var i = 0; i < tids.length; i++) {
+      var t = pcTask(plan, bucket, tids[i]);
+      if (!t || !isPlaced(t)) unplaced.push(tids[i]);
+    }
+    // An absent consumer is a task-placement root, not an invented missing-arrow root.
+    if (unplaced.length) return pcDesc('task|' + unplaced[0], 'task', {
+      primaryTaskId: unplaced[0], taskIds: tids, cardIds: pcList(ref.cardId), roleIds: pcList(ref.roleId)
+    });
+    return pcDesc('info|' + (ref.roleId || 'unknown') + '|' + (ref.cardId || 'unknown'), 'handoff', {
+      primaryTaskId: tids[0] || null, primaryCardId: ref.cardId || null, primaryRoleId: ref.roleId || null,
+      taskIds: tids, cardIds: pcList(ref.cardId), roleIds: pcList(ref.roleId)
+    });
+  }
+  function pcCustodyContext(plan, bucket, itemIds) {
+    var flag = bucket === 'load' ? 'custody' : (bucket === 'arrival' ? 'transferCustody' :
+      (bucket === 'return' ? 'returnCustody' : null));
+    var tasks = flag ? tasksForSeg(plan, bucket).filter(function (t) { return !!t[flag]; }) : [];
+    var ids = [], primary = null, i, j, t;
+    itemIds = pcList(itemIds);
+    for (i = 0; i < tasks.length; i++) {
+      t = tasks[i]; pcAdd(ids, t.id);
+      for (j = 0; j < itemIds.length; j++) {
+        if (!isPlaced(t) || (t.carries || []).indexOf(itemIds[j]) < 0) { if (!primary) primary = t.id; break; }
+      }
+    }
+    return { taskIds: ids, primaryTaskId: primary || ids[0] || null };
+  }
+  function pcTaskAtomDesc(plan, bucket, atom, rd, tmplDur) {
+    var ref = atom.itemRef || {}, tids = pcTaskIds(ref), bad = [], i, r, t;
+    if (atom.status === 'missing') {
+      for (i = 0; i < tids.length; i++) { t = pcTask(plan, bucket, tids[i]); if (!t || !isPlaced(t)) bad.push(tids[i]); }
+    } else if (atom.status === 'compressed') {
+      for (i = 0; i < tids.length; i++) { t = pcTask(plan, bucket, tids[i]); if (t && typeof tmplDur[t.id] === 'number' && t.durMin < tmplDur[t.id]) bad.push(t.id); }
+    } else if (atom.status === 'broken' || atom.status === 'overlap') {
+      for (i = 0; i < rd.length; i++) {
+        r = rd[i];
+        if ((atom.status === 'overlap' && r.type !== 'OVERLOAD') ||
+            (atom.status === 'broken' && r.type !== 'DEP_BROKEN' && r.type !== 'MISASSIGNED')) continue;
+        if (tids.indexOf(r.taskId) >= 0) pcAdd(bad, r.taskId);
+        if (tids.indexOf(r.otherId) >= 0) pcAdd(bad, r.otherId);
+        if (bucket === 'return' && r.type === 'DEP_BROKEN' && r.taskId === 'hd_r_headcount' &&
+            r.depId === 'hd_r_ship' && tids.indexOf(r.depId) >= 0) pcAdd(bad, r.depId);
+      }
+    }
+    var primary = bad[0] || (tids.length === 1 ? tids[0] : null);
+    var key = primary ? 'task|' + primary : 'lane|' + atom.id;
+    return pcDesc(key, 'task', { primaryTaskId: primary || tids[0] || null,
+      taskIds: tids, roleIds: pcList(ref.roleId) });
+  }
+  function pcAtomDesc(plan, bucket, atom, rd, tmplDur) {
+    var ref = atom.itemRef || {}, tids = pcTaskIds(ref), gaps;
+    if (ref.type === 'socket') return pcInfoDesc(plan, bucket, atom);
+    if (ref.type === 'decoy') return pcDesc('decoy|' + (tids[0] || atom.id), 'task', {
+      primaryTaskId: tids[0] || null, taskIds: tids
+    });
+    if (ref.guestId) return pcDesc('guest|' + ref.guestId, 'guest', {
+      primaryGuestId: ref.guestId, guestIds: [ref.guestId], taskIds: tids
+    });
+    if (ref.lineId) return pcDesc('budget|' + ref.lineId, 'budget', {
+      primaryLineId: ref.lineId, lineIds: [ref.lineId]
+    });
+    if (ref.detectorId) return pcDesc('detector|' + ref.detectorId, 'detector', {
+      primaryDetectorId: ref.detectorId
+    });
+    if (ref.cardId && !tids.length) return pcDesc('card|' + ref.cardId, 'card', {
+      primaryCardId: ref.cardId, cardIds: [ref.cardId]
+    });
+    // Existing-atom bindings for formerly unpriced clean gates keep the causal
+    // editor target on the actual detector/item, rather than on an innocent lane task.
+    if (atom.id === 'return_exec_logi') {
+      var legacyShip = byId(plan.tasks || [], 't_ship');
+      if (!legacyShip || !legacyShip.assignedIds || legacyShip.assignedIds.length === 0) {
+        return pcDesc('detector|returnLogi', 'detector', {
+          primaryDetectorId: 'returnLogi', primaryRoleId: 'logi', roleIds: ['logi'], taskIds: tids.concat(['t_ship'])
+        });
+      }
+    }
+    if (atom.id === 'arrival_exec_logi' && manifestTransferGaps(plan).length) {
+      gaps = manifestTransferGaps(plan);
+      var arrivalCustody = pcCustodyContext(plan, 'arrival', gaps);
+      return pcDesc(gaps.length === 1 ? 'item|arrival|' + gaps[0] : 'custody|arrival', 'manifest', {
+        primaryItemId: gaps[0], itemIds: gaps, primaryTaskId: arrivalCustody.primaryTaskId,
+        taskIds: tids.concat(arrivalCustody.taskIds)
+      });
+    }
+    if (atom.id === 'return_exec_siteLead' && manifestReturnGaps(plan).length) {
+      gaps = manifestReturnGaps(plan);
+      var returnCustody = pcCustodyContext(plan, 'return', gaps);
+      return pcDesc(gaps.length === 1 ? 'item|return|' + gaps[0] : 'custody|return', 'manifest', {
+        primaryItemId: gaps[0], itemIds: gaps, primaryTaskId: returnCustody.primaryTaskId,
+        taskIds: tids.concat(returnCustody.taskIds)
+      });
+    }
+    // The load hold gate is explicitly a custody-chain check. Attribute it to the
+    // exact missing manifest item(s), never merely to the visible checking task.
+    if (atom.id === 'load_safety_hd_l_hold') {
+      gaps = manifestChainGaps(plan);
+      if (gaps.length) {
+        var loadCustody = pcCustodyContext(plan, 'load', gaps);
+        return pcDesc(gaps.length === 1 ? 'item|load|' + gaps[0] : 'custody|load', 'manifest', {
+          primaryItemId: gaps[0], itemIds: gaps, primaryTaskId: loadCustody.primaryTaskId,
+          taskIds: tids.concat(loadCustody.taskIds)
+        });
+      }
+    }
+    // The cash-box money check reads a concrete carried item; its root can be exact.
+    if (atom.id === 'load_money_hd_l_pack' && manifestChainGaps(plan).indexOf('mi_cashbox') >= 0) {
+      var cashCustody = pcCustodyContext(plan, 'load', ['mi_cashbox']);
+      return pcDesc('item|load|mi_cashbox', 'manifest', {
+        primaryItemId: 'mi_cashbox', itemIds: ['mi_cashbox'], primaryTaskId: 'hd_l_pack',
+        taskIds: tids.concat(cashCustody.taskIds)
+      });
+    }
+    if (tids.length || ref.type === 'lane' || (ref.type === 'gate' && ref.taskId)) {
+      return pcTaskAtomDesc(plan, bucket, atom, rd, tmplDur);
+    }
+    return pcDesc('atom|' + atom.id, 'task', { primaryTaskId: tids[0] || null, taskIds: tids });
+  }
+  function pcSocketHome(failed, homes, taskId, cardId) {
+    for (var i = 0; i < failed.length; i++) {
+      var a = failed[i], ref = a.itemRef || {};
+      if (ref.type === 'socket' && ref.cardId === cardId && pcAtomHasTask(a, taskId)) return homes[a.id] || null;
+    }
+    return null;
+  }
+  function pcCascadeTrace(plan, bucket, ds, failed, homes, startTaskIds) {
+    var sources = {}, visited = {}, self = {};
+    function addDirect(taskId, cardId) {
+      var h = pcSocketHome(failed, homes, taskId, cardId);
+      if (h && h.kind === 'handoff') { sources[h.key] = h; return true; }
+      return false;
+    }
+    // A socket can be sound at PLAN time yet arrive late dynamically because its
+    // producing task was delayed upstream. Follow only the engine's drawn,
+    // feasible onTaskDone arrows whose solved arrival is actually after the
+    // consumer's effective start; this proves produced-card ancestry without
+    // guessing from names or chronology.
+    function walkDynamicProducer(taskId, cardId, consumerStart) {
+      var task = pcTask(plan, bucket, taskId), hs = handoffsForSeg(plan, bucket), best = null, producers = [], i;
+      for (i = 0; i < hs.length; i++) {
+        var h = hs[i];
+        if (h.cardId !== cardId || h.toTaskId !== taskId) continue;
+        if (task && h.toRoleId !== task.ownerRoleId) continue;
+        if (!channelFeasibility(plan, h, bucket).ok || !h.trigger || h.trigger.type !== 'onTaskDone') continue;
+        var producerId = h.trigger.taskId || h.fromTaskId, pe = ds.byTask[producerId];
+        if (!pe || pe.unresolved) continue;
+        var arrival = pe.end + (CHANNELS[h.channel] || 0);
+        if (best == null || arrival < best) { best = arrival; producers = [producerId]; }
+        else if (arrival === best) pcAdd(producers, producerId);
+      }
+      if (best != null && best > consumerStart) for (i = 0; i < producers.length; i++) walk(producers[i]);
+    }
+    function walk(taskId) {
+      if (!taskId || visited[taskId]) return;
+      visited[taskId] = 1;
+      var i, x, e = ds.byTask[taskId], task = pcTask(plan, bucket, taskId);
+      for (i = 0; i < ds.missing.length; i++) { x = ds.missing[i]; if (x.taskId === taskId) addDirect(taskId, x.cardId); }
+      for (i = 0; i < ds.late.length; i++) { x = ds.late[i]; if (x.taskId === taskId) addDirect(taskId, x.cardId); }
+      if (!e) return;
+      for (i = 0; i < (e.waits || []).length; i++) {
+        x = e.waits[i];
+        if (x.cardId && !addDirect(taskId, x.cardId)) walkDynamicProducer(taskId, x.cardId, e.start);
+        if (x.depId) walk(x.depId);
+        // A resource wait is intentionally NOT converted into a same-cluster info
+        // root. Its custody cause lives in another bucket and is not interchangeable.
+      }
+      if (e.wrongFish && task) for (i = 0; i < (task.assumeOn || []).length; i++) {
+        var cid = task.assumeOn[i], direct = false, z;
+        for (z = 0; z < ds.missing.length; z++) if (ds.missing[z].taskId === taskId && ds.missing[z].cardId === cid) direct = true;
+        for (z = 0; z < ds.late.length; z++) if (ds.late[z].taskId === taskId && ds.late[z].cardId === cid) direct = true;
+        if (!direct) walkDynamicProducer(taskId, cid, e.start);
+      }
+      // Some downstream work (notably t_f_cook) carries a rework extension when
+      // ANY wrong-fish assumption occurred upstream; the extended task itself is
+      // intentionally not marked wrongFish. The schedule exposes both facts, so
+      // follow the exact wrongFish task set and let the unique-source rule decide.
+      if (e.extension > 0) for (i = 0; i < (ds.wrongFish || []).length; i++) walk(ds.wrongFish[i]);
+    }
+    for (var i = 0; i < startTaskIds.length; i++) walk(startTaskIds[i]);
+    for (var k in sources) self[k] = sources[k];
+    return { sources: self, taskIds: Object.keys(visited).sort() };
+  }
+  function pcRootForReadiness(plan, bucket, r, failed, homes) {
+    var i, a, ref, t, roleId, exact;
+    if (r.type === 'MISSING_ARROW' || r.type === 'ARROW_LATE' || r.type === 'WRONG_FISH_RISK') {
+      exact = pcSocketHome(failed, homes, r.taskId, r.cardId);
+      if (exact) return exact;
+      t = pcTask(plan, bucket, r.taskId); roleId = t ? t.ownerRoleId : null;
+      return pcDesc('info|' + (roleId || 'unknown') + '|' + (r.cardId || 'unknown'), 'handoff', {
+        primaryTaskId: r.taskId || null, primaryCardId: r.cardId || null, primaryRoleId: roleId,
+        taskIds: pcList(r.taskId), cardIds: pcList(r.cardId), roleIds: pcList(roleId)
+      });
+    }
+    if (r.type === 'CARRY_GAP') {
+      // A gate/lane may collapse several missing custody items into one point. Reuse
+      // that atom's aggregate manifest root when present so the readiness rows do not
+      // split away into misleading zero-point siblings.
+      for (i = 0; i < failed.length; i++) {
+        var carryHome = homes[failed[i].id];
+        if (carryHome && carryHome.kind === 'manifest' && pcList(carryHome.itemIds).indexOf(r.itemId) >= 0) return carryHome;
+      }
+      return pcDesc('item|' + bucket + '|' + r.itemId, 'manifest', {
+        primaryItemId: r.itemId, itemIds: pcList(r.itemId)
+      });
+    }
+    if (r.type === 'DUTY_UNASSIGNED') return pcDesc('role|' + r.roleId, 'role', {
+      primaryRoleId: r.roleId, roleIds: pcList(r.roleId)
+    });
+    // Prefer an already-failed atom whose status is the precise readiness cause.
+    var wanted = { UNPLACED_REQUIRED: 'missing', TASK_UNSTAFFED: 'missing', MISASSIGNED: 'broken',
+      DEP_BROKEN: 'broken', OVERLOAD: 'overlap', DECOY_PLACED: 'decoy' }[r.type];
+    for (i = 0; i < failed.length; i++) {
+      a = failed[i]; ref = a.itemRef || {};
+      if (wanted && a.status !== wanted) continue;
+      if (r.type === 'DECOY_PLACED' && ref.type !== 'decoy') continue;
+      if (pcAtomHasTask(a, r.taskId) || pcAtomHasTask(a, r.otherId) ||
+          (bucket === 'return' && r.type === 'DEP_BROKEN' && r.taskId === 'hd_r_headcount' &&
+           r.depId === 'hd_r_ship' && pcAtomHasTask(a, r.depId))) return homes[a.id];
+    }
+    var primary = r.taskId || r.otherId || r.depId || null;
+    return pcDesc('readiness|' + pcReadinessKey(r), primary ? 'task' : 'role', {
+      primaryTaskId: primary, taskIds: [r.taskId, r.otherId, r.depId].filter(function (x) { return x != null; }),
+      primaryRoleId: r.roleId || null, roleIds: pcList(r.roleId)
+    });
+  }
+  function pcMakeRoot(bucket, desc, order) {
+    return { id: bucket + ':' + desc.key, bucket: bucket, kind: desc.kind, status: 'attention',
+      consequenceKey: null, earned: 0, maxPts: 0, lostPoints: 0,
+      atomIds: [], reasonKeys: [], readiness: [], detectorIds: [],
+      taskIds: pcList(desc.taskIds), cardIds: pcList(desc.cardIds), roleIds: pcList(desc.roleIds),
+      itemIds: pcList(desc.itemIds), guestIds: pcList(desc.guestIds), handoffIds: [], lineIds: pcList(desc.lineIds),
+      editorTarget: null, _key: desc.key, _order: order, _statuses: [],
+      _primaryTaskId: desc.primaryTaskId || null, _primaryCardId: desc.primaryCardId || null,
+      _primaryRoleId: desc.primaryRoleId || null, _primaryItemId: desc.primaryItemId || null,
+      _primaryGuestId: desc.primaryGuestId || null, _primaryDetectorId: desc.primaryDetectorId || null,
+      _primaryLineId: desc.primaryLineId || null };
+  }
+  function pcMergeDesc(root, desc) {
+    pcAddAll(root.taskIds, desc.taskIds); pcAddAll(root.cardIds, desc.cardIds);
+    pcAddAll(root.roleIds, desc.roleIds); pcAddAll(root.itemIds, desc.itemIds);
+    pcAddAll(root.guestIds, desc.guestIds); pcAddAll(root.lineIds, desc.lineIds);
+    if (!root._primaryTaskId) root._primaryTaskId = desc.primaryTaskId || null;
+    if (!root._primaryCardId) root._primaryCardId = desc.primaryCardId || null;
+    if (!root._primaryRoleId) root._primaryRoleId = desc.primaryRoleId || null;
+    if (!root._primaryItemId) root._primaryItemId = desc.primaryItemId || null;
+    if (!root._primaryGuestId) root._primaryGuestId = desc.primaryGuestId || null;
+    if (!root._primaryDetectorId) root._primaryDetectorId = desc.primaryDetectorId || null;
+    if (!root._primaryLineId) root._primaryLineId = desc.primaryLineId || null;
+  }
+  function pcEnsureRoot(ctx, desc, order) {
+    var root = ctx.roots[desc.key];
+    if (!root) { root = pcMakeRoot(ctx.id, desc, order); ctx.roots[desc.key] = root; ctx.rootList.push(root); }
+    else { pcMergeDesc(root, desc); if (order < root._order) root._order = order; }
+    return root;
+  }
+  function pcAddTaskContext(root, plan, bucket, taskId) {
+    if (!taskId) return;
+    pcAdd(root.taskIds, taskId);
+    var t = pcTask(plan, bucket, taskId);
+    if (t) {
+      pcAdd(root.roleIds, t.ownerRoleId);
+      for (var i = 0; i < (t.neededInfo || []).length; i++) {
+        if (root.kind === 'handoff' && root.cardIds.indexOf(t.neededInfo[i]) >= 0) pcAdd(root.cardIds, t.neededInfo[i]);
+      }
+    }
+  }
+  function pcAddAtom(root, atom, plan, bucket, cascadeTaskIds) {
+    pcAdd(root.atomIds, atom.id); root.maxPts += atom.maxPts; root.earned += atom.earned;
+    root.lostPoints += pcAtomLost(atom); pcAdd(root.reasonKeys, atom.reasonKey); pcAdd(root._statuses, atom.status);
+    var ref = atom.itemRef || {}, tids = pcTaskIds(ref), i;
+    for (i = 0; i < tids.length; i++) pcAddTaskContext(root, plan, bucket, tids[i]);
+    for (i = 0; i < (cascadeTaskIds || []).length; i++) pcAddTaskContext(root, plan, bucket, cascadeTaskIds[i]);
+    pcAdd(root.cardIds, ref.cardId); pcAddAll(root.cardIds, ref.cardIds); pcAdd(root.roleIds, ref.roleId);
+    pcAdd(root.itemIds, ref.itemId); pcAdd(root.guestIds, ref.guestId); pcAdd(root.lineIds, ref.lineId);
+    if (ref.cardId) { var card = byId(plan.infoCards || [], ref.cardId); if (card) pcAdd(root.roleIds, card.ownerRoleId); }
+  }
+  function pcAddReadiness(root, r, plan, bucket) {
+    root.readiness.push(clone(r)); pcAdd(root._statuses, pcStatusForReadiness(r.type));
+    pcAddTaskContext(root, plan, bucket, r.taskId); pcAddTaskContext(root, plan, bucket, r.otherId);
+    pcAddTaskContext(root, plan, bucket, r.depId); pcAdd(root.cardIds, r.cardId);
+    pcAdd(root.roleIds, r.roleId); pcAdd(root.itemIds, r.itemId); pcAdd(root.guestIds, r.guestId);
+    pcAdd(root.handoffIds, r.handoffId);
+    if (r.cardId) { var card = byId(plan.infoCards || [], r.cardId); if (card) pcAdd(root.roleIds, card.ownerRoleId); }
+  }
+  function pcFindHandoffs(root, plan, bucket) {
+    if (root.kind !== 'handoff' || bucket === 'frame') return;
+    var hs = handoffsForSeg(plan, bucket), i, h, to;
+    for (i = 0; i < hs.length; i++) {
+      h = hs[i]; to = pcTask(plan, bucket, h.toTaskId);
+      if (root.cardIds.indexOf(h.cardId) < 0) continue;
+      if (root.taskIds.length && root.taskIds.indexOf(h.toTaskId) < 0) continue;
+      if (root._primaryRoleId && h.toRoleId !== root._primaryRoleId && (!to || to.ownerRoleId !== root._primaryRoleId)) continue;
+      pcAdd(root.handoffIds, h.id);
+    }
+  }
+  function pcEditorTarget(root) {
+    var segment = root.bucket === 'frame' ? undefined : root.bucket, t;
+    if (root.kind === 'handoff') {
+      t = { kind: 'handoff', segment: segment, taskId: root._primaryTaskId || root.taskIds[0] || undefined,
+        cardId: root._primaryCardId || root.cardIds[0] || undefined,
+        handoffId: root.handoffIds[0] || undefined, roleId: root._primaryRoleId || root.roleIds[0] || undefined };
+    } else if (root.kind === 'manifest') {
+      t = { kind: 'manifest', segment: segment, itemId: root._primaryItemId || root.itemIds[0] || undefined,
+        taskId: root._primaryTaskId || root.taskIds[0] || undefined };
+    } else if (root.kind === 'guest') {
+      t = { kind: 'guest', segment: segment, guestId: root._primaryGuestId || root.guestIds[0] || undefined };
+    } else if (root.kind === 'budget') {
+      t = { kind: 'budget', segment: segment, detectorId: root._primaryDetectorId || undefined,
+        lineId: root._primaryLineId || root.lineIds[0] || undefined };
+    } else if (root.kind === 'card') {
+      t = { kind: 'card', segment: segment, cardId: root._primaryCardId || root.cardIds[0] || undefined };
+    } else if (root.kind === 'role') {
+      t = { kind: 'role', segment: segment, roleId: root._primaryRoleId || root.roleIds[0] || undefined };
+    } else if (root.kind === 'detector') {
+      t = { kind: 'detector', segment: segment, detectorId: root._primaryDetectorId || root.detectorIds[0] || undefined,
+        roleId: root._primaryRoleId || root.roleIds[0] || undefined };
+    } else {
+      t = { kind: 'task', segment: segment, taskId: root._primaryTaskId || root.taskIds[0] || undefined };
+    }
+    // JSON-safe discriminated unions omit irrelevant optional fields entirely.
+    for (var k in t) if (t[k] === undefined) delete t[k];
+    return t;
+  }
+  function pcFinalizeRoot(root, plan) {
+    var arrays = ['atomIds', 'reasonKeys', 'detectorIds', 'taskIds', 'cardIds', 'roleIds',
+      'itemIds', 'guestIds', 'handoffIds', 'lineIds'];
+    for (var i = 0; i < arrays.length; i++) {
+      root[arrays[i]].sort();
+      root[arrays[i]] = root[arrays[i]].filter(function (v, at, all) { return at === 0 || v !== all[at - 1]; });
+    }
+    root.readiness.sort(function (a, b) { var aa = pcReadinessKey(a), bb = pcReadinessKey(b); return aa < bb ? -1 : (aa > bb ? 1 : 0); });
+    var best = 'attention';
+    for (i = 0; i < root._statuses.length; i++) if (pcStatusRank(root._statuses[i]) > pcStatusRank(best)) best = root._statuses[i];
+    root.status = best;
+    root.consequenceKey = root.reasonKeys[0] || (root.detectorIds.length ? 'p_' + root.detectorIds[0] + '_cause' :
+      (root.readiness.length ? pcReadinessConsequence(root.readiness[0].type) : 'scr_exec_broken'));
+    pcFindHandoffs(root, plan, root.bucket); root.handoffIds.sort();
+    root.editorTarget = pcEditorTarget(root);
+    delete root._key; delete root._order; delete root._statuses;
+    delete root._primaryTaskId; delete root._primaryCardId; delete root._primaryRoleId;
+    delete root._primaryItemId; delete root._primaryGuestId; delete root._primaryDetectorId; delete root._primaryLineId;
+    return root;
+  }
+  function planClusters(plan) {
+    plan = plan || makeTemplate();
+    var trip = scoreTrip(plan), tmplDur = tripTemplateDurMap(), contexts = {}, atomIndex = {}, i, j;
+    for (i = 0; i < trip.atoms.length; i++) atomIndex[trip.atoms[i].id] = i;
+
+    for (i = 0; i < PLAN_CLUSTER_IDS.length; i++) {
+      var id = PLAN_CLUSTER_IDS[i], bucketScore = trip.byBucket[id], rd = id === 'frame' ? [] : dayReadiness(plan, id);
+      var atoms = trip.atoms.filter(function (a) { return a.bucket === id; });
+      var failed = atoms.filter(function (a) { return a.earned < a.maxPts; });
+      var ctx = { id: id, score: bucketScore, failed: failed, rd: rd, roots: {}, rootList: [], homes: {}, cascade: {} };
+      contexts[id] = ctx;
+      for (j = 0; j < failed.length; j++) ctx.homes[failed[j].id] = pcAtomDesc(plan, id, failed[j], rd, tmplDur);
+
+      // The only cross-atom causal fold: a late task/gate proven to have one (and
+      // only one) upstream failed socket in the actual solved cascade. Fishing Day
+      // also follows delayed produced-card ancestry (menu -> target -> catch); the
+      // same exact wait proof folds coarse-day gates such as Load headcount.
+      if (id !== 'frame' && failed.length) {
+        var fds = daySchedule(plan, id);
+        for (j = 0; j < failed.length; j++) {
+          var fa = failed[j];
+          if (fa.dimension === 'info' || fa.status !== 'late') continue;
+          var trace = pcCascadeTrace(plan, id, fds, failed, ctx.homes, pcTaskIds(fa.itemRef));
+          var sourceKeys = Object.keys(trace.sources).sort();
+          if (sourceKeys.length === 1) { ctx.homes[fa.id] = trace.sources[sourceKeys[0]]; ctx.cascade[fa.id] = trace.taskIds; }
+        }
+      }
+
+      // Failed atoms first: scoreTrip order is the stable root ordering backbone.
+      for (j = 0; j < failed.length; j++) {
+        var atom = failed[j], home = ctx.homes[atom.id];
+        var root = pcEnsureRoot(ctx, home, atomIndex[atom.id]);
+        pcAddAtom(root, atom, plan, id, ctx.cascade[atom.id]);
+      }
+      // Then partition every detailed readiness hint once. Readiness-only issues carry
+      // zero lost points but can still produce mastered-with-warning on legacy clean gates.
+      for (j = 0; j < rd.length; j++) {
+        var rh = pcRootForReadiness(plan, id, rd[j], failed, ctx.homes);
+        var rr = pcEnsureRoot(ctx, rh, trip.atoms.length + j);
+        pcAddReadiness(rr, rd[j], plan, id);
+      }
+    }
+
+    // Classic detectors are clean-gate evidence. Attribute each active detector once:
+    // standing authorities -> frame, returnLogi -> return, handoffTiming -> the first
+    // concrete Fishing-Day handoff root (or a detector fallback if no detailed root exists).
+    var active = detect(plan);
+    for (i = 0; i < active.length; i++) {
+      var det = active[i], bucket = det.id === 'returnLogi' ? 'return' : (det.id === 'handoffTiming' ? 'fishday' : 'frame');
+      var dctx = contexts[bucket], droot = null;
+      if (det.id === 'handoffTiming') {
+        for (j = 0; j < dctx.rootList.length; j++) if (dctx.rootList[j].kind === 'handoff') { droot = dctx.rootList[j]; break; }
+      }
+      if (!droot) {
+        var ddesc = pcDesc('detector|' + det.id, det.category === 'budget' ? 'budget' : 'detector', {
+          primaryDetectorId: det.id, primaryRoleId: det.roleId || null, roleIds: pcList(det.roleId), taskIds: pcList(det.taskIds)
+        });
+        droot = pcEnsureRoot(dctx, ddesc, trip.atoms.length + 1000 + i);
+      }
+      pcAdd(droot.detectorIds, det.id);
+      // handoffTiming is an aggregate detector over all concrete Fishing-Day
+      // sockets. Its broad task list is not evidence that the first socket caused
+      // every symptom, so coverage is recorded without polluting affected IDs.
+      if (!(det.id === 'handoffTiming' && droot.kind === 'handoff')) {
+        pcAdd(droot.roleIds, det.roleId); pcAddAll(droot.taskIds, det.taskIds);
+      }
+      if (!droot._primaryDetectorId) droot._primaryDetectorId = det.id;
+      if (!droot._primaryRoleId) droot._primaryRoleId = det.roleId || null;
+    }
+
+    var out = [];
+    for (i = 0; i < PLAN_CLUSTER_IDS.length; i++) {
+      var cid = PLAN_CLUSTER_IDS[i], c = contexts[cid];
+      c.rootList.sort(function (a, b) { return a._order - b._order || (a.id < b.id ? -1 : (a.id > b.id ? 1 : 0)); });
+      var issues = c.rootList.map(function (root) { return pcFinalizeRoot(root, plan); });
+      var earned = c.score.earned, maxPts = c.score.maxPts, mastered = earned === maxPts;
+      out.push({ id: cid, earned: earned, maxPts: maxPts, lostPoints: maxPts - earned,
+        mastered: mastered, status: mastered ? (issues.length ? 'mastered-with-warning' : 'mastered') :
+          (earned > 0 ? 'in-progress' : 'needs-work'), rootIssues: issues });
+    }
+    return out;
   }
 
   // minute-weighted Sigma productive / Sigma available across the six modeled days;
@@ -2833,6 +3651,8 @@
     CHEFS: CHEFS, GUESTS: GUESTS, MIN_DT: MIN_DT, DAY_START_MIN: DAY_START_MIN, DAY_END_MIN: DAY_END_MIN,
     CHANNELS: CHANNELS, CHECKPOINTS: CHECKPOINTS,
     SCENARIOS: SCENARIOS, applyScenario: applyScenario, channelFeasibility: channelFeasibility,
+    DAY3_FOOD_STRATEGY_IDS: DAY3_FOOD_STRATEGY_IDS.slice(), DAY3_FOOD_ROOT: clone(DAY3_FOOD_ROOT),
+    applyDay3FoodStrategy: applyDay3FoodStrategy, day3FoodStrategy: day3FoodStrategy,
     fishdayTasks: fishdayTasks, resolveSendMin: resolveSendMin, staticArrival: staticArrival, infoArrival: infoArrival,
     tasksForSeg: tasksForSeg, handoffsForSeg: handoffsForSeg, isPlaced: isPlaced, deckFor: deckFor, daySchedule: daySchedule,
     dayReadiness: dayReadiness, scoreDay: scoreDay, projectedDay: projectedDay, canonDay: canonDay, applyDayFix: applyDayFix,
@@ -2847,7 +3667,7 @@
     // §20.3 — authorable all-days tunables (the deck→arrange→connect editor + minute clock read these)
     SNAP_MIN: SNAP_MIN, DAY_WINDOWS: DAY_WINDOWS, AUTHORABLE: AUTHORABLE,
     // rubric v1.0 — the whole-trip 100-point derived ledger + trip-wide efficiency
-    scoreTrip: scoreTrip, tripEfficiency: tripEfficiency,
+    scoreTrip: scoreTrip, planClusters: planClusters, PLAN_CLUSTER_IDS: PLAN_CLUSTER_IDS.slice(), tripEfficiency: tripEfficiency,
     criticalAssumptions: criticalAssumptions, executionReadiness: executionReadiness,
     // Physical route model: factual outbound chain + explicitly inferred reverse return.
     PHYSICAL_STOPS: PHYSICAL_STOPS, VESSELS: VESSELS, ITINERARY: ITINERARY,

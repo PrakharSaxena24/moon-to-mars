@@ -1,8 +1,9 @@
 # Teaching MVP — from plan checker to learning game
 
-**Status:** SHIPPED (2026-07-14) — 431 deterministic engine checks plus
-headless browser coverage for curriculum, prediction/debrief, outage repair,
-EN/JA rerendering, focus restoration, persistence, and hostile local data.
+**Status:** SHIPPED + 2026-07-15 mastery refinement — 513 deterministic checks
+plus headless browser coverage for curriculum, causal clusters, exact editor
+routing, prediction/debrief, outage repair, versioned authoring persistence,
+event pacing, EN/JA rerendering, focus restoration, and hostile local data.
 
 This specification adds a learning layer to Ogasawara Rehearsal without
 replacing its deterministic simulation, whole-trip score ledger, authoring
@@ -28,9 +29,11 @@ The operational thesis remains:
 > Responsibility is not authority, authority is not information, and
 > information has a clock.
 
-The opening must not claim that `100 = nobody waits`. A 100-point plan is a
-sound **rehearsal model**; time efficiency is a separate outcome, and unresolved
+The opening must not claim that `100 = nobody waits`. **100 means mastery of the
+clean modeled plan**; time efficiency is a separate outcome, and unresolved
 external facts may still prevent the plan from being ready for real execution.
+Plan mastery is not a personnel rating or a direct rating of the learner as a
+person.
 
 ## 2. Measurable learning objectives
 
@@ -45,8 +48,10 @@ After completing the Teaching MVP, a learner should be able to:
 5. apply the same diagnosis to a communications-outage variation;
 6. name one analogous risk in the learner's own project.
 
-The existing 100-point ledger measures the **plan artifact**. It is not a
-learner-mastery score and must never be described as one.
+The existing 100-point ledger measures **mastery of the plan artifact**:
+`100 / 100 + clean + zero causal roots` is Plan Mastery. It is not an employee
+performance score and does not independently certify the learner's general
+competence beyond this modeled plan.
 
 ## 3. Three learning levels
 
@@ -55,9 +60,10 @@ mode and is persisted locally.
 
 ### Learn
 
-- Keeps the guided Live experience, consequence previews, and full fix pack.
+- Keeps the guided Live experience, consequence previews, and causal fix pack.
 - Explains channel feasibility and the missing/late/rework taxonomy.
 - Does not require a prediction before a run.
+- May reveal the cause, but all scored authoring changes remain manual.
 
 ### Practice
 
@@ -70,8 +76,8 @@ mode and is persisted locally.
 
 ### Challenge
 
-- Opens Plan First with projected score/readiness answers and auto-fixes hidden
-  until the run is submitted.
+- Opens Plan First with projected score/readiness answers hidden until the run
+  is submitted. There is no score-granting auto-fix in any level.
 - Requires a prediction.
 - Applies the deterministic Communications Outage scenario.
 - Opens on Fishing Day and layers an unavailable phone onto the at-sea catch
@@ -130,7 +136,7 @@ Statuses are:
 - `rehearsal-complete`
 - `real-execution-ready`
 
-A 100/A rehearsal with unresolved critical assumptions must say that the
+A 100/clean mastered rehearsal with unresolved critical assumptions must say that the
 rehearsal is complete **pending confirmation**, never `READY TO RUN` or
 `ready to run for real`.
 
@@ -138,6 +144,7 @@ The initial critical assumptions are already represented in route data:
 
 - Tokyo-hotel breakfast time;
 - inter-island vessel identity and Chichijima connection times;
+- Day-6 guest-exchange route, timing, and luggage-handoff owner attestation;
 - return timetable.
 
 ## 6. Channel feasibility
@@ -190,7 +197,7 @@ channel context rather than memorized the lowest latency.
 - Learner-facing copy uses "conditions experienced by each role/member" rather
   than implying a personality or performance appraisal.
 - Learn may reveal an answer; Practice delays it; Challenge withholds it until
-  submission.
+  submission. Revealing or focusing an answer never mutates the scored plan.
 - All new controls work with pointer, touch, and keyboard.
 - EN/JA keys are added together and parity remains verified.
 - Reduced-motion behavior remains unchanged.
@@ -200,7 +207,7 @@ channel context rather than memorized the lowest latency.
 ### Engine
 
 - Every pre-existing verification check passes.
-- Canonical normal plan remains 100/A/clean.
+- Canonical normal plan remains 100/clean and mastered.
 - Critical assumptions are deterministic and do not mutate the plan.
 - A 100 plan with unknown route facts is rehearsal-complete but not
   real-execution-ready.
@@ -213,7 +220,8 @@ channel context rather than memorized the lowest latency.
 - First-run mission identifies the learner and human outcomes.
 - Learn, Practice, and Challenge persist and remain separate from Live/Morning.
 - Practice/Challenge cannot launch without a prediction.
-- Challenge does not expose answer labels or auto-fixes before submission.
+- Challenge does not expose answer labels before submission; no level exposes
+  a score-granting auto-fix.
 - The report renders prediction, actual evidence, reflection fields, and the
   last five escaped attempt records.
 - A 100 rehearsal with unknown facts never displays real-world-ready copy.
@@ -257,7 +265,129 @@ This is a presentation rule, not a reduced model: the full six-segment planner,
 99-atom ledger, execution-readiness distinction, bilingual strings, and all
 deterministic scoring behavior remain intact.
 
-## 11. Explicitly deferred
+## 11. Cluster-first mastery refinement (2026-07-15)
+
+This section supersedes §10's “first three actionable issues” planner rule. The
+planner now discloses the whole campaign as seven score-conserving clusters,
+then expands one causal root at a time.
+
+### 11.1 Seven-cluster experience
+
+`planClusters(plan)` is a pure lens over `scoreTrip`, `dayReadiness`, and the
+classic detectors. It returns, in trip order:
+
+| Cluster | Exact maximum |
+|---|---:|
+| Trip Frame | 11 |
+| Load & Board | 10 |
+| Outbound Voyage | 11 |
+| Arrival | 12 |
+| Operations | 13 |
+| Fishing Day | 34 |
+| Return | 9 |
+
+The collapsed state shows earned/max, Mastered/Needs work, and root count.
+Expansion shows grouped causal roots with affected task/card/role/item/guest,
+the human consequence, and points unavailable. The sum of cluster maxima is
+100, the sum earned is the displayed trip total, and every failed atom belongs
+to exactly one root. Clustering must never create a second score.
+
+Each root carries a JSON-safe `editorTarget`: detector, budget, role, guest,
+manifest, task, handoff, or card. **Open plan**, **Take me there**, report stage
+markers, and next-issue navigation must reopen the owning cluster/day drawer
+and focus the exact editable control. Reports show one actionable issue row
+first and keep the remaining rows under an explicit “more issues” disclosure;
+each row carries its own exact navigation target.
+
+### 11.2 Plan mastery and existing-atom bindings
+
+The whole-plan Mastered state requires all of:
+
+```js
+scoreTrip(plan).total === 100
+scoreTrip(plan).gate.clean === true
+clusters.every(c => c.earned === c.maxPts && c.rootIssues.length === 0)
+```
+
+The constitution remains 99 atoms with Σ `maxPts === 100`. Newly explicit
+requirements close former “100 but unclean” loopholes by gating existing atoms:
+
+- the Frame's 2-point critical-information atom requires both hospital access
+  and ferry/connection sharing;
+- Load hold safety, Arrival Logistics execution, and Return Site Lead execution
+  require complete physical custody at their respective handovers;
+- Return Logistics execution requires ownership of ship-out/headcount work;
+- an outbound guest's care atom fails when the buddy's care work overlaps; and
+- required flex/standby work gates the existing Load headcount, Voyage watch,
+  or Fishing-Day sea-watch atom when incomplete or overloaded.
+
+No point or row is added. Efficiency and real-execution readiness remain
+separate. A 100 plan may therefore be mastered and rehearsal-complete while
+still pending five external confirmations.
+
+Player-facing progress uses only earned/max and Mastered/Needs work. Any legacy
+letter-grade field retained by the engine is compatibility/history data and
+must not reappear as a competing mastery scale in the planner, report, or
+public rubric.
+
+### 11.3 Manual authoring and session safety
+
+All player-facing former Auto-fix/Auto-arrange actions are navigation-only.
+Hints may explain or focus; only explicit learner authoring may change score.
+Load, Arrival, and Return expose every manifest item on every custody task, and
+editing a checkbox writes that task's `carries[]`.
+
+Morning state autosaves after a debounce in a v1 envelope under
+`prs_authoring_plan`. Opening the app discovers but never applies it. The menu
+provides explicit Resume, confirmed New rehearsal, Export, and Import. Import
+is limited to 1 MiB and validates exact schema keys plus every task/person/
+role/card/item/channel reference, seat uniqueness, buddy cap, and relay link.
+Unknown versions, hostile shapes, and partial writes fail closed; the current
+visible plan and previous saved record remain unchanged.
+
+The in-planner Reset rehearsal action is independently confirmed and clears all
+six day overrides plus frame, budget, role, buddy, custody, and selected-day
+state before the fresh state is autosaved.
+
+### 11.4 Event-beat pacing
+
+Event beats is the default for every authored run. It advances through empty
+clock ticks until a task state, handoff, stall/recovery, checkpoint/banner, or
+finish event changes. Full clock exposes every ordinary tick. Both controls
+must produce byte-equivalent final schedule evidence and the same score/result;
+they change presentation only.
+
+### 11.5 Day-3 food strategies
+
+The food/allergy-list root (`ic_food → t_f_menu`) has three authored solutions:
+
+| Choice | Consequence |
+|---|---|
+| Direct and fast | Face-to-face, 04:45 arrival, 15-minute margin, one transmission, no path-failure tolerance |
+| Delegated relay | Budget Lead → Comms by radio → Chef by phone, 04:52 arrival, 8-minute margin, two transmissions and one real relay prerequisite |
+| Redundant paths | Independent radio + phone, first arrival 04:46, 14-minute margin, two transmissions, tolerates loss of either one path |
+
+All three clear the same causal root and can retain 34/34 Fishing Day and
+100/100 plan mastery. Redundancy never adds score; losing both paths restores
+one root, not two penalties.
+
+### 11.6 Acceptance additions
+
+- `node verify.js` passes **513/513**.
+- Cluster maxima/root partition/editor targets are deterministic, pure, and
+  score-conserving on gappy, partially fixed, and canonical plans.
+- Every modeled custody, return-ownership, ferry-sharing, care-overlap, and
+  flex gap debits an existing atom; canonical remains exactly 99 atoms / 100
+  maximum points.
+- Navigation assistance never changes Score; custody edits do.
+- Persistence rejects invalid/oversize/incompatible input atomically and never
+  surprise-resumes.
+- Event beats and Full clock converge on the same result.
+- The three food routes expose distinct consequence vectors and the same
+  mastery ceiling.
+- EN/JA text and keyboard focus behavior remain equivalent.
+
+## 12. Explicitly deferred
 
 - A multi-scenario resilience score;
 - additional storm, low-catch, unavailable-principal, spoilage, and allergy
