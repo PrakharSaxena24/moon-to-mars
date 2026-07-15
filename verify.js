@@ -2398,6 +2398,178 @@ console.log('\n=== GUIDED LIVE UI — stable channel commit control ===');
 })();
 
 // ============================================================================
+// AUTHORING UI STATE — persistence ownership, async invalidation, focus safety.
+// ============================================================================
+console.log('\n=== AUTHORING UI STATE — guarded transitions and stable controls ===');
+(function () {
+  var source = require('fs').readFileSync(require('path').join(__dirname, 'app.js'), 'utf8');
+  function section(startNeedle, endNeedle) {
+    var start = source.indexOf(startNeedle), end = source.indexOf(endNeedle, start + startNeedle.length);
+    return start >= 0 && end > start ? source.slice(start, end) : '';
+  }
+  var validation = section('function validDayState(v, seg, domain)', 'function validateAuthoringState(v)');
+  var writer = section('function writeSavedPlan()', 'function flushPlanSave()');
+  var claim = section('function claimMorningSession(level)', 'function resumeSavedPlan()');
+  var reset = section('function resetAuthoringState(level)', 'function newRehearsal()');
+  var exporter = section('function exportAuthoringPlan()', 'function rejectPlanImport()');
+  var importer = section('function importAuthoringPlan(file)', 'function fdReset()');
+  var debrief = section('function captureDebriefDraft()', 'function applyLang()');
+  var enterScreenSource = section('function enterScreen(name)', 'function paintSetup()');
+  var inspector = section('function openInspector(focusAfter)', 'function closeInspector()');
+  var faultNav = section('function navigateToFault(target)', 'function takeMeToNextIssue()');
+  var missionInput = section("$('mission-control').addEventListener('input'", "$('org').addEventListener('change'");
+  var enterModeSource = section('function enterMode(m, claimLevel)', 'function startLive()');
+  var introPlan = section('function planFromIntro()', '// §W4 COLD-OPEN VIGNETTE');
+  var plannerFocus = section('function focusPlannerHome()', 'function planFromIntro()');
+  var learningLevelSource = section('function setLearningLevel(level)', '// =========================================================================\n  // i18n apply');
+
+  ok(writer.indexOf("!authoringSessionClaimed") >= 0 &&
+      (writer.match(/!authoringSessionClaimed/g) || []).length === 2,
+    'a discovered save is excluded from both immediate and debounced autosave paths until claimed');
+  ok(claim.indexOf('window.confirm(T().planResetConfirm)') >= 0 &&
+      claim.indexOf('return beginFreshAuthoringSession') >= 0 &&
+      enterModeSource.indexOf("if (m === 'morning' && !claimMorningSession") >= 0 &&
+      enterModeSource.indexOf('!claimMorningSession') < enterModeSource.indexOf('cancelPendingPlanImport()'),
+    'every central transition into Morning confirms ownership before any screen/session mutation');
+  ok(introPlan.indexOf("if (!enterMode('morning', learningLevel)) return") >= 0 &&
+      introPlan.indexOf("enterMode('morning'") < introPlan.indexOf('markIntroSeen()') &&
+      learningLevelSource.indexOf('!claimMorningSession(level)') < learningLevelSource.indexOf('learningLevel = level'),
+    'Plan First and learning-level entry leave intro, level, and storage untouched when New is cancelled');
+  ok(exporter.indexOf('(!authoringSessionClaimed && savedPlanRecord) ? jsonCopy(savedPlanRecord)') >= 0 &&
+      reset.indexOf("=== 'challenge' ? 'fishday' : 'load'") >= 0,
+    'unclaimed Export serializes the discovered save and a fresh Challenge session lands on Fishing Day');
+  ok(importer.indexOf('token !== planImportToken || activePlanReader !== reader') >= 0 &&
+      importer.indexOf('validatePlanEnvelope') < importer.indexOf('localStorage.setItem') &&
+      enterScreenSource.indexOf('cancelPendingPlanImport()') >= 0,
+    'an import validates before its atomic commit and stale readers are invalidated by later navigation');
+  ok(validation.indexOf('x.length > 0') >= 0 &&
+      validation.indexOf('(new Set(x)).size === x.length') >= 0 &&
+      validation.indexOf('(new Set(x.assignedIds)).size === x.assignedIds.length') >= 0,
+    'import validation rejects empty Fishing-Day crews and duplicate staff assignments in both day schemas');
+  ok(debrief.indexOf('whySelection: selection(why)') >= 0 &&
+      debrief.indexOf('transferSelection: selection(transfer)') >= 0 &&
+      debrief.indexOf('restoreSelection(why, draft.whySelection)') >= 0 &&
+      debrief.indexOf('restoreSelection(transfer, draft.transferSelection)') >= 0,
+    'language re-render preserves both reflection drafts and both caret/selection states');
+  ok(inspector.indexOf('prior.dataset.card') >= 0 && inspector.indexOf('prior.dataset.role') >= 0 &&
+      inspector.indexOf("target = sends[0] || $('insp-resume')") >= 0 &&
+      source.indexOf('openInspector(focusAfter)') >= 0,
+    'checkpoint Send-now rebuild restores the same logical action or the next safe modal control');
+  ok((faultNav.match(/navToken !== faultNavGeneration/g) || []).length === 2 &&
+      (faultNav.match(/\$\('setup'\)\.classList\.contains\('hidden'\)/g) || []).length >= 2 &&
+      (faultNav.match(/daySel !== seg \|\| drawerSeg !== seg/g) || []).length === 2 &&
+      enterScreenSource.indexOf('clearTrayToast()') >= 0,
+    'delayed fault reveals require the same generation/screen/day/drawer and transitions clear stale rejection toasts');
+  ok(missionInput.indexOf('updatePlanUI({ keepMissionControl: true })') >= 0 &&
+      missionInput.indexOf('refreshMissionResourceControl(el)') >= 0 &&
+      source.indexOf("$('btn-pause').focus({ preventScroll: true })") >= 0 &&
+      source.indexOf("if (enterMode('morning')) focusPlannerHome()") >= 0,
+    'range input keeps its live node while Run and Report→Edit Plan perform visible focus handoffs');
+  ok(plannerFocus.indexOf("var chapters = $('chapter-browser')") >= 0 &&
+      plannerFocus.indexOf("chapters && !chapters.open ? chapters.querySelector('summary')") >= 0 &&
+      plannerFocus.indexOf("document.querySelector('.day-btn.on')") >= 0 &&
+      plannerFocus.indexOf("target = target || $('launch')") >= 0,
+    'planner focus targets a visible chapter summary while closed, then the active day or Launch fallback');
+})();
+
+// ============================================================================
+// HANDOFF EDITOR A11Y — completed taps, stable focus, full-size equivalents.
+// ============================================================================
+console.log('\n=== HANDOFF EDITOR A11Y — tap lifecycle, focus return, 24px routes ===');
+(function () {
+  var fs = require('fs'), path = require('path');
+  var source = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
+  var css = fs.readFileSync(path.join(__dirname, 'style.css'), 'utf8');
+  var html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+  var i18n = fs.readFileSync(path.join(__dirname, 'i18n.js'), 'utf8');
+  function section(startNeedle, endNeedle) {
+    var start = source.indexOf(startNeedle), end = source.indexOf(endNeedle, start + startNeedle.length);
+    return start >= 0 && end > start ? source.slice(start, end) : '';
+  }
+  var pointer = section('function fdPointerDown(ev)', 'function fdWireClear()');
+  var ready = section('function buildFdReady(plan, fd, seg)', 'function toggleChipPlacing(taskId)');
+  var returns = section('function arrowReturnKeyFor(el, handoff)', 'function makeGhost(chip, x, y)');
+  var autoDraw = section('function fdAutoDraw(toTaskId, cardId, returnKey)', 'function nm2(o, lang)');
+  var panel = section('function openArrowPanel(hid, returnKey, focusId)', 'function arrowPatch(focusId)');
+  var arrowPatchSource = section('function arrowPatch(focusId)', 'function closeArrowPanel(repaint)');
+  var missionControl = section('function buildMissionControl()', 'function refreshMissionResourceControl(el)');
+  var closePanel = section('function closeArrowPanel(repaint)', 'function clearDayClick()');
+  var validation = section('function validTrigger(v, domain)', 'function validateAuthoringState(v)');
+  var modalFocus = section('var lastFocus = null, lastFocusResolver = null', '// ---- checkpoint inspector');
+  var listeners = section("$('fd-wrap').addEventListener('pointerdown'", '// checkpoint inspector');
+  var keyboard = section("document.addEventListener('keydown', function (e) {\n      var top = topModal();", '// any day\'s blocks');
+
+  ok(pointer.indexOf("var sock = ev.target.closest('.fd-socket')") >= 0 &&
+      pointer.indexOf('if (sock) return;') >= 0 && pointer.indexOf('fdSocketTap(sock)') < 0,
+    'socket pointerdown waits for a completed click/tap and cannot mount a backdrop mid-gesture');
+  ok(listeners.indexOf("var sock = e.target.closest && e.target.closest('.fd-socket')") >= 0 &&
+      listeners.indexOf('fdSocketTap(sock)') >= 0 &&
+      keyboard.indexOf("el.classList.contains('fd-socket')") >= 0 && keyboard.indexOf('fdSocketTap(el)') >= 0,
+    'completed canvas clicks and Enter/Space share the same socket activation path');
+  ok(ready.indexOf("type === 'MISSING_ARROW' || type === 'ARROW_LATE' || type === 'WRONG_FISH_RISK'") >= 0 &&
+      ready.indexOf('class="pr-item bad pr-action"') >= 0 && ready.indexOf('data-task="') >= 0 &&
+      ready.indexOf("chip(h.type, t.rhWrongFish(cn(h.cardId), tn(h.taskId)), h)") >= 0 &&
+      listeners.indexOf("$('fd-ready').addEventListener('click'") >= 0 && listeners.indexOf('fdActivateHandoff(action.dataset.task, action.dataset.card, action)') >= 0,
+    'missing, late, and wrong-assumption readiness rows are named buttons routed through the socket action');
+  ok(ready.indexOf("data-type=\"ROUTE_REVIEW\"") >= 0 &&
+      ready.indexOf('t.fdRouteReview(cn(cid), tn(tk.id))') >= 0 &&
+      ready.indexOf("if (cardOwnerOf(plan, cid) === tk.ownerRoleId) return") >= 0 &&
+      (i18n.match(/fdRouteReview: function/g) || []).length === 2,
+    'concealed learning supplies a localized neutral route button for every visible cross-role socket');
+  ok(source.indexOf("var attrs = ' type=\"button\" data-h=\"' + h.id + '\" data-task=\"' + to.id + '\" data-card=\"' + h.cardId + '\" data-role=\"' + to.ownerRoleId + '\"'") >= 0 &&
+      css.indexOf('.fd-ar-chip{display:inline-flex;align-items:center;gap:5px;min-height:24px;') >= 0 &&
+      css.indexOf('.pr-action{min-height:24px;') >= 0,
+    'existing arrow chips and readiness alternatives are semantic buttons at least 24px tall');
+  ok(returns.indexOf("el.classList.contains('fd-ar-chip') ? 'arrow'") >= 0 &&
+      returns.indexOf("el.classList.contains('pr-action') ? 'action' : 'socket'") >= 0 &&
+      returns.indexOf('handoffId:') >= 0 && returns.indexOf('taskId:') >= 0 && returns.indexOf('cardId:') >= 0 && returns.indexOf('roleId:') >= 0 &&
+      returns.indexOf("document.querySelectorAll(selector)") >= 0 && returns.indexOf("document.querySelector('.day-btn.on')") >= 0,
+    'arrow focus return is a logical handoff key with connected editor fallbacks, not a stale node');
+  ok(returns.indexOf("function action()") >= 0 &&
+      returns.indexOf("key.preferred === 'action' ? (action() || arrow() || socket())") >= 0 &&
+      returns.indexOf("el.dataset.task === key.taskId && el.dataset.card === key.cardId && el.getClientRects().length") >= 0,
+    'readiness invokers restore the rebuilt matching full-size action before arrow or socket fallbacks');
+  ok(autoDraw.indexOf('returnKey.handoffId = id') >= 0 && autoDraw.indexOf('paintSetup();') < autoDraw.indexOf('openArrowPanel(id, returnKey)') &&
+      panel.indexOf('modalOpening(\'arrow-modal\', resolveArrowReturnTarget)') >= 0 &&
+      closePanel.indexOf('if (repaint) paintSetup();') < closePanel.indexOf('modalClosed();'),
+    'new routes and channel repaints restore focus only after the equivalent control is rebuilt');
+  ok(autoDraw.indexOf('h.fromTaskId === null && h.toTaskId === toTaskId && h.cardId === cardId') >= 0 &&
+      autoDraw.indexOf('dayOv[seg].handoffs[external.id] = jsonCopy(external)') >= 0 &&
+      autoDraw.indexOf('openArrowPanel(external.id, returnKey)') >= 0,
+    'the one canonical external-source Voyage route can be restored through the same full-size action');
+  ok(validation.indexOf("seg !== 'voyage' || id !== 'h_v_cabins'") >= 0 &&
+      validation.indexOf('v.fromTaskId !== null') >= 0 && validation.indexOf("v.trigger.type !== 'atMinute'") >= 0 &&
+      validation.indexOf("(v.type === 'onTaskDone' || v.type === 'beforeTaskStart') && !domain.taskIds[v.taskId]") >= 0 &&
+      validation.indexOf('(tasks[x.fromTaskId] || external)') >= 0 &&
+      panel.indexOf("(hasProducer ? '<option value=\"onTaskDone\"'") >= 0 &&
+      arrowPatchSource.indexOf("trig === 'onTaskDone' && h.fromTaskId") >= 0,
+    'saved external-source edits validate only for canonical endpoints and the UI cannot assign a task trigger');
+  ok(panel.indexOf('<label class="ar-row"><label') < 0 &&
+      panel.indexOf('<label class="dt-h" for="ar-trig">') >= 0 &&
+      panel.indexOf('<label class="dt-h" for="ar-ch">') >= 0,
+    'handoff trigger and channel selects have localized programmatic labels');
+  ok(panel.indexOf('aria-label="\' + esc(t.arTime) + \'"') >= 0 &&
+      (i18n.match(/arTime:/g) || []).length === 2,
+    'enabled handoff time input has a symmetric localized accessible name');
+  ok(missionControl.indexOf('aria-label="\' + esc(nm(r.name)) + \'"') >= 0,
+    'all Mission Control resource ranges inherit their localized resource name');
+  ok(panel.indexOf('var rebuiltControl = focusId && $(focusId)') >= 0 &&
+      panel.indexOf('rebuiltControl.focus({ preventScroll: true })') >= 0 &&
+      arrowPatchSource.indexOf('openArrowPanel(arrowEdit, null, focusId)') >= 0 &&
+      listeners.indexOf('arrowPatch(control.id)') >= 0,
+    'arrow trigger, channel, and time edits restore focus to the rebuilt logical control');
+  ok(modalFocus.indexOf('lastFocusResolver') >= 0 && modalFocus.indexOf('target = lastFocusResolver()') >= 0 &&
+      modalFocus.indexOf('target.focus({ preventScroll: true })') >= 0 &&
+      html.indexOf('<h2 id="rules-title" tabindex="-1"') >= 0 &&
+      modalFocus.indexOf("modal.scrollTop = 0") >= 0 && modalFocus.indexOf('title.focus({ preventScroll: true })') >= 0,
+    'Rules starts at its focused title without mobile auto-scroll and dialogs restore their invoker');
+  ok(keyboard.indexOf("else if (top === 'arrow-modal') closeArrowPanel(false)") >= 0 &&
+      keyboard.indexOf("else if (top === 'rules-modal') { $('rules-modal').classList.remove('show'); modalClosed(); }") >= 0 &&
+      listeners.indexOf("$('ar-close').addEventListener('click', function () { closeArrowPanel(false); })") >= 0,
+    'Escape and the Arrow Close button both use the shared logical focus-restoration lifecycle');
+})();
+
+// ============================================================================
 // JAPANESE TYPOGRAPHY — optical lift stays language-scoped and layout-safe.
 // ============================================================================
 console.log('\n=== JAPANESE TYPOGRAPHY — scoped optical sizing ===');

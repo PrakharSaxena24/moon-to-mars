@@ -130,6 +130,13 @@
   var PLAN_STORAGE_KEY = 'prs_authoring_plan', PLAN_LEGACY_KEYS = ['prs_authoring_plan_v1'];
   var PLAN_KIND = 'ogasawara-rehearsal-plan', PLAN_VERSION = 1;
   var savedPlanRecord = null, planSaveTimer = null, persistenceMuted = false, sessionNotice = '';
+  // A discovered save is reference data until the learner explicitly claims an
+  // authoring session.  Merely visiting Plan First (or arriving there from a
+  // Guided result) must never let the 500 ms autosave replace that save.
+  var authoringSessionClaimed = false;
+  // FileReader completion is asynchronous.  Keep one owned import so a newer
+  // navigation/New/Resume action can invalidate it before its callback commits.
+  var activePlanReader = null, planImportToken = 0;
   var AUTHORING_SEGS = ['load', 'voyage', 'arrival', 'ops', 'fishday', 'return'];
   var SEAT_DEFAULTS = { owner: 'p01', pm: 'p02', siteLead: 'p03', budgetLead: 'p04', safetyLead: 'p05', logi: 'p06', comms: 'p07', specialist: 'p08' };
 
@@ -170,17 +177,25 @@
     if (!hasOnlyKeys(v, ['type', 'taskId', 'value', 'leadMin'], ['type'])) return false;
     if (['onTaskDone', 'beforeTaskStart', 'atMinute'].indexOf(v.type) < 0) return false;
     if (v.taskId != null && !domain.taskIds[v.taskId]) return false;
+    if ((v.type === 'onTaskDone' || v.type === 'beforeTaskStart') && !domain.taskIds[v.taskId]) return false;
     if (v.value != null && !safeNum(v.value, -1440, 30000)) return false;
     if (v.leadMin != null && !safeNum(v.leadMin, 0, 10080)) return false;
     return v.type !== 'atMinute' || safeNum(v.value, -1440, 30000);
   }
-  function validHandoff(v, domain) {
+  function isCanonicalExternalHandoff(v, id, seg, domain) {
+    if (!v || seg !== 'voyage' || id !== 'h_v_cabins' || v.fromTaskId !== null || !v.trigger || v.trigger.type !== 'atMinute') return false;
+    var canon = byId(P.handoffsForSeg(domain.template, seg), id);
+    return !!canon && canon.fromTaskId === null && v.cardId === canon.cardId && v.fromRoleId === canon.fromRoleId &&
+      v.toRoleId === canon.toRoleId && v.toTaskId === canon.toTaskId;
+  }
+  function validHandoff(v, domain, allowExternalSource) {
     if (v === null) return true;
     var keys = ['id', 'cardId', 'fromRoleId', 'fromTaskId', 'toRoleId', 'toTaskId', 'trigger', 'channel', 'ifLate', 'reworkKind', 'content',
       'strategyId', 'pathId', 'relayRoleId', 'requiresHandoffId'];
     if (!hasOnlyKeys(v, keys, ['cardId', 'fromRoleId', 'fromTaskId', 'toRoleId', 'toTaskId', 'trigger', 'channel'])) return false;
     if (v.id != null && !safeId(v.id)) return false;
-    if (!domain.cards[v.cardId] || !domain.roles[v.fromRoleId] || !domain.roles[v.toRoleId] || !domain.taskIds[v.fromTaskId] || !domain.taskIds[v.toTaskId]) return false;
+    if (!domain.cards[v.cardId] || !domain.roles[v.fromRoleId] || !domain.roles[v.toRoleId] ||
+        !(domain.taskIds[v.fromTaskId] || (allowExternalSource && v.fromTaskId === null)) || !domain.taskIds[v.toTaskId]) return false;
     if (!validTrigger(v.trigger, domain) || !domain.channels[v.channel]) return false;
     if (v.ifLate != null && ['idle', 'assume'].indexOf(v.ifLate) < 0) return false;
     if (v.reworkKind != null && typeof v.reworkKind !== 'string') return false;
@@ -201,17 +216,23 @@
     if (seg === 'fishday') {
       if (!hasOnlyKeys(v, ['timing', 'staffing', 'handoffs'], ['timing', 'staffing', 'handoffs'])) return false;
       if (!validMap(v.timing, tasks, function (x) { return hasOnlyKeys(x, ['startMin', 'durMin'], ['startMin', 'durMin']) && safeNum(x.startMin, -1440, 30000) && safeNum(x.durMin, 1, 10080); })) return false;
-      if (!validMap(v.staffing, tasks, function (x) { return Array.isArray(x) && x.length <= 20 && x.every(function (pid) { return !!domain.people[pid]; }); })) return false;
+      if (!validMap(v.staffing, tasks, function (x) {
+        return Array.isArray(x) && x.length > 0 && x.length <= 20 && (new Set(x)).size === x.length &&
+          x.every(function (pid) { return !!domain.people[pid]; });
+      })) return false;
     } else {
       if (!hasOnlyKeys(v, ['placement', 'handoffs'], ['placement', 'handoffs'])) return false;
       if (!validMap(v.placement, tasks, function (x) {
         return x === null || (hasOnlyKeys(x, ['startMin', 'durMin', 'assignedIds', 'carries'], ['startMin', 'durMin', 'assignedIds']) && safeNum(x.startMin, -1440, 30000) &&
-          safeNum(x.durMin, 1, 10080) && Array.isArray(x.assignedIds) && x.assignedIds.length <= 20 && x.assignedIds.every(function (pid) { return !!domain.people[pid]; }) &&
+          safeNum(x.durMin, 1, 10080) && Array.isArray(x.assignedIds) && x.assignedIds.length <= 20 && (new Set(x.assignedIds)).size === x.assignedIds.length &&
+          x.assignedIds.every(function (pid) { return !!domain.people[pid]; }) &&
           (x.carries == null || (Array.isArray(x.carries) && x.carries.length <= 50 && x.carries.every(function (id) { return !!domain.manifest[id]; }) && (new Set(x.carries)).size === x.carries.length)));
       })) return false;
     }
     var handoffsValid = validMap(v.handoffs, null, function (x, id) {
-      return safeId(id) && validHandoff(x, domain) && (x === null || ((x.id == null || x.id === id) && tasks[x.fromTaskId] && tasks[x.toTaskId]));
+      var external = isCanonicalExternalHandoff(x, id, seg, domain);
+      return safeId(id) && validHandoff(x, domain, external) &&
+        (x === null || ((x.id == null || x.id === id) && (tasks[x.fromTaskId] || external) && tasks[x.toTaskId]));
     });
     if (!handoffsValid) return false;
     // Relay prerequisites are data, not executable references: keep them in
@@ -303,14 +324,14 @@
   }
   function writeSavedPlan() {
     planSaveTimer = null;
-    if (persistenceMuted || appMode !== 'morning') return;
+    if (persistenceMuted || appMode !== 'morning' || !authoringSessionClaimed) return;
     try {
       var rec = planEnvelopeNow(); localStorage.setItem(PLAN_STORAGE_KEY, JSON.stringify(rec)); savedPlanRecord = rec;
       renderPlanSessionChrome(false);
     } catch (e) { sessionNotice = 'save-error'; renderPlanSessionChrome(true); }
   }
   function queuePlanSave() {
-    if (persistenceMuted || appMode !== 'morning') return;
+    if (persistenceMuted || appMode !== 'morning' || !authoringSessionClaimed) return;
     if (planSaveTimer) clearTimeout(planSaveTimer);
     planSaveTimer = setTimeout(writeSavedPlan, 500);
   }
@@ -339,35 +360,59 @@
     resume.setAttribute('aria-disabled', resume.disabled ? 'true' : 'false');
     if (announce) announceSession(msg);
   }
+  function cancelPendingPlanImport() {
+    planImportToken++;
+    var reader = activePlanReader; activePlanReader = null;
+    if (reader && reader.readyState === FileReader.LOADING) {
+      try { reader.abort(); } catch (e) { }
+    }
+  }
+  function removeSavedPlanStorage() {
+    try {
+      localStorage.removeItem(PLAN_STORAGE_KEY);
+      PLAN_LEGACY_KEYS.forEach(function (key) { localStorage.removeItem(key); });
+      return true;
+    } catch (e) {
+      sessionNotice = 'save-error'; renderPlanSessionChrome(true); return false;
+    }
+  }
+  function beginFreshAuthoringSession(level) {
+    cancelPendingPlanImport();
+    if (planSaveTimer) { clearTimeout(planSaveTimer); planSaveTimer = null; }
+    if (!removeSavedPlanStorage()) return false;
+    savedPlanRecord = null; sessionNotice = ''; authoringSessionClaimed = true;
+    resetAuthoringState(level);
+    var d = $('plan-session'); if (d) d.open = false;
+    renderPlanSessionChrome(false);
+    return true;
+  }
+  function claimMorningSession(level) {
+    if (authoringSessionClaimed) return true;
+    if (!savedPlanRecord) { authoringSessionClaimed = true; return true; }
+    if (!window.confirm(T().planResetConfirm)) return false;
+    return beginFreshAuthoringSession(level || learningLevel);
+  }
   function resumeSavedPlan() {
     if (!savedPlanRecord || !applyAuthoringState(savedPlanRecord.state)) return;
-    sessionNotice = '';
+    cancelPendingPlanImport(); authoringSessionClaimed = true; sessionNotice = '';
     var d = $('plan-session'); if (d) d.open = false;
     enterMode('morning'); collapsePlanningExtras(); focusPlannerHome();
   }
-  function resetAuthoringState() {
+  function resetAuthoringState(level) {
     persistenceMuted = true;
     fixed = { setSafety: false, grantAuth: false, shareInfo: false, setReport: false, rebalance: false, fixReserve: false, setReturn: false, fixHandoffs: false };
-    mcReset(); fdReset(); orgSeatReset(); buddyReset(); daySel = 'load'; placingChip = null; morningSnap = null; lastFoodStrategyApplied = null;
+    mcReset(); fdReset(); orgSeatReset(); buddyReset(); daySel = (level || learningLevel) === 'challenge' ? 'fishday' : 'load'; placingChip = null; morningSnap = null; lastFoodStrategyApplied = null;
     persistenceMuted = false;
   }
   function newRehearsal() {
     if ((savedPlanRecord || appMode === 'morning') && !window.confirm(T().planResetConfirm)) return;
-    if (planSaveTimer) { clearTimeout(planSaveTimer); planSaveTimer = null; }
-    try {
-      localStorage.removeItem(PLAN_STORAGE_KEY);
-      PLAN_LEGACY_KEYS.forEach(function (key) { localStorage.removeItem(key); });
-    } catch (e) {
-      sessionNotice = 'save-error'; renderPlanSessionChrome(true); return;
-    }
-    savedPlanRecord = null; sessionNotice = '';
-    resetAuthoringState();
-    var d = $('plan-session'); if (d) d.open = false;
+    if (!beginFreshAuthoringSession(learningLevel)) return;
     enterMode('morning'); collapsePlanningExtras(); queuePlanSave(); focusPlannerHome();
     announceSession(T().planNoSaved);
   }
   function exportAuthoringPlan() {
-    var rec = planEnvelopeNow(), blob = new Blob([JSON.stringify(rec, null, 2)], { type: 'application/json' });
+    var rec = (!authoringSessionClaimed && savedPlanRecord) ? jsonCopy(savedPlanRecord) : planEnvelopeNow();
+    var blob = new Blob([JSON.stringify(rec, null, 2)], { type: 'application/json' });
     var url = URL.createObjectURL(blob), a = document.createElement('a');
     a.href = url; a.download = 'ogasawara-rehearsal-plan-v' + PLAN_VERSION + '.json';
     document.body.appendChild(a); a.click(); a.parentNode.removeChild(a); setTimeout(function () { URL.revokeObjectURL(url); }, 0);
@@ -377,9 +422,17 @@
   }
   function importAuthoringPlan(file) {
     if (!file || file.size > 1024 * 1024) { rejectPlanImport(); return; }
-    var reader = new FileReader();
-    reader.onerror = rejectPlanImport;
+    cancelPendingPlanImport();
+    var reader = new FileReader(), token = ++planImportToken;
+    activePlanReader = reader;
+    reader.onerror = function () {
+      if (token !== planImportToken || activePlanReader !== reader) return;
+      activePlanReader = null; rejectPlanImport();
+    };
+    reader.onabort = function () { if (activePlanReader === reader) activePlanReader = null; };
     reader.onload = function () {
+      if (token !== planImportToken || activePlanReader !== reader) return;
+      activePlanReader = null;
       var rec = null;
       try { rec = validatePlanEnvelope(JSON.parse(String(reader.result || ''))); } catch (e) { rec = null; }
       if (!rec) { rejectPlanImport(); return; }
@@ -394,7 +447,7 @@
       if (!applyAuthoringState(rec.state)) {
         sessionNotice = 'save-error'; renderPlanSessionChrome(true); return;
       }
-      savedPlanRecord = rec; sessionNotice = 'imported';
+      savedPlanRecord = rec; authoringSessionClaimed = true; sessionNotice = 'imported';
       var d = $('plan-session'); if (d) d.open = false;
       enterMode('morning'); collapsePlanningExtras(); renderPlanSessionChrome(true); focusPlannerHome();
     };
@@ -599,13 +652,18 @@
   }
   function setLearningLevel(level) {
     if (['learn', 'practice', 'challenge'].indexOf(level) < 0 || level === learningLevel) return;
+    var introVisible = !$('intro').classList.contains('hidden');
+    // Practice/Challenge enter Morning immediately outside the intro.  Claim
+    // (or explicitly replace) a discovered save before changing any visible or
+    // persisted learning state so Cancel is a true no-op.
+    if (!introVisible && level !== 'learn' && !claimMorningSession(level)) return;
     learningLevel = level; learningObserved = false; pendingPrediction = null; activeLearningRun = null;
     if (level === 'challenge') daySel = 'fishday';
     try { localStorage.setItem(LEARNING_LEVEL_KEY, level); } catch (e) { }
     closePrediction(false);
     renderLearningChrome();
-    if (!$('intro').classList.contains('hidden')) { renderIntro(); return; }
-    enterMode(level === 'learn' ? 'live' : 'morning');
+    if (introVisible) { renderIntro(); return; }
+    if (!enterMode(level === 'learn' ? 'live' : 'morning', level)) return;
     // Leaving Learn/Live restores the saved Morning plan inside enterMode(); re-assert the
     // Challenge landing segment afterward so that restoration cannot silently move it to Arrival.
     if (level === 'challenge' && daySel !== 'fishday') { daySel = 'fishday'; paintSetup(); }
@@ -614,7 +672,42 @@
   // =========================================================================
   // i18n apply
   // =========================================================================
+  function captureDebriefDraft() {
+    if ($('report').classList.contains('hidden')) return null;
+    var why = $('debrief-why'), transfer = $('debrief-transfer');
+    if (!why || !transfer) return null;
+    var active = document.activeElement, activeId = active && /^(debrief-why|debrief-transfer|debrief-save)$/.test(active.id) ? active.id : null;
+    function selection(el) {
+      try { return { start: el.selectionStart, end: el.selectionEnd, direction: el.selectionDirection }; }
+      catch (e) { return null; }
+    }
+    // Keep both controls' drafts and selections. The language button itself may
+    // own focus by the time this runs, but a learner can still return to either
+    // field without its caret/selection jumping to the end.
+    var draft = {
+      why: why.value, transfer: transfer.value, activeId: activeId,
+      whySelection: selection(why), transferSelection: selection(transfer)
+    };
+    return draft;
+  }
+  function restoreDebriefDraft(draft) {
+    if (!draft) return;
+    var why = $('debrief-why'), transfer = $('debrief-transfer'); if (!why || !transfer) return;
+    why.value = draft.why; transfer.value = draft.transfer;
+    function restoreSelection(el, selection) {
+      if (!selection || selection.start == null) return;
+      try { el.setSelectionRange(selection.start, selection.end, selection.direction || 'none'); } catch (e) { }
+    }
+    restoreSelection(why, draft.whySelection);
+    restoreSelection(transfer, draft.transferSelection);
+    var active = draft.activeId && $(draft.activeId);
+    if (!active) return;
+    try { active.focus({ preventScroll: true }); } catch (e) { try { active.focus(); } catch (e2) { } }
+    if (draft.activeId === 'debrief-why') restoreSelection(active, draft.whySelection);
+    else if (draft.activeId === 'debrief-transfer') restoreSelection(active, draft.transferSelection);
+  }
   function applyLang() {
+    var debriefDraft = captureDebriefDraft();
     document.documentElement.lang = L;
     document.querySelectorAll('[data-i18n]').forEach(function (el) { var v = T()[el.getAttribute('data-i18n')]; if (typeof v === 'string') el.textContent = v; });
     document.querySelectorAll('[data-i18n-placeholder]').forEach(function (el) { var v = T()[el.getAttribute('data-i18n-placeholder')]; if (typeof v === 'string') el.setAttribute('placeholder', v); });
@@ -647,6 +740,7 @@
     }
     if (!$('report').classList.contains('hidden') && lastResult) {
       renderReport(lastResult);   // re-boots the report stage (chip/markers/stamp aria) in the new language
+      restoreDebriefDraft(debriefDraft);
       if (pawnCardPid && pawnCardOpen() && RSTG.sim) openReportPawnCard(pawnCardPid);
     }
     // open modals re-render in the new language (their content is built, not data-i18n)
@@ -666,6 +760,9 @@
   // =========================================================================
   function enterScreen(name) {
     var screens = ['intro', 'setup', 'run', 'report'], i;
+    cancelPendingPlanImport();
+    faultNavGeneration++;
+    clearTrayToast();
     killVignette();                                                  // the intro vignette dies on every transition (idempotent)
     killPlanStage();                                                 // ...as does the plan-stage rAF (idempotent)
     killReportStage();                                               // ...and the report-stage rAF (§S3; renderReport re-boots it)
@@ -701,7 +798,7 @@
     }).join('');
   }
 
-  var faultTargets = {}, faultTargetSeq = 0, openClusterId = null, lastFaultTarget = null;
+  var faultTargets = {}, faultTargetSeq = 0, openClusterId = null, lastFaultTarget = null, faultNavGeneration = 0;
   function registerFaultTarget(target) {
     var id = 'ft-' + (++faultTargetSeq);
     faultTargets[id] = target && typeof target === 'object' ? jsonCopy(target) : {};
@@ -1013,7 +1110,7 @@
     var resources = br.resources.map(function (r) {
       var pct = Math.max(0, Math.min(100, Math.round(r.planned / Math.max(1, r.target) * 100)));
       return '<div class="mc-res' + (!conceal && !r.ok ? ' bad' : '') + '"><div class="mc-res-top"><b>' + nm(r.name) + '</b><span>' + nf(r.planned) + ' / ' + nf(r.target) + ' ' + nm(r.unit) + '</span></div>' +
-        '<input class="mc-range" type="range" min="0" max="' + Math.max(r.target * 2, r.planned, 1) + '" step="' + (r.unit.en === 'yen' ? 10000 : 1) + '" value="' + r.planned + '" data-mc="resource" data-resource="' + r.id + '">' +
+        '<input class="mc-range" type="range" min="0" max="' + Math.max(r.target * 2, r.planned, 1) + '" step="' + (r.unit.en === 'yen' ? 10000 : 1) + '" value="' + r.planned + '" data-mc="resource" data-resource="' + r.id + '" aria-label="' + esc(nm(r.name)) + '">' +
         '<div class="mc-res-bar">' + (conceal ? '' : '<i style="width:' + pct + '%"></i>') + '</div></div>';
     }).join('');
     var events = br.events.map(function (ev) {
@@ -1027,6 +1124,27 @@
       '<section><h3>' + t.mcEnvelopes + '</h3><div class="mc-envs">' + envelopes + '</div></section>' +
       '<section><h3>' + t.mcResources + '</h3><div class="mc-resources">' + resources + '</div></section>' +
       '<section><h3>' + t.mcSpendDrills + '</h3><div class="mc-spends">' + events + '</div></section></div>';
+  }
+  function refreshMissionResourceControl(el) {
+    if (!el || !el.dataset.resource) return;
+    var plan = currentPlan(), br = P.budgetReadiness(plan), t = T(), conceal = learningHidesExact(), resource = null;
+    for (var i = 0; i < br.resources.length; i++) if (br.resources[i].id === el.dataset.resource) { resource = br.resources[i]; break; }
+    if (!resource) return;
+    var row = el.closest('.mc-res');
+    if (row) {
+      row.classList.toggle('bad', !conceal && !resource.ok);
+      var amount = row.querySelector('.mc-res-top span');
+      if (amount) amount.textContent = nf(resource.planned) + ' / ' + nf(resource.target) + ' ' + nm(resource.unit);
+      var bar = row.querySelector('.mc-res-bar i');
+      if (bar) bar.style.width = Math.max(0, Math.min(100, Math.round(resource.planned / Math.max(1, resource.target) * 100))) + '%';
+    }
+    var status = $('mission-control').querySelector('.mc-status');
+    if (status) {
+      var gapCount = br.gaps.length + br.events.filter(function (ev) { return !ev.ok; }).length + br.resources.filter(function (r) { return !r.ok; }).length;
+      status.className = 'mc-status ' + (conceal ? '' : (gapCount ? 'bad' : 'ok'));
+      var headline = status.querySelector('b');
+      if (headline) headline.textContent = conceal ? t.learningDiagnoseFirst : (gapCount ? t.mcStatusBad(gapCount) : t.mcStatusOk);
+    }
   }
 
   // §W1 receipt-as-control: each design decision is a receipt ROW (icon + label + status chip +
@@ -1180,7 +1298,8 @@
     }
   }
 
-  function updatePlanUI() {
+  function updatePlanUI(options) {
+    options = options || {};
     var open = {}; activeProblemIds().forEach(function (id) { open[id] = true; });
     var t = T(), gaps = dayStatus(daySel).gaps;
     var planNow = currentPlan(), trip = P.scoreTrip(planNow);
@@ -1192,7 +1311,7 @@
     buildPlanClusters();
     buildDaySelect();
     $('launch').textContent = t.runDayBtn(dayLabel(daySel));
-    buildMissionControl();
+    if (!options.keepMissionControl) buildMissionControl();
     buildDayGrid();
     renderRail('setup', trip);
     renderTray();          // the tray/tokens are a VIEW of fixed[]/orgOv — repaint on every edit
@@ -1209,7 +1328,7 @@
   // reading P.tasksForSeg/P.handoffsForSeg and writing dayOv[seg] (§20.3).
   // =========================================================================
   var PXM = 0.8, FD_T0 = P.DAY_START_MIN, FD_T1 = P.DAY_END_MIN, LANE_H = 40, LBL_W = 108, RULER_H = 26, FD_TRACK_PITCH = 28;
-  var fdDrag = null, fdWire = null, fdGhost = null, arrowEdit = null, arrowEditSeg = null, placingChip = null, fdUid = 1;
+  var fdDrag = null, fdWire = null, fdGhost = null, arrowEdit = null, arrowEditSeg = null, arrowReturnKey = null, placingChip = null, fdUid = 1;
   function nextHandoffId(base, seg) {
     var used = {};
     Object.keys((dayOv[seg] && dayOv[seg].handoffs) || {}).forEach(function (id) { used[id] = true; });
@@ -1453,7 +1572,7 @@
         if (cardOwnerOf(plan, cid) === tk.ownerRoleId) return;
         var arr = infoArrivalSeg(plan, seg, segT, segH, cid, tk.ownerRoleId);
         var cls = arr == null ? 'miss' : (arr <= tk.startMin ? 'ok' : 'late');
-        sock += '<span class="fd-socket ' + (learningHidesExact() ? 'neutral' : cls) + '" tabindex="0" role="button" data-state="' + cls + '" data-task="' + tk.id + '" data-card="' + cid + '" style="top:' + (si * 11 + 1) + 'px" title="● ' + nm(byId(plan.infoCards, cid).name) + '"></span>';
+        sock += '<span class="fd-socket ' + (learningHidesExact() ? 'neutral' : cls) + '" tabindex="0" role="button" data-state="' + cls + '" data-task="' + tk.id + '" data-card="' + cid + '" data-role="' + tk.ownerRoleId + '" style="top:' + (si * 11 + 1) + 'px" title="● ' + nm(byId(plan.infoCards, cid).name) + '"></span>';
       });
       var port = (tk.produces || []).length ? '<span class="fd-port" data-task="' + tk.id + '" data-card="' + tk.produces[0] + '" title="○ ' + nm(byId(plan.infoCards, tk.produces[0]).name) + '"></span>' : '';
       var multi = tk.assignedIds.length > 1 ? '<i class="fd-x">×' + tk.assignedIds.length + '</i>' : '';
@@ -1522,30 +1641,51 @@
       var sa = feasibleArrivalInSeg(plan, seg, segT, h), late = sa == null || sa > to.startMin;
       var card = byId(plan.infoCards, h.cardId);
       var clock = taskTimeUnconfirmed(to) || taskTimeUnconfirmed(from) ? t.routeTimeUnconfirmedShort : (sa == null ? '—' : hhmm(sa));
-      if (learningHidesExact()) return '<button class="fd-ar-chip" data-h="' + h.id + '">• ' + nm(card ? card.name : h.cardId).split('：')[0].split(':')[0] +
+      var attrs = ' type="button" data-h="' + h.id + '" data-task="' + to.id + '" data-card="' + h.cardId + '" data-role="' + to.ownerRoleId + '"';
+      if (learningHidesExact()) return '<button class="fd-ar-chip"' + attrs + '>• ' + nm(card ? card.name : h.cardId).split('：')[0].split(':')[0] +
         ' <span class="muted2">' + t['ch' + h.channel.charAt(0).toUpperCase() + h.channel.slice(1)].split(' ')[0] + '</span></button>';
-      return '<button class="fd-ar-chip ' + (late ? 'late' : 'ok') + '" data-h="' + h.id + '">' + (late ? '⚑' : '✓') + ' ' + nm(card ? card.name : h.cardId).split('：')[0].split(':')[0] + ' <span class="muted2">' + clock + ' ' + t['ch' + h.channel.charAt(0).toUpperCase() + h.channel.slice(1)].split(' ')[0] + '</span></button>';
+      return '<button class="fd-ar-chip ' + (late ? 'late' : 'ok') + '"' + attrs + '>' + (late ? '⚑' : '✓') + ' ' + nm(card ? card.name : h.cardId).split('：')[0].split(':')[0] + ' <span class="muted2">' + clock + ' ' + t['ch' + h.channel.charAt(0).toUpperCase() + h.channel.slice(1)].split(' ')[0] + '</span></button>';
     }).join('');
   }
   function buildFdReady(plan, fd, seg) {
     var t = T(), hints = P.dayReadiness(plan, seg), chips = [], segT = P.tasksForSeg(plan, seg);
-    if (learningHidesExact()) {
-      $('fd-ready').innerHTML = '<span class="pr-lbl">' + t.fdReadyLbl + '</span><span class="pr-item">' + t.learningDiagnoseFirst + '</span>';
-      return;
-    }
     function tn(id) { var x = byId(segT, id); return x ? nm(x.name) : id; }
     function cn(id) { var x = byId(plan.infoCards, id); return x ? nm(x.name).split('：')[0].split(':')[0] : id; }
+    if (learningHidesExact()) {
+      // Concealed learning cannot colour-code the exact failure, but the tiny
+      // neutral sockets still need a full-size equivalent. Offer the same
+      // neutrally named route action for every visible cross-role dependency,
+      // whether its current handoff exists or not, so the controls disclose no
+      // missing/late answer before the rehearsal is run.
+      segT.forEach(function (tk) {
+        if (!tk.assignedIds.length) return;
+        (tk.neededInfo || []).forEach(function (cid) {
+          if (cardOwnerOf(plan, cid) === tk.ownerRoleId) return;
+          chips.push('<button type="button" class="pr-item pr-action neutral" data-type="ROUTE_REVIEW" data-task="' +
+            esc(tk.id) + '" data-card="' + esc(cid) + '">' + esc(t.fdRouteReview(cn(cid), tn(tk.id))) + '</button>');
+        });
+      });
+      $('fd-ready').innerHTML = '<span class="pr-lbl">' + t.fdReadyLbl + '</span><span class="pr-item">' +
+        t.learningDiagnoseFirst + '</span>' + chips.join('');
+      return;
+    }
     function mn(id) { var x = byId(plan.manifest || [], id); return x ? nm(x.name) : id; }   // Voyage §2 manifest item name
-    function chip(type, txt) { return '<span class="pr-item bad" data-type="' + type + '">' + txt + '</span>'; }
+    function chip(type, txt, hint) {
+      if (hint && (type === 'MISSING_ARROW' || type === 'ARROW_LATE' || type === 'WRONG_FISH_RISK')) {
+        return '<button type="button" class="pr-item bad pr-action" data-type="' + type + '" data-task="' +
+          esc(hint.taskId) + '" data-card="' + esc(hint.cardId) + '">' + txt + '</button>';
+      }
+      return '<span class="pr-item bad" data-type="' + type + '">' + txt + '</span>';
+    }
     hints.forEach(function (h) {
       if (h.type === 'MISSING_ARROW') {
         var blocked = unavailableHandoffFor(plan, seg, h);
         var blockedState = blocked && resolvedHandoffState(plan, seg, segT, blocked);
         chips.push(chip(h.type, blockedState && blockedState.reason === 'relay-prerequisite' ? t.rhRelayPrerequisite(cn(h.cardId), tn(h.taskId)) :
-          (blocked && blockedState && blockedState.reason !== 'unresolved-path' ? t.rhChannelUnavailable(cn(h.cardId), tn(h.taskId), channelText(blocked.channel)) : t.rhMissing(cn(h.cardId), tn(h.taskId)))));
+          (blocked && blockedState && blockedState.reason !== 'unresolved-path' ? t.rhChannelUnavailable(cn(h.cardId), tn(h.taskId), channelText(blocked.channel)) : t.rhMissing(cn(h.cardId), tn(h.taskId))), h));
       }
-      else if (h.type === 'ARROW_LATE') chips.push(chip(h.type, t.rhLate(cn(h.cardId), tn(h.taskId), h.lateMin)));
-      else if (h.type === 'WRONG_FISH_RISK') chips.push(chip(h.type, t.rhWrongFish(cn(h.cardId), tn(h.taskId))));
+      else if (h.type === 'ARROW_LATE') chips.push(chip(h.type, t.rhLate(cn(h.cardId), tn(h.taskId), h.lateMin), h));
+      else if (h.type === 'WRONG_FISH_RISK') chips.push(chip(h.type, t.rhWrongFish(cn(h.cardId), tn(h.taskId)), h));
       else if (h.type === 'DEP_BROKEN') chips.push(chip(h.type, t.rhDep(tn(h.taskId), tn(h.depId))));
       else if (h.type === 'OVERLOAD') { var pp = byId(plan.participants, h.personId); chips.push(chip(h.type, t.rhOverload(pp ? nm(pp.name) : h.personId))); }
       else if (h.type === 'TASK_UNSTAFFED') chips.push(chip(h.type, t.rhUnstaffed(tn(h.taskId))));
@@ -1598,11 +1738,59 @@
   }
 
   // ---- block drag / resize / chip placement / arrow wire (Pointer Events) ----
-  function fdSocketTap(sock) {
+  function arrowReturnKeyFor(el, handoff) {
+    var key = {
+      preferred: el && el.classList && el.classList.contains('fd-ar-chip') ? 'arrow' :
+        (el && el.classList && el.classList.contains('pr-action') ? 'action' : 'socket'),
+      handoffId: handoff ? handoff.id : (el && el.dataset ? el.dataset.h || null : null),
+      taskId: el && el.dataset ? el.dataset.task || null : null,
+      cardId: el && el.dataset ? el.dataset.card || null : null,
+      roleId: el && el.dataset ? el.dataset.role || null : null
+    };
+    if (handoff) {
+      if (!key.taskId) key.taskId = handoff.toTaskId || null;
+      if (!key.cardId) key.cardId = handoff.cardId || null;
+      if (!key.roleId) key.roleId = handoff.toRoleId || null;
+    }
+    return key;
+  }
+  function resolveArrowReturnTarget() {
+    var key = arrowReturnKey; if (!key) return null;
+    function find(selector, match) {
+      var nodes = document.querySelectorAll(selector);
+      for (var i = 0; i < nodes.length; i++) if (match(nodes[i])) return nodes[i];
+      return null;
+    }
+    function arrow() {
+      return key.handoffId ? find('.fd-ar-chip', function (el) { return el.dataset.h === key.handoffId; }) : null;
+    }
+    function socket() {
+      return find('.fd-socket', function (el) {
+        return (!key.taskId || el.dataset.task === key.taskId) && (!key.cardId || el.dataset.card === key.cardId) &&
+          (!key.roleId || el.dataset.role === key.roleId);
+      });
+    }
+    function action() {
+      return find('.pr-action', function (el) {
+        return el.dataset.task === key.taskId && el.dataset.card === key.cardId && el.getClientRects().length;
+      });
+    }
+    var target = key.preferred === 'arrow' ? (arrow() || socket() || action()) :
+      (key.preferred === 'action' ? (action() || arrow() || socket()) : (socket() || arrow() || action()));
+    if (target) return target;
+    return (drawerIsOpen() && $('dd-close')) || document.querySelector('.day-btn.on') || $('launch');
+  }
+  function fdActivateHandoff(taskId, cardId, invoker) {
     var plan = currentPlan(), segT = P.tasksForSeg(plan, daySel), segH = P.handoffsForSeg(plan, daySel);
-    var ex = feedArrowInSeg(plan, daySel, segH, segT, sock.dataset.task, sock.dataset.card);
-    if (ex) openArrowPanel(ex.id);                          // an existing infeasible path must be repaired, not duplicated
-    else fdAutoDraw(sock.dataset.task, sock.dataset.card);
+    var ex = feedArrowInSeg(plan, daySel, segH, segT, taskId, cardId);
+    var key = arrowReturnKeyFor(invoker, ex);
+    key.taskId = taskId; key.cardId = cardId;
+    if (ex) openArrowPanel(ex.id, key);                     // an existing infeasible path must be repaired, not duplicated
+    else fdAutoDraw(taskId, cardId, key);
+  }
+  function fdSocketTap(sock) {
+    if (!sock || !sock.dataset) return;
+    fdActivateHandoff(sock.dataset.task, sock.dataset.card, sock);
   }
   function makeGhost(chip, x, y) {
     removeGhost();
@@ -1637,7 +1825,10 @@
       ev.preventDefault(); return;
     }
     var sock = ev.target.closest('.fd-socket');
-    if (sock) { fdSocketTap(sock); ev.preventDefault(); return; }
+    // A socket opens a modal. Wait for the completed click/tap instead of
+    // mounting the backdrop under an in-flight pointer sequence (whose final
+    // synthetic click would immediately dismiss that new modal).
+    if (sock) return;
     if (fdWire) return;                                   // a wire is live — don't start a drag underneath it
     var blk = ev.target.closest('.fd-block'); if (!blk) return;
     var plan = currentPlan(), segT = P.tasksForSeg(plan, daySel), tk = byId(segT, blk.dataset.task); if (!tk) return;
@@ -1771,18 +1962,36 @@
     fdDrag = null; fdWireClear(); paintSetup();
   }
   // draw the arrow for (consumer task, card) from the task that produces the card, within the active seg
-  function fdAutoDraw(toTaskId, cardId) {
+  function fdAutoDraw(toTaskId, cardId, returnKey) {
     var plan = currentPlan(), seg = daySel, segT = P.tasksForSeg(plan, seg);
     var to = byId(segT, toTaskId), from = producerInSeg(segT, cardId);
-    if (!to || !from) return;
+    if (!to) return;
+    // Voyage's cabin list is deliberately external to the in-segment task
+    // graph. If its canonical arrow was erased, restore that exact trusted
+    // template route; never invent an arbitrary null-producer handoff.
+    if (!from) {
+      var template = P.makeTemplate(), external = null;
+      (P.handoffsForSeg(template, seg) || []).forEach(function (h) {
+        if (!external && h.fromTaskId === null && h.toTaskId === toTaskId && h.cardId === cardId) external = h;
+      });
+      if (!external) return;
+      dayOv[seg].handoffs[external.id] = jsonCopy(external);
+      returnKey = returnKey || { preferred: 'arrow', taskId: toTaskId, cardId: cardId };
+      returnKey.handoffId = external.id;
+      paintSetup();
+      openArrowPanel(external.id, returnKey);
+      return;
+    }
     var card = byId(plan.infoCards, cardId);
     var assume = (to.assumeOn || []).indexOf(cardId) >= 0;
     var id = nextHandoffId('h_' + cardId.replace('ic_', '') + '_' + to.ownerRoleId + '_', seg);
     dayOv[seg].handoffs[id] = { cardId: cardId, fromRoleId: from.ownerRoleId, fromTaskId: from.id, toRoleId: to.ownerRoleId, toTaskId: to.id,
       trigger: { type: 'onTaskDone', taskId: from.id }, channel: 'faceToFace', ifLate: assume ? 'assume' : 'idle',
       reworkKind: assume ? 'wrongFish' : null, content: { en: nm2(card.name, 'en'), jp: nm2(card.name, 'jp') } };
+    returnKey = returnKey || { preferred: 'arrow', taskId: toTaskId, cardId: cardId };
+    returnKey.handoffId = id;
     paintSetup();
-    openArrowPanel(id);
+    openArrowPanel(id, returnKey);
   }
   function nm2(o, lang) { return o ? (lang === 'jp' ? (o.jp || o.en) : o.en) : ''; }
 
@@ -1818,14 +2027,19 @@
     var from = byId(plan.tasks, h.fromTaskId);
     return from && from.day === 'fishday' ? from.startMin + from.durMin : FD_T0;
   }
-  function openArrowPanel(hid) {
+  function openArrowPanel(hid, returnKey, focusId) {
     var plan = currentPlan(), seg = daySel, segT = P.tasksForSeg(plan, seg), segH = P.handoffsForSeg(plan, seg);
     var h = byId(segH, hid); if (!h) return;
+    var wasOpen = $('arrow-modal').classList.contains('show');
+    if (!wasOpen) {
+      arrowReturnKey = returnKey || arrowReturnKeyFor(document.activeElement, h);
+      modalOpening('arrow-modal', resolveArrowReturnTarget);
+    }
     arrowEdit = hid; arrowEditSeg = seg;
     var t = T(), card = byId(plan.infoCards, h.cardId), from = byId(segT, h.fromTaskId), to = byId(segT, h.toTaskId);
     $('ar-title').textContent = nm(card ? card.name : h.cardId);
     $('ar-sub').textContent = t.arFrom + ' ' + (from ? nm(from.name) : h.fromRoleId) + ' → ' + t.arTo + ' ' + (to ? nm(to.name) : h.toRoleId);
-    var trigDone = h.trigger.type === 'onTaskDone';
+    var hasProducer = !!(h.fromTaskId && from), trigDone = hasProducer && h.trigger.type === 'onTaskDone';
     var sendMin = sendMinInSeg(segT, h), minSend = producedAtSeg(segT, h);
     var chOpts = CH_LIST.map(function (c) {
       return '<option value="' + c + '"' + (h.channel === c ? ' selected' : '') + '>' + t['ch' + c.charAt(0).toUpperCase() + c.slice(1)] + ' (+' + P.CHANNELS[c] + t.chMin + ')</option>';
@@ -1838,25 +2052,28 @@
     var unknownClock = taskTimeUnconfirmed(from) || taskTimeUnconfirmed(to);
     $('ar-body').innerHTML =
       (unknownClock ? '<div class="ar-note">' + t.routeTimeUnknown + '</div>' : '') +
-      '<div class="ar-row"><span class="dt-h">' + t.arTrigger + '</span>' +
-        '<select class="ar-sel" id="ar-trig"><option value="onTaskDone"' + (trigDone ? ' selected' : '') + '>' + t.arTrigDone + (from ? ' — ' + nm(from.name) : '') + '</option>' +
+      '<div class="ar-row"><label class="dt-h" for="ar-trig">' + t.arTrigger + '</label>' +
+        '<select class="ar-sel" id="ar-trig">' + (hasProducer ? '<option value="onTaskDone"' + (trigDone ? ' selected' : '') + '>' + t.arTrigDone + ' — ' + nm(from.name) + '</option>' : '') +
         '<option value="atMinute"' + (!trigDone ? ' selected' : '') + '>' + t.arTrigAt + '</option></select>' +
-        '<input class="ar-time" id="ar-time" type="time" step="' + (segSnap(seg) * 60) + '" min="' + hhmm(authorMin) + '" value="' + hhmm(authorValue) + '"' + (trigDone ? ' disabled' : '') + '></div>' +
-      '<div class="ar-row"><span class="dt-h">' + t.arChannel + '</span><select class="ar-sel" id="ar-ch">' + chOpts + '</select></div>' +
+        '<input class="ar-time" id="ar-time" type="time" step="' + (segSnap(seg) * 60) + '" min="' + hhmm(authorMin) + '" value="' + hhmm(authorValue) + '"' + (trigDone ? ' disabled' : '') + ' aria-label="' + esc(t.arTime) + '"></div>' +
+      '<div class="ar-row"><label class="dt-h" for="ar-ch">' + t.arChannel + '</label><select class="ar-sel" id="ar-ch">' + chOpts + '</select></div>' +
       (learningHidesExact() ? '<div class="ar-note">' + t.learningProjectionHidden + '</div>' : '<div class="ar-arrive ' + (late ? 'late' : 'ok') + '">' + (unknownClock ? t.routeTimeUnconfirmedShort : (arr == null ? '—' : (late ? t.arriveLate(hhmm(arr), arr - needBy) : t.arriveOk(hhmm(arr))))) + ' <span class="muted2">(' + (to ? nm(to.name) + ' ' + (unknownClock ? t.routeClockAssumption : hhmm(needBy)) : '') + ')</span></div>') +
       '<div class="ar-feasibility' + (!learningHidesExact() && !feas.ok ? ' bad' : '') + '" id="ar-feasibility">' + (learningHidesExact() ? t.feasibilityUntested : feasibilityText(feas.reason)) + '</div>' +
       (h.ifLate === 'assume' ? '<div class="ar-note">' + t.arriveAssume + '</div>' : '');
-    modalOpening('arrow-modal');
     $('arrow-modal').classList.add('show');
-    var cb = $('ar-close'); if (cb && !$('arrow-modal').contains(document.activeElement)) cb.focus();
+    var rebuiltControl = focusId && $(focusId);
+    if (rebuiltControl && !rebuiltControl.disabled) rebuiltControl.focus({ preventScroll: true });
+    else {
+      var cb = $('ar-close'); if (cb && !$('arrow-modal').contains(document.activeElement)) cb.focus();
+    }
   }
-  function arrowPatch() {
+  function arrowPatch(focusId) {
     if (!arrowEdit) return;
     var plan = currentPlan(), seg = arrowEditSeg, segT = P.tasksForSeg(plan, seg), segH = P.handoffsForSeg(plan, seg);
     var h = byId(segH, arrowEdit); if (!h) return;
     var trig = $('ar-trig').value, ch = $('ar-ch').value, tv = $('ar-time').value;
     var patch = { channel: ch };
-    if (trig === 'onTaskDone') patch.trigger = { type: 'onTaskDone', taskId: h.fromTaskId };
+    if (trig === 'onTaskDone' && h.fromTaskId) patch.trigger = { type: 'onTaskDone', taskId: h.fromTaskId };
     else {
       var mm = tv ? (parseInt(tv.slice(0, 2), 10) * 60 + parseInt(tv.slice(3, 5), 10)) : h.trigger.value || 0;
       mm = authoringSend(seg, mm, producedAtSeg(segT, h)); // can't precede production; obeys this day's blocks
@@ -1870,15 +2087,18 @@
     // partial patch would reach mergePlan's push-as-new branch as a malformed handoff
     dayOv[seg].handoffs[arrowEdit] = candidate;
     paintSetup();
-    openArrowPanel(arrowEdit);
+    openArrowPanel(arrowEdit, null, focusId);
+  }
+  function closeArrowPanel(repaint) {
+    $('arrow-modal').classList.remove('show');
+    if (repaint) paintSetup();
+    modalClosed();
+    arrowEdit = null; arrowEditSeg = null; arrowReturnKey = null;
   }
   function arrowErase() {
     if (!arrowEdit) return;
     dayOv[arrowEditSeg].handoffs[arrowEdit] = null;
-    arrowEdit = null; arrowEditSeg = null;
-    $('arrow-modal').classList.remove('show');
-    modalClosed();
-    paintSetup();
+    closeArrowPanel(true);
   }
   // #fd-clear-day: two-step confirm (armed on the FIRST click, executes on the SECOND for the
   // same day) — no native confirm() dialog, consistent with every other custom modal in this app.
@@ -2592,6 +2812,7 @@
     renderSim(sim); if (RM.matches) drawRunOnce(); else startAnim();
     runFn = step;
     if (timer) clearInterval(timer); timer = setInterval(step, tickMs());
+    try { $('btn-pause').focus({ preventScroll: true }); } catch (e) { $('btn-pause').focus(); }
   }
   function restartTimer() { if (timer) { clearInterval(timer); timer = setInterval(runFn || step, tickMs()); } }
   function step() {
@@ -3086,21 +3307,41 @@
   }
 
   // ---- modal focus management: remember the invoker, restore focus on close ----
-  var lastFocus = null;
-  function modalOpening(id) {
+  var lastFocus = null, lastFocusResolver = null;
+  function modalOpening(id, resolver) {
     if (!$(id).classList.contains('show')) {
       var a = document.activeElement;
       lastFocus = (a && a !== document.body) ? a : null;
+      lastFocusResolver = typeof resolver === 'function' ? resolver : null;
     }
   }
   function modalClosed() {
-    if (lastFocus && document.body.contains(lastFocus)) { try { lastFocus.focus(); } catch (e2) { } }
-    lastFocus = null;
+    var target = null;
+    if (lastFocusResolver) { try { target = lastFocusResolver(); } catch (e) { target = null; } }
+    if (!target && lastFocus && document.body.contains(lastFocus)) target = lastFocus;
+    if (target && document.body.contains(target)) {
+      try { target.focus({ preventScroll: true }); } catch (e2) { try { target.focus(); } catch (e3) { } }
+    }
+    lastFocus = null; lastFocusResolver = null;
+  }
+  function openRules() {
+    var modal = $('rules-modal'), title = $('rules-title');
+    modalOpening('rules-modal'); modal.classList.add('show');
+    // This dispatch is longer than a mobile viewport. Starting at its final
+    // Close button scrolls the title and first instructions off-screen, so use
+    // the static heading as the APG-recommended initial focus target.
+    modal.scrollTop = 0;
+    if (title) {
+      try { title.focus({ preventScroll: true }); } catch (e) { try { title.focus(); } catch (e2) { } }
+    }
+    modal.scrollTop = 0;
   }
 
   // ---- checkpoint inspector (関所, §8): inspect each member → intervene → resume ----
-  function openInspector() {
+  function openInspector(focusAfter) {
     if (!sim || !sim.checkpoint) return;
+    var prior = document.activeElement, priorKey = null;
+    if (prior && prior.classList && prior.classList.contains('ins-send')) priorKey = { card: prior.dataset.card, role: prior.dataset.role };
     var t = T(), cp = sim.checkpoint;
     $('insp-title').textContent = t.inspTitle + ' — ' + nm(cp.name);
     $('insp-sub').textContent = t.inspSub + (sim.handFed ? ' · ' + t.handFedNote(sim.handFed) : '');
@@ -3143,6 +3384,17 @@
     if (!wasOpen) modalOpening('inspect-modal');
     $('inspect-modal').classList.add('show');
     if (!wasOpen) $('insp-resume').focus();
+    else {
+      var key = focusAfter || priorKey, target = null, sends = $('insp-body').querySelectorAll('.ins-send');
+      if (key) for (var si = 0; si < sends.length; si++) {
+        if (sends[si].dataset.card === key.card && sends[si].dataset.role === key.role) { target = sends[si]; break; }
+      }
+      // A successful intervention normally removes the button that invoked it.
+      // Continue at the next actionable send, or at Resume when none remain.
+      if (!target && focusAfter) target = sends[0] || $('insp-resume');
+      if (!target && !$('inspect-modal').contains(document.activeElement)) target = $('insp-resume');
+      if (target) { try { target.focus({ preventScroll: true }); } catch (e2) { target.focus(); } }
+    }
   }
   function closeInspector() { $('inspect-modal').classList.remove('show'); camReleaseSafe(480); if (sim && sim.paused) P.resume(sim); modalClosed(); }
 
@@ -4295,13 +4547,17 @@
     return true;
   }
   function ensureSetupForFault() {
-    if (appMode === 'live') enterMode('morning');
-    else if ($('setup').classList.contains('hidden')) toSetup();
+    if (appMode === 'live') return enterMode('morning');
+    if ($('setup').classList.contains('hidden')) return toSetup();
+    cancelPendingPlanImport();
+    return true;
   }
   function navigateToFault(target) {
     if (!target || typeof target !== 'object') return;
-    target = jsonCopy(target); lastFaultTarget = target;
-    ensureSetupForFault(); closePawnCard();
+    target = jsonCopy(target);
+    if (!ensureSetupForFault()) return false;
+    lastFaultTarget = target; closePawnCard();
+    var navToken = ++faultNavGeneration;
     var kind = target.kind || '', seg = target.segment;
     if (AUTHORING_SEGS.indexOf(seg) < 0) seg = null;
     if (kind === 'detector' || (kind === 'card' && !seg)) {
@@ -4328,6 +4584,7 @@
     if (kind === 'manifest') {
       seg = seg || 'load'; daySel = seg; openClusterId = seg; placingChip = null; paintSetup(); openDayDrawer(seg, null);
       var showCustody = function () {
+        if (navToken !== faultNavGeneration || appMode !== 'morning' || $('setup').classList.contains('hidden') || daySel !== seg || drawerSeg !== seg) return;
         var details = $('fd-custody'); if (details) details.open = true;
         var candidates = document.querySelectorAll('input[data-custody-item="' + target.itemId + '"]'), node = null;
         if (target.taskId) {
@@ -4343,6 +4600,7 @@
     if (!seg) seg = daySel !== 'all' ? daySel : 'load';
     daySel = seg; openClusterId = seg; placingChip = null; paintSetup(); openDayDrawer(seg, null);
     var reveal = function () {
+      if (navToken !== faultNavGeneration || appMode !== 'morning' || $('setup').classList.contains('hidden') || daySel !== seg || drawerSeg !== seg) return;
       if (kind === 'handoff' && target.handoffId) {
         var chip = document.querySelector('.fd-ar-chip[data-h="' + target.handoffId + '"]');
         if (chip) { focusPlanningTarget(chip); openArrowPanel(target.handoffId); return; }
@@ -4367,12 +4625,15 @@
   window.PRS_UI.navigateToFault = navigateToFault;
 
   function toSetup() {
+    cancelPendingPlanImport(); faultNavGeneration++;
     if (timer) { clearInterval(timer); timer = null; }
     clearFinishTimer();
     stopAnim(); sim = null; wholeRun = null; paused = false; livePausedForFix = false;
     closeModals();
     enterScreen('setup');
     paintSetup();
+    focusPlannerHome();
+    return true;
   }
 
   // =========================================================================
@@ -4528,8 +4789,8 @@
     });
     var vigSkipBtn = $('vig-skip'); if (vigSkipBtn) vigSkipBtn.addEventListener('click', vigSkip);
     var introHow = $('intro-how-btn');
-    if (introHow) introHow.addEventListener('click', function () { modalOpening('rules-modal'); $('rules-modal').classList.add('show'); $('rules-close').focus(); });
-    $('rules-open').addEventListener('click', function () { modalOpening('rules-modal'); $('rules-modal').classList.add('show'); $('rules-close').focus(); });
+    if (introHow) introHow.addEventListener('click', openRules);
+    $('rules-open').addEventListener('click', openRules);
     $('rules-close').addEventListener('click', function () { $('rules-modal').classList.remove('show'); modalClosed(); });
     $('rules-modal').addEventListener('click', function (e) { if (e.target === $('rules-modal')) { $('rules-modal').classList.remove('show'); modalClosed(); } });
     $('prediction-cancel').addEventListener('click', function () { closePrediction(true); });
@@ -4615,7 +4876,11 @@
         var val = parseInt(el.value, 10) || 0;
         if (el.dataset.resource === 'res_cash') { mcOv.reserve = val; fixed.fixReserve = val >= (currentPlan().budget.reserveTarget || 300000); }
         (mcOv.resources[el.dataset.resource] = mcOv.resources[el.dataset.resource] || {}).planned = val;
-        updatePlanUI();
+        // A range emits many input events during one keyboard/drag gesture. Do
+        // not replace the live control: keep pointer capture/focus and refresh
+        // the rest of the projection around it.
+        updatePlanUI({ keepMissionControl: true });
+        refreshMissionResourceControl(el);
       }
     });
     $('org').addEventListener('change', function (e) {
@@ -4728,10 +4993,17 @@
       this.querySelectorAll('.fd-lbl').forEach(function (lb) { lb.style.transform = 'translateX(' + sl + 'px)'; });
     });
     $('fd-canvas').addEventListener('click', function (e) {
+      var sock = e.target.closest && e.target.closest('.fd-socket'); if (sock) { fdSocketTap(sock); return; }
       var p = e.target.closest && e.target.closest('path[data-h]'); if (p) { openArrowPanel(p.getAttribute('data-h')); return; }
       var slot = e.target.closest && e.target.closest('.fd-slot'); if (slot) commitDropSlot(slot);
     });
-    $('fd-arrowlist').addEventListener('click', function (e) { var c = e.target.closest('.fd-ar-chip'); if (c) openArrowPanel(c.dataset.h); });
+    $('fd-arrowlist').addEventListener('click', function (e) {
+      var c = e.target.closest('.fd-ar-chip'); if (c) openArrowPanel(c.dataset.h, arrowReturnKeyFor(c, null));
+    });
+    $('fd-ready').addEventListener('click', function (e) {
+      var action = e.target.closest('.pr-action');
+      if (action) fdActivateHandoff(action.dataset.task, action.dataset.card, action);
+    });
     $('fd-custody-body').addEventListener('change', function (e) {
       var input = e.target.closest('input[data-custody-task]'); if (!input) return;
       var taskId = input.dataset.custodyTask, itemId = input.dataset.custodyItem;
@@ -4743,16 +5015,20 @@
       if (next) next.focus();
     });
     $('fd-clear-day').addEventListener('click', clearDayClick);
-    $('ar-body') && $('arrow-modal').addEventListener('change', function (e) { if (e.target.closest('.ar-sel') || e.target.closest('.ar-time')) arrowPatch(); });
+    $('ar-body') && $('arrow-modal').addEventListener('change', function (e) {
+      var control = e.target.closest('.ar-sel, .ar-time');
+      if (control) arrowPatch(control.id);
+    });
     $('ar-delete').addEventListener('click', arrowErase);
-    $('ar-close').addEventListener('click', function () { arrowEdit = null; $('arrow-modal').classList.remove('show'); modalClosed(); });
-    $('arrow-modal').addEventListener('click', function (e) { if (e.target === $('arrow-modal')) { arrowEdit = null; $('arrow-modal').classList.remove('show'); modalClosed(); } });
+    $('ar-close').addEventListener('click', function () { closeArrowPanel(false); });
+    $('arrow-modal').addEventListener('click', function (e) { if (e.target === $('arrow-modal')) closeArrowPanel(false); });
 
     // checkpoint inspector (§8)
     $('insp-body').addEventListener('click', function (e) {
       var b = e.target.closest('.ins-send'); if (!b || !sim) return;
+      var focusAfter = { card: b.dataset.card, role: b.dataset.role };
       P.intervene(sim, b.dataset.card, b.dataset.role);
-      openInspector();
+      openInspector(focusAfter);
     });
     $('insp-resume').addEventListener('click', closeInspector);
     $('inspect-modal').addEventListener('click', function (e) { if (e.target === $('inspect-modal')) closeInspector(); });
@@ -4869,7 +5145,10 @@
       var b = e.target.closest('.fault-open'); if (b && faultTargets[b.dataset.fault]) navigateToFault(faultTargets[b.dataset.fault]);
     });
     // after a LIVE run's report, every action stays in the live experience
-    $('btn-tweak').addEventListener('click', function () { if (appMode === 'live') enterMode('morning'); else toSetup(); });
+    $('btn-tweak').addEventListener('click', function () {
+      if (appMode === 'live') { if (enterMode('morning')) focusPlannerHome(); }
+      else toSetup();
+    });
     $('btn-again').addEventListener('click', function () { if (appMode === 'live') startLive(); else launch(); });
 
     document.querySelectorAll('.spd').forEach(function (b) { b.addEventListener('click', function () { speedMult = parseFloat(b.dataset.spd); updateSpeedControls(); restartTimer(); }); });
@@ -4884,7 +5163,7 @@
         else if (top === 'rules-modal') { $('rules-modal').classList.remove('show'); modalClosed(); }
         else if (top === 'pick-modal') closePicker();
         else if (top === 'inspect-modal') closeInspector();
-        else if (top === 'arrow-modal') { arrowEdit = null; $('arrow-modal').classList.remove('show'); modalClosed(); }
+        else if (top === 'arrow-modal') closeArrowPanel(false);
         else if (top === 'detail-modal') closeDetail();
         return;
       }
@@ -4968,9 +5247,11 @@
   function closeModals() {
     var active = document.activeElement;
     var activeModal = active && active.closest ? active.closest('#detail-modal.show,#inspect-modal.show,#arrow-modal.show,#rules-modal.show,#pick-modal.show,#prediction-modal.show') : null;
-    var restore = lastFocus && document.body.contains(lastFocus) ? lastFocus : null;
+    var restore = null;
+    if (lastFocusResolver) { try { restore = lastFocusResolver(); } catch (e) { restore = null; } }
+    if (!restore && lastFocus && document.body.contains(lastFocus)) restore = lastFocus;
     ['detail-modal', 'inspect-modal', 'arrow-modal', 'rules-modal', 'pick-modal', 'prediction-modal'].forEach(function (m) { var e = $(m); if (e) e.classList.remove('show'); });
-    closePawnCard(); clearDetailState(); lastFocus = null;
+    closePawnCard(); clearDetailState(); lastFocus = null; lastFocusResolver = null; arrowReturnKey = null;
     if (activeModal) {
       if (!restore || restore.closest('.hidden')) restore = !$('run').classList.contains('hidden') ? $('btn-pause') : document.querySelector('.daytab.on') || $('launch');
       if (restore) { try { restore.focus({ preventScroll: true }); } catch (e2) { restore.focus(); } }
@@ -5035,6 +5316,7 @@
   // The current shell always passes auto=false: opening a link and reopening
   // the Cast both get a stable poster instead of unsolicited motion.
   function showIntro(auto, openCast) {
+    cancelPendingPlanImport();
     if (timer) { clearInterval(timer); timer = null; }
     stopAnim(); closeModals();
     var castWrap = $('intro-cast-wrap') || document.querySelector('.intro-cast-details');
@@ -5064,17 +5346,23 @@
     var toggle = $('all-settings-toggle'); if (toggle) toggle.setAttribute('aria-expanded', 'false');
   }
   function focusPlannerHome() {
-    var target = document.querySelector('.day-btn.on') || $('launch');
+    var chapters = $('chapter-browser');
+    // A selected day button is not focusable while its <details> ancestor is
+    // closed. Land on the visible disclosure summary in that state; once open,
+    // the active day remains the most useful return target.
+    var target = chapters && !chapters.open ? chapters.querySelector('summary') : document.querySelector('.day-btn.on');
+    target = target || $('launch');
     if (target) { try { target.focus({ preventScroll: true }); } catch (e) { target.focus(); } }
   }
   function planFromIntro() {
-    killVignette(); markIntroSeen();
     // The full planner respects the learner's persisted level and opens at the
     // first campaign chapter. Every later day and the whole-trip view remain in
     // the day rail, but the first workspace no longer dumps all chapters at once.
-    daySel = learningLevel === 'challenge' ? 'fishday' : 'load';
+    var firstDay = learningLevel === 'challenge' ? 'fishday' : 'load';
+    if (!enterMode('morning', learningLevel)) return;
+    markIntroSeen(); daySel = firstDay;
     collapsePlanningExtras();
-    $('intro').classList.add('hidden'); enterMode('morning');
+    paintSetup();
     focusPlannerHome();
   }
 
@@ -5856,12 +6144,17 @@
     return nm(P.role(targetRolesFor(sel.det)[0]).name);
   }
   var trayToastT = null;
+  function clearTrayToast() {
+    if (trayToastT) { clearTimeout(trayToastT); trayToastT = null; }
+    var toast = $('tray-toast'); if (!toast) return;
+    toast.classList.remove('show'); toast.classList.add('hidden'); toast.textContent = '';
+  }
   function showTrayToast(msg) {
     var toast = $('tray-toast'); if (!toast) return;
     toast.textContent = msg;
     toast.classList.remove('hidden'); toast.classList.remove('show'); void toast.offsetWidth; toast.classList.add('show');
     if (trayToastT) clearTimeout(trayToastT);
-    trayToastT = setTimeout(function () { toast.classList.remove('show'); toast.classList.add('hidden'); }, 3600);
+    trayToastT = setTimeout(function () { trayToastT = null; toast.classList.remove('show'); toast.classList.add('hidden'); }, 3600);
   }
   function trayReject(p, sel) { showTrayToast(T().rejLine(nm(p.name), nm(P.role(p.roleId).name), selObjName(sel), selNeeded(sel))); }
   // Voyage §3 rejection copy: not-an-organizer vs. already-has-2-VIPs (the bijection-ish cap).
@@ -6011,8 +6304,12 @@
     }
   }
 
-  function enterMode(m) {
+  function enterMode(m, claimLevel) {
     if (m === 'live' && learningLevel !== 'learn') m = 'morning';
+    // This check is deliberately first: Cancel must leave the exact current
+    // screen, simulation, in-memory plan, and discovered save untouched.
+    if (m === 'morning' && !claimMorningSession(claimLevel || learningLevel)) return false;
+    cancelPendingPlanImport(); faultNavGeneration++;
     // A Morning edit can still be inside the 500 ms debounce when Guided Live
     // is requested. Persist it while Morning is still the active mode, before
     // Live stages its temporary lesson mutations in the same stores.
@@ -6037,6 +6334,7 @@
       enterScreen('setup');
       paintSetup();
     }
+    return true;
   }
 
   function startLive() {
@@ -6429,7 +6727,7 @@
   }
 
   function continueFromGuided() {
-    enterMode('morning');
+    if (!enterMode('morning')) return;
     daySel = 'load';
     collapsePlanningExtras();
     paintSetup();
@@ -6450,6 +6748,7 @@
   // launch it automatically. Corrupt/incompatible data is reported and the
   // fresh in-memory defaults remain intact.
   savedPlanRecord = readSavedPlan();
+  authoringSessionClaimed = !savedPlanRecord;
   bind(); applyLang();
   // Every link open lands on a stable home. Nothing begins moving and no
   // rehearsal starts until the player explicitly chooses Guided Live or the
