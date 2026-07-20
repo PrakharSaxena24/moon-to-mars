@@ -250,6 +250,8 @@ OgasawaraSim/
 ├─ i18n.js      all EN/JP strings (full parity)
 ├─ app.js       wires PRS + PRS_STAGE + i18n to the DOM (plan / run / report / revise)
 ├─ verify.js    Node-only headless test of the teaching curve (not loaded by the page)
+├─ ui-regressions.js      dependency-free UI helper probes run by verify.js
+├─ visual-regressions.js  dependency-free audiovisual probes run by verify.js
 ├─ CLAUDE.md    the concept + build plan — authoritative design doc
 ├─ WORLD.md     the roster's real names & story (AEGIS/AIBOS cast, sponsor, ships)
 ├─ docs/superpowers/   scoring specs & plans behind the scoreTrip rubric (design history)
@@ -258,7 +260,7 @@ OgasawaraSim/
 ```
 
 `engine.js` is deterministic (seeded RNG) and runs in the browser **and** Node, so the
-teaching curve is **headless-verified**: `node verify.js` (513/513 checks passed) pins the atom count (99),
+teaching curve is **headless-verified** by the full `node verify.js` suite, which pins the atom count (99),
 both matrix axes (bucket totals 11/10/11/12/13/**34**/9 across frame · load · voyage · arrival ·
 ops · **fishing day** · return, dimension totals **37**/29/21/7/5/1 for info/exec/safety/quality/
 money/people), that earned atoms always sum to the shown total, the exact seed scores below, a
@@ -283,7 +285,7 @@ canonical (every classic fix +          100 /100   mastered · clean · trip eff
 ```
 
 `engine.js` は決定的（シード乱数）でブラウザでも Node でも動き、学びの曲線を `node verify.js`
-（513/513チェック合格）で検証済み：99項目・合計100点、7クラスタの点数保存と根本原因の分割、
+の全テストで検証済み：99項目・合計100点、7クラスタの点数保存と根本原因の分割、
 100点＝クリーンな計画のマスタリー、正確な修正箇所への移動、バージョン付き保存／安全な読込み、
 現物引継ぎの手動編集、重要イベント／全時刻の同一結果、3種類の食材情報経路を固定しています。
 ギャップだらけの計画は51/100（マスタリー未達・旅程効率86%）、情報の矢印を描く修正

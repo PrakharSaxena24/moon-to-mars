@@ -214,6 +214,18 @@
     for (var i = 0; i < ks.length; i++) if ((keySet && !keySet[ks[i]]) || !check(v[ks[i]], ks[i])) return false;
     return true;
   }
+  function buddyAssignmentsWithinCap(defaults, overrides, cap) {
+    var effective = {}, loads = {};
+    Object.keys(defaults || {}).forEach(function (gid) { effective[gid] = defaults[gid]; });
+    Object.keys(overrides || {}).forEach(function (gid) {
+      if (overrides[gid] === null) delete effective[gid];
+      else effective[gid] = overrides[gid];
+    });
+    Object.keys(effective).forEach(function (gid) {
+      var pid = effective[gid]; if (pid) loads[pid] = (loads[pid] || 0) + 1;
+    });
+    return !Object.keys(loads).some(function (pid) { return loads[pid] > cap; });
+  }
   function validDayState(v, seg, domain) {
     var tasks = domain.segTasks[seg];
     if (seg === 'fishday') {
@@ -275,9 +287,10 @@
       seenSeats[pid] = true;
     }
     if (!validMap(v.buddyOv, domain.careGuests, function (pid2) { return pid2 === null || !!domain.organizers[pid2]; })) return null;
-    var loads = {};
-    Object.keys(v.buddyOv).forEach(function (gid) { var bp = v.buddyOv[gid]; if (bp) loads[bp] = (loads[bp] || 0) + 1; });
-    if (Object.keys(loads).some(function (p2) { return loads[p2] > 2; })) return null;
+    // Validate the state that mergePlan will actually see, including the two
+    // template-seeded buddies. Otherwise two apparently legal overrides can
+    // make a third assignment and the engine silently drops one by guest order.
+    if (!buddyAssignmentsWithinCap(domain.template.buddies, v.buddyOv, 2)) return null;
     return jsonCopy(v);
   }
   function validatePlanEnvelope(v) {
@@ -3858,7 +3871,10 @@
   }
   function reportReadinessVerdict(plan, rehearsalComplete) {
     var rr = executionReadiness(plan), n = rr.unresolvedCount == null ? ((rr.unresolved || []).length) : rr.unresolvedCount;
-    if (!rehearsalComplete) return null;
+    // Both the report's completed whole-trip evidence and the engine's
+    // readiness record must agree. Never turn a day-local success (or stale
+    // caller state) into a claim that the entire rehearsal is complete.
+    if (!rehearsalComplete || !rr.rehearsalComplete) return null;
     if (n > 0) return T().rehearsalFactsPending(n);
     return rr.realExecutionReady ? T().realExecutionReady : T().rehearsalComplete;
   }

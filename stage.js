@@ -3676,6 +3676,10 @@ function drawSceneLabel(ctx, view) {
     ink: rgba(PAL.goldPale, 0.96)
   };
   if (_lang === 'ja') sceneLabelOpts.maxW = Math.max(1, view.w - 20 * scale);
+  // The inferred-return suffix makes the longest English ship label wider
+  // than a phone stage.  Use chip's measured text compression only for that
+  // route state, preserving the established desktop/English typography.
+  else if (_scene.routeDirection === 'return') sceneLabelOpts.maxW = Math.max(1, view.w - 20 * scale);
   chip(ctx, view.w / 2, 10 * scale, label, sceneLabelOpts);
 }
 

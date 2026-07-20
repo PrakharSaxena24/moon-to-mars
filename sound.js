@@ -150,6 +150,18 @@
     ambientTimers = [];
     curWildlifeKey = null;
   }
+  // Keep ambientTimers equal to the set of genuinely pending callbacks.  A
+  // fired timeout no longer needs cancellation, so remove its id before
+  // invoking the callback that may enqueue the next wildlife sound.
+  function wildlifeTimeout(fn, delay) {
+    var id = setTimeout(function () {
+      var at = ambientTimers.indexOf(id);
+      if (at >= 0) ambientTimers.splice(at, 1);
+      fn();
+    }, delay);
+    ambientTimers.push(id);
+    return id;
+  }
   function stopAmbientNodes() {
     stopWildlife();
     var nodes = curNodes; curNodes = [];
@@ -194,11 +206,9 @@
       if (ambientG !== bus) return;   // torn down / replaced — stop the chain
       if (kind === 'gull') gullChirp(bus); else cricketTick(bus);
       var next = kind === 'gull' ? (6000 + Math.random() * 9000) : (900 + Math.random() * 1800);
-      var id = setTimeout(loop, next);
-      ambientTimers.push(id);
+      wildlifeTimeout(loop, next);
     }
-    var id0 = setTimeout(loop, 2000 + Math.random() * 3000);
-    ambientTimers.push(id0);
+    wildlifeTimeout(loop, 2000 + Math.random() * 3000);
   }
 
   function startAmbient(seg, dayK, scene) {

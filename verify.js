@@ -535,8 +535,10 @@ console.log('\n=== AUTHORABLE DAYS — daySchedule / scoreDay (§20 + §Voyage) 
   outer.startMin = 240; outer.durMin = 600; outer.assignedIds = ['p01'];
   inner.startMin = 300; inner.durMin = 240; inner.assignedIds = ['p01'];
   var nestedSchedule = P.daySchedule(nestedPlan, 'ops');
-  ok(nestedSchedule.overbookMin === 240,
-    'nested 04:00–14:00 and 05:00–09:00 assignments bill exactly 240 overbooked minutes (' + nestedSchedule.overbookMin + ')');
+  var nestedReadiness = P.dayReadiness(nestedPlan, 'ops');
+  ok(nestedSchedule.overbookMin === 240 &&
+     nestedReadiness.some(function (gap) { return gap.type === 'OVERLOAD' && gap.personId === 'p01'; }),
+    'nested 04:00–14:00 and 05:00–09:00 assignments bill exactly 240 overbooked minutes and surface OVERLOAD (' + nestedSchedule.overbookMin + ')');
 })();
 
 console.log('\n=== §20 REVIEW FIXES — fishday stays timing+arrows-only; coarse atMinute handoffs stay honest ===');
@@ -674,12 +676,18 @@ console.log('\n=== COARSE-DAY ANIMATION — opt-in minute-sim (§21.12) ===');
   ok(P.createSim(base, 'fishday').mode === 'minute', 'fishday is still a minute-sim without opts (coarse gate leaves it alone)');
   // A freshly-created animated day has executed nothing. Its public summary
   // must reflect runtime evidence rather than awarding the authored plan's 100.
-  var arrivalCfg = P.applyDayFix(P.applyAllFixes(base), 'arrival');
-  var untouchedArrival = P.createSim(arrivalCfg, 'arrival', { animate: true });
-  var untouchedSummary = P.daySummary(untouchedArrival);
-  ok(untouchedSummary.tasksDone === 0 && untouchedSummary.tasksTotal === 13 &&
-     untouchedSummary.score === 0 && untouchedSummary.grade === 'D' && untouchedSummary.clean === false,
-    'coarse Arrival summary before execution is 0/D/not-clean with 0/13 tasks, never 100/A');
+  // Pin this for every coarse segment, including Load and Voyage: the original
+  // bug was generic even though Arrival was the first visible report path.
+  var coarseCanonical = P.applyAllFixes(base);
+  P.AUTHORABLE.forEach(function (seg) { coarseCanonical = P.applyDayFix(coarseCanonical, seg); });
+  ['load', 'voyage', 'arrival', 'ops', 'return'].forEach(function (seg) {
+    var untouched = P.createSim(coarseCanonical, seg, { animate: true });
+    var untouchedSummary = P.daySummary(untouched);
+    ok(untouchedSummary.tasksDone === 0 && untouchedSummary.tasksTotal > 0 &&
+       untouchedSummary.score === 0 && untouchedSummary.grade === 'D' && untouchedSummary.clean === false,
+      'coarse ' + seg + ' summary before execution is 0/D/not-clean with 0/' + untouchedSummary.tasksTotal + ' tasks, never 100/A');
+  });
+  var arrivalCfg = coarseCanonical;
   var completedArrival = P.createSim(arrivalCfg, 'arrival', { animate: true }), caGuard = 0;
   while (!completedArrival.finished && caGuard++ < 1000) {
     P.tick(completedArrival); if (completedArrival.paused) P.resume(completedArrival);
@@ -1971,8 +1979,9 @@ console.log('\n=== TEACHING MVP — readiness, channel feasibility, and scenario
   var outageSim = P.createSim(outageCfgA, 'fishday');
   var outageReplay = P.createSim(outageSim.cfg, 'fishday');
   ok(outageSim.cfg.scenarioId === 'comms-outage' && outageReplay.cfg.scenarioId === 'comms-outage' &&
-     outageReplay.plan.scenarioId === 'comms-outage',
-    'simulation replay preserves the communications-outage scenario in cfg and merged plan');
+     outageReplay.plan.scenarioId === 'comms-outage' &&
+     JSON.stringify(outageReplay.sched) === JSON.stringify(outageSim.sched),
+    'simulation replay preserves the communications-outage scenario and its deterministic schedule');
 
   var normalPlan = P.mergePlan(P.applyScenario(canonCfg, 'normal'));
   ok(JSON.stringify(P.daySchedule(normalPlan, 'fishday')) === JSON.stringify(canonFish),
@@ -2924,6 +2933,24 @@ console.log('\n=== INTEGRITY REGRESSIONS — browser-facing contracts ===');
      soundUiSource.indexOf('updateSoundButton()') >= 0,
     'sound button waits for the asynchronous confirmed toggle state and handles rejection');
 
+  // Keep the dependency-free browser-glue probes under the project's single
+  // documented verification command. They execute the exact app/stage/sound
+  // helpers in isolated VM contexts without requiring a browser installation.
+  var childProcess = require('child_process');
+  function runRegressionScript(file) {
+    return childProcess.spawnSync(process.execPath, [file], {
+      cwd: __dirname, encoding: 'utf8', timeout: 10000
+    });
+  }
+  var uiRegressionRun = runRegressionScript('ui-regressions.js');
+  ok(uiRegressionRun.status === 0,
+    'effective buddy-cap and whole-report verdict helpers pass executable UI regressions' +
+      (uiRegressionRun.status === 0 ? '' : ' (' + String(uiRegressionRun.stderr || uiRegressionRun.error || '').trim() + ')'));
+  var visualRegressionRun = runRegressionScript('visual-regressions.js');
+  ok(visualRegressionRun.status === 0,
+    'wildlife timer retention and inferred-return phone labels pass executable visual regressions' +
+      (visualRegressionRun.status === 0 ? '' : ' (' + String(visualRegressionRun.stderr || visualRegressionRun.error || '').trim() + ')'));
+
   // Execute sound.js in an isolated process with resume() rejected. Waiting a
   // full event-loop turn catches both a false enabled flag and an unhandled
   // rejection that a superficial source check would miss.
@@ -2943,7 +2970,7 @@ console.log('\n=== INTEGRITY REGRESSIONS — browser-facing contracts ===');
     "throw new Error(JSON.stringify({value,enabled:window.PRS_SOUND.enabled,pref:store.prs_sound,unhandled}));",
     "})().catch(e=>{console.error(e.stack||e);process.exitCode=1;});"
   ].join('\n');
-  var soundRun = require('child_process').spawnSync(process.execPath, ['-e', soundProbe], {
+  var soundRun = childProcess.spawnSync(process.execPath, ['-e', soundProbe], {
     cwd: __dirname, encoding: 'utf8', timeout: 10000
   });
   ok(soundRun.status === 0,
