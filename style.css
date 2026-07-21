@@ -1855,10 +1855,33 @@ body.screen-run :where(.dashboard,.live-dock,.run-console) :focus-visible{scroll
 .journey-choices{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;}
 .journey-card{position:relative;display:flex;min-width:0;min-height:154px;flex-direction:column;align-items:flex-start;text-align:left;
   padding:14px 14px 12px;color:#f6efdc;background:rgba(246,239,220,.055);border:1px solid rgba(227,196,107,.27);
-  border-radius:var(--r-md);box-shadow:none;cursor:pointer;transition:transform .15s ease,border-color .15s ease,background .15s ease;}
+  border-radius:var(--r-md);box-shadow:none;text-decoration:none;cursor:pointer;transition:transform .15s ease,border-color .15s ease,background .15s ease;}
 .journey-card:hover{transform:translateY(-2px);border-color:rgba(227,196,107,.72);background:rgba(246,239,220,.09);}
 .journey-card:focus-visible{outline:3px solid var(--accent-light);outline-offset:2px;}
 .journey-card.recommended{border-color:var(--accent-light);background:linear-gradient(145deg,rgba(184,137,43,.2),rgba(246,239,220,.07));}
+.journey-card.journey-hikone-card{
+  grid-column:1/-1;min-height:136px;padding:18px min(34%,360px) 16px 18px;overflow:hidden;
+  border-color:rgba(115,211,207,.68);background:
+    linear-gradient(108deg,rgba(9,45,58,.98) 0%,rgba(13,74,87,.96) 58%,rgba(24,115,123,.82) 100%);
+  box-shadow:inset 0 0 0 1px rgba(190,241,229,.08),0 9px 24px rgba(1,18,25,.2);
+}
+.journey-hikone-card::before{
+  content:"";position:absolute;top:18px;right:8%;width:82px;height:82px;border-radius:50%;pointer-events:none;
+  background:radial-gradient(circle,rgba(255,226,150,.82) 0 25%,rgba(255,226,150,.16) 26% 48%,transparent 49%);
+}
+.journey-hikone-card::after{
+  content:"";position:absolute;right:-2%;bottom:-26px;width:39%;height:112px;pointer-events:none;opacity:.72;
+  background:repeating-radial-gradient(ellipse at 50% 110%,transparent 0 13px,rgba(178,237,226,.42) 14px 16px,transparent 17px 25px);
+  transform:rotate(-3deg);
+}
+.journey-hikone-card>*{position:relative;z-index:1;}
+.journey-hikone-card .journey-tag{color:#bcece4;border-color:rgba(188,236,228,.48);background:rgba(2,27,38,.22);}
+.journey-hikone-card .journey-card-copy{max-width:68ch;color:rgba(239,252,248,.82);}
+.journey-hikone-card .journey-card-meta{color:#bcece4;}
+.journey-hikone-card:hover{
+  border-color:#bcece4;background:linear-gradient(108deg,rgba(9,52,66,.98),rgba(14,85,97,.96) 58%,rgba(28,129,135,.86));
+}
+.journey-hikone-card:focus-visible{outline-color:#d8fff7;}
 .journey-tag{display:inline-flex;margin-bottom:8px;padding:2px 7px;border:1px solid rgba(227,196,107,.35);border-radius:999px;
   color:var(--accent-light);font-size:9.5px;font-weight:800;letter-spacing:.7px;text-transform:uppercase;}
 .journey-card strong{font-family:var(--serif);font-size:17px;line-height:1.25;}
@@ -1937,12 +1960,15 @@ body.campaign-active.screen-report .legacy-report-actions{display:none !importan
 @media(max-width:760px){
   .journey-entry-head,.campaign-board-head{display:block;}.journey-progress{max-width:none;margin-top:9px;text-align:left;}
   .journey-choices,.campaign-episodes{grid-template-columns:1fr;}.journey-card{min-height:0;}
+  .journey-card.journey-hikone-card{padding:16px 76px 15px 15px;}.journey-hikone-card::before{right:10px;width:66px;height:66px;}
+  .journey-hikone-card::after{right:-10%;width:62%;height:96px;opacity:.52;}
   .campaign-progress{margin-top:10px;min-width:0;}.campaign-guidance{grid-template-columns:1fr;}
   .campaign-guidance-copy{padding:10px 0 0;border-left:0;border-top:1px solid var(--line);}
   .campaign-carryover{display:block;}.campaign-carryover>div{display:grid;grid-template-columns:1fr 1fr;margin-top:5px;}
   .campaign-report-metrics{grid-template-columns:1fr;}.campaign-incident-sheet{margin-top:4vh;padding:24px 20px 20px !important;}
 }
 @media(max-width:420px){
+  .journey-card.journey-hikone-card{padding-right:15px;}.journey-hikone-card::before{opacity:.22;}.journey-hikone-card::after{width:78%;opacity:.28;}
   .campaign-progress{grid-template-columns:1fr;}.campaign-steps li{font-size:8.5px;}.campaign-actions{align-items:stretch;flex-direction:column;}
   .campaign-next,.campaign-reset{width:100%;margin:0;}.campaign-carryover>div{grid-template-columns:1fr;}
 }

@@ -13,6 +13,15 @@ travels. The mission is larger than a clean schedule: bring all 24 people home s
 the hosted guests, strengthen the relationship, and help the team learn without blaming a person
 for a system-design failure.
 
+**New — The Hikone Morning / 彦根の朝.** A separate recommended first-play tutorial starts
+outside Ryokan Izumi in Yokkaichi. Watanabe-san arrives in his own car and asks two other
+travelers to prepare six known items before he drives them to Lake Biwa in Hikone. The learner
+turns a `12 / 0` serial queue into two visible parallel owner lanes, checks the loaded trunk, and
+sees the same preparations arrive at the lake. It has its own full-viewport page, state, freshwater
+visual identity, bilingual copy, keyboard/tap path, and reduced-motion treatment; it does not alter
+the Ogasawara campaign or its score. The durable implementation handoff is
+[`docs/superpowers/plans/2026-07-21-hikone-tutorial.md`](docs/superpowers/plans/2026-07-21-hikone-tutorial.md).
+
 **New — the representative fishing day (Day 3, whole-hour block planning).** The heart of the game is the
 **temporal information axis**: information is only useful if it reaches *the right person
 before their task starts*. On the fishday editor you arrange task blocks on a **whole-hour grid** across per-person lanes
@@ -108,6 +117,9 @@ Plan First の作成状態はバージョン付きで端末内に自動保存さ
 Open **`index.html`** in any modern browser. No build, no install, no server, no account —
 fully offline. / **`index.html`** をブラウザで開くだけ。ビルド・インストール・サーバー・
 アカウント不要。完全オフライン。
+
+The standalone first-play tutorial can also be opened directly at **`hikone.html`**. /
+独立した初回チュートリアルは **`hikone.html`** から直接開けます。
 
 ---
 

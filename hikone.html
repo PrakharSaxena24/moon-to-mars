@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#082b38">
+  <title>The Hikone Morning · 彦根の朝</title>
+  <meta name="description" content="A standalone planning tutorial: share six preparations between two people before Watanabe-san drives from Ryokan Izumi in Yokkaichi to Lake Biwa in Hikone.">
+  <link rel="stylesheet" href="hikone.css">
+</head>
+<body class="no-js">
+  <main class="hk-app" id="hk-app" data-scene="arrival">
+    <header class="hk-hud" aria-label="Tutorial controls">
+      <div class="hk-route-lockup">
+        <span class="hk-route-dot" aria-hidden="true"></span>
+        <span id="hk-location">Ryokan Izumi · Yokkaichi</span>
+      </div>
+      <div class="hk-progress" id="hk-progress" aria-label="Tutorial progress">
+        <span id="hk-progress-label">Arrival</span>
+        <span class="hk-progress-track" aria-hidden="true"><i id="hk-progress-bar"></i></span>
+      </div>
+      <div class="hk-hud-actions">
+        <div class="hk-lang" role="group" aria-label="Language / 言語">
+          <button type="button" id="hk-lang-en" aria-pressed="true">EN</button>
+          <button type="button" id="hk-lang-ja" aria-pressed="false">日本語</button>
+        </div>
+        <button type="button" class="hk-icon-button" id="hk-sound" aria-pressed="false" title="Sound">Sound off</button>
+        <a class="hk-exit" href="index.html">Exit</a>
+      </div>
+    </header>
+
+    <section class="hk-world" id="hk-world" aria-label="Outside Ryokan Izumi and the journey to Lake Biwa">
+      <div class="hk-sky" aria-hidden="true">
+        <span class="hk-moon"></span>
+        <span class="hk-cloud hk-cloud-one"></span>
+        <span class="hk-cloud hk-cloud-two"></span>
+      </div>
+      <div class="hk-mountains" aria-hidden="true"></div>
+      <div class="hk-lake" aria-hidden="true">
+        <span class="hk-lake-glow"></span>
+        <span class="hk-ripple hk-ripple-one"></span>
+        <span class="hk-ripple hk-ripple-two"></span>
+        <span class="hk-reeds"></span>
+      </div>
+      <div class="hk-ground" aria-hidden="true"></div>
+
+      <div class="hk-ryokan" aria-hidden="true">
+        <span class="hk-roof"></span>
+        <span class="hk-window hk-window-one"></span>
+        <span class="hk-window hk-window-two"></span>
+        <span class="hk-door"><i></i></span>
+        <span class="hk-noren">泉</span>
+        <span class="hk-sign">旅館 いずみ</span>
+        <span class="hk-lantern"></span>
+      </div>
+
+      <div class="hk-car" aria-hidden="true">
+        <span class="hk-hatch"></span>
+        <span class="hk-car-body"></span>
+        <span class="hk-car-window"></span>
+        <span class="hk-headlight"></span>
+        <span class="hk-wheel hk-wheel-front"></span>
+        <span class="hk-wheel hk-wheel-back"></span>
+      </div>
+
+      <div class="hk-cast" aria-hidden="true">
+        <div class="hk-person hk-member-a"><span class="hk-head"></span><span class="hk-body"></span><b>A</b></div>
+        <div class="hk-person hk-member-b"><span class="hk-head"></span><span class="hk-body"></span><b>B</b></div>
+        <div class="hk-person hk-watanabe"><span class="hk-head"></span><span class="hk-body"></span><b>W</b></div>
+      </div>
+
+      <div class="hk-world-props" aria-hidden="true">
+        <div class="hk-prop hk-prop-rods" data-card="rods"><i></i><i></i><b data-en="RODS" data-ja="釣り竿">RODS</b></div>
+        <div class="hk-prop hk-prop-worms" data-card="worms-tanago"><i>∿</i><b data-en="WORMS" data-ja="ミミズ">WORMS</b></div>
+        <div class="hk-prop hk-prop-chicken" data-card="chicken-bait-suppon"><i data-en="BAIT" data-ja="エサ">BAIT</i><b data-en="SUPPON BAIT" data-ja="スッポンのエサ">SUPPON BAIT</b></div>
+        <div class="hk-prop hk-prop-tanago-box" data-card="water-filled-tanago-box"><i></i><b data-en="WATER · TANAGO" data-ja="水入り・タナゴ">WATER · TANAGO</b></div>
+        <div class="hk-prop hk-prop-suppon-carrier" data-card="suppon-aquarium-transport"><i>⬡</i><b data-en="AQUARIUM" data-ja="観賞用運搬">AQUARIUM</b></div>
+        <div class="hk-prop hk-prop-drinks" data-card="road-drinks"><i></i><i></i><i></i><b data-en="DRINKS" data-ja="飲み物">DRINKS</b></div>
+      </div>
+
+      <div class="hk-wildlife" aria-hidden="true">
+        <div class="hk-tanago-school"><i></i><i></i><i></i><small data-en="TANAGO" data-ja="タナゴ">TANAGO</small></div>
+        <div class="hk-suppon-shadow"><i></i><small data-en="SUPPON" data-ja="スッポン">SUPPON</small></div>
+        <div class="hk-aquarium-destinations"><span>≈ ≈<b data-en="TANAGO AQUARIUM" data-ja="タナゴの水槽">TANAGO AQUARIUM</b></span><span>⬡<b data-en="SUPPON AQUARIUM" data-ja="スッポンの水槽">SUPPON AQUARIUM</b></span></div>
+      </div>
+
+      <div class="hk-road-route" aria-hidden="true">
+        <span class="hk-pin hk-pin-start" id="hk-route-start">Yokkaichi</span>
+        <i></i>
+        <span class="hk-route-car">●</span>
+        <span class="hk-pin hk-pin-end" id="hk-route-end">Hikone · Lake Biwa</span>
+      </div>
+
+      <div class="hk-world-caption" id="hk-world-caption">
+        <span>04:45</span>
+        <strong id="hk-caption-place">Outside Ryokan Izumi</strong>
+        <small id="hk-caption-city">Yokkaichi</small>
+      </div>
+    </section>
+
+    <section class="hk-panel" id="hk-panel" aria-labelledby="hk-phase-title"></section>
+    <div class="hk-live" id="hk-live" role="status" aria-live="polite" aria-atomic="true"></div>
+  </main>
+
+  <noscript>This standalone tutorial requires JavaScript. / このチュートリアルにはJavaScriptが必要です。</noscript>
+  <script src="hikone.js"></script>
+</body>
+</html>
