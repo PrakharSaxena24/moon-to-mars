@@ -93,6 +93,10 @@ if (!html || !css || !js) {
   });
   ok((html + '\n' + js + '\n' + i18n).indexOf('渡辺') < 0, 'incorrect simplified Watanabe Kanji is absent from tutorial copy');
   ok((html + '\n' + js + '\n' + i18n).indexOf('プラカル') < 0, 'incorrect shortened Prakhar Katakana is absent from tutorial copy');
+  ok(/data-vehicle=["']mercedes-g-class["']/i.test(html), 'Watanabe-san’s vehicle has a stable G-Class identity hook');
+  ok(/G-Class/.test(js) && /ゲレンデ/.test(js), 'the briefing identifies Watanabe-san’s G-Class in both languages');
+  ok(/\.hk-hatch::after\{[^}]*border-radius\s*:\s*50%[^}]*radial-gradient/is.test(css) && /\.hk-hatch\{[^}]*transform-origin\s*:\s*right center/is.test(css) && /rotateY\(-65deg\)/.test(css), 'the rear spare and side-hinged gate distinguish the G-Class');
+  ok(/\.hk-car-body\{[^}]*border-radius\s*:\s*5px 7px 3px 4px/is.test(css) && /\.hk-route-car\{[^}]*border-radius\s*:\s*4px 6px 2px 3px/is.test(css), 'full-size and route cars keep a deliberately squared G-Class silhouette');
   ok(!/actors\s*:\s*\{[^}]*\bcap\s*:|actors\s*:\s*\{[^}]*\btowel\s*:/is.test(js), 'Cap/Towel are not player-facing actor identities');
   ok(/not food|never as food|食用ではない/i.test(js), 'tanago and suppon are explicitly not food');
   ok(/separate aquariums|別々の水槽/i.test(js), 'tanago and suppon have separate aquarium purpose');

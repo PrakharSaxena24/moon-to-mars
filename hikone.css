@@ -144,21 +144,30 @@ button:focus-visible,a:focus-visible{
 .hk-vending-light{position:absolute;left:8px;right:8px;top:9px;height:52px;border:3px solid #738183;background:linear-gradient(180deg,#caeced,#76a7aa);box-shadow:0 0 15px rgba(182,232,230,.22)}
 .hk-vending i{position:absolute;top:18px;width:16px;height:30px;border-radius:3px;background:linear-gradient(180deg,#75c8cc,#e4f2db 48%,#d58d55 49%);}.hk-vending i:nth-of-type(1){left:15px}.hk-vending i:nth-of-type(2){left:36px}.hk-vending i:nth-of-type(3){left:57px}.hk-vending b{position:absolute;left:12px;right:12px;bottom:18px;padding:7px 0;border-radius:4px;background:#424d4a;color:#dceae4;text-align:center;font-size:9px;letter-spacing:.13em;}
 
-/* ---- Watanabe's car / open trunk --------------------------------------- */
+/* ---- Watanabe's G-Class / side-hinged rear gate ------------------------ */
 .hk-car{position:absolute;z-index:10;right:8%;bottom:15%;width:35%;height:29%;transform:translateX(128%);animation:hk-car-arrive 1.65s cubic-bezier(.18,.74,.19,1) .3s forwards;transition:right .75s ease,bottom .75s ease,opacity .5s ease,transform .75s ease;filter:drop-shadow(0 20px 23px rgba(0,0,0,.34));}
 .hk-car-shadow{position:absolute;left:5%;right:1%;bottom:3%;height:17%;border-radius:50%;background:rgba(3,15,18,.45);filter:blur(6px)}
-.hk-car-body{position:absolute;left:8%;right:2%;bottom:15%;height:50%;border:2px solid rgba(255,255,255,.28);border-radius:40% 14% 16% 22%/47% 42% 31% 34%;background:linear-gradient(158deg,#eee4bd 0%,var(--car) 51%,#8b8b75 100%);box-shadow:inset 0 -15px 20px rgba(66,67,59,.2)}
-.hk-car-roof{position:absolute;left:31%;right:17%;top:10%;height:34%;border-radius:48% 33% 0 0;background:linear-gradient(165deg,#ddd5b1,#b5ae90);border:2px solid rgba(255,255,255,.25)}
-.hk-car-window{position:absolute;z-index:2;top:16%;height:30%;background:linear-gradient(155deg,#7ba5aa,#193e49 72%);border:5px solid #747666;box-shadow:inset 4px 3px 8px rgba(205,235,228,.13)}
-.hk-car-window-rear{left:34%;width:24%;clip-path:polygon(18% 0,100% 0,100% 100%,0 100%)}
-.hk-car-window-front{left:58%;width:24%;clip-path:polygon(0 0,72% 0,100% 100%,0 100%)}
-.hk-car-pillar{position:absolute;z-index:3;left:57%;top:15%;width:7px;height:34%;background:#747666;transform:skewX(-3deg)}
-.hk-car-handle{position:absolute;z-index:3;right:27%;bottom:42%;width:28px;height:5px;border-radius:4px;background:#797b68;box-shadow:0 2px 3px rgba(0,0,0,.25)}
-.hk-hatch{position:absolute;z-index:4;left:2%;top:31%;width:30%;height:35%;border:3px solid #777968;border-radius:18px 5px 5px 10px;background:linear-gradient(150deg,#e1d8b3,#aaa589);transform-origin:right bottom;transform:rotate(-2deg);transition:transform .48s ease;}
-.hk-hatch i{position:absolute;left:9px;right:18px;top:8px;height:42%;border-radius:12px 3px 3px 4px;background:linear-gradient(145deg,#628c92,#183d49);opacity:.92}.hk-trunk-mouth{position:absolute;z-index:1;left:4%;bottom:24%;width:29%;height:35%;border-radius:8px 2px 3px 7px;background:linear-gradient(90deg,#121d21,#27343a);box-shadow:inset -7px 0 9px rgba(0,0,0,.42)}
-.hk-headlight{position:absolute;z-index:4;right:0;bottom:41%;width:8%;height:15%;border-radius:50%;background:#fff0ac;box-shadow:18px 0 44px 12px rgba(255,229,153,.32)}
-.hk-tail-light{position:absolute;z-index:4;left:7%;bottom:38%;width:6%;height:17%;border-radius:5px;background:#a74a3f}.hk-bumper{position:absolute;z-index:3;right:1%;bottom:15%;width:21%;height:8%;border-radius:3px 10px 12px 3px;background:#77796e}
-.hk-wheel{position:absolute;z-index:5;bottom:0;width:18%;aspect-ratio:1;border:10px solid #172125;border-radius:50%;background:#626c69;box-shadow:inset 0 0 0 6px #222f31}.hk-wheel i{position:absolute;inset:25%;border-radius:50%;background:#a5aaa0}.hk-wheel-back{left:16%}.hk-wheel-front{right:11%}
+.hk-car-body{position:absolute;left:3%;right:1%;bottom:15%;height:49%;border:2px solid rgba(255,255,255,.28);border-radius:5px 7px 3px 4px;background:linear-gradient(158deg,#eee4bd 0%,var(--car) 51%,#8b8b75 100%);box-shadow:inset 0 -15px 20px rgba(66,67,59,.2)}
+.hk-car-body::before{content:"";position:absolute;z-index:2;left:5%;right:7%;bottom:32%;height:5%;border-radius:2px;background:#4b514b;box-shadow:0 2px 2px rgba(0,0,0,.25)}
+.hk-car-body::after{content:"";position:absolute;left:29%;right:25%;bottom:-10%;height:8%;border-radius:2px;background:#2e3533;box-shadow:0 3px 3px rgba(0,0,0,.28)}
+.hk-car-roof{position:absolute;left:7%;right:21%;top:7%;height:48%;border-radius:4px 5px 0 0;background:linear-gradient(165deg,#ddd5b1,#b5ae90);border:2px solid rgba(255,255,255,.25)}
+.hk-car-roof::before{content:"";position:absolute;left:1%;right:1%;top:-8%;height:5%;border-radius:3px;background:#555b54;box-shadow:0 3px 0 rgba(232,222,184,.38)}
+.hk-car-window{position:absolute;z-index:2;top:14%;height:33%;border:4px solid #414944;border-radius:2px;background:linear-gradient(155deg,#7ba5aa,#193e49 72%);box-shadow:inset 4px 3px 8px rgba(205,235,228,.13)}
+.hk-car-window-rear{left:31%;width:24%;clip-path:none}
+.hk-car-window-front{left:56%;width:23%;clip-path:none}
+.hk-car-pillar{position:absolute;z-index:3;left:55%;top:13%;width:1.4%;height:37%;background:#414944;transform:none}
+.hk-car-handle{position:absolute;z-index:3;right:27%;bottom:42%;width:6%;height:5px;border-radius:4px;background:#555b53;box-shadow:0 2px 3px rgba(0,0,0,.25)}
+.hk-car-handle::before{content:"";position:absolute;inset:0;border-radius:inherit;background:inherit;transform:translateX(-390%);box-shadow:inherit}
+.hk-hatch{position:absolute;z-index:4;left:2%;top:13%;width:28%;height:56%;border:3px solid #555d55;border-radius:3px;background:linear-gradient(150deg,#e1d8b3,#aaa589);transform-origin:right center;transform:perspective(240px) rotateY(0);transition:transform .48s ease;backface-visibility:hidden}
+.hk-hatch i{position:absolute;left:9px;right:9px;top:8px;height:41%;border:4px solid #414944;border-radius:2px;background:linear-gradient(145deg,#628c92,#183d49);opacity:.92}
+.hk-hatch::after{content:"";position:absolute;z-index:3;left:-14%;bottom:3%;width:56%;aspect-ratio:1;border:7px solid #1c2525;border-radius:50%;background:radial-gradient(circle,#aeb2a8 0 17%,#424a47 18% 31%,#9a9e94 32% 47%,#252d2d 48%);box-shadow:0 5px 7px rgba(0,0,0,.35)}
+.hk-trunk-mouth{position:absolute;z-index:1;left:3%;bottom:18%;width:26%;height:43%;border-radius:3px;background:linear-gradient(90deg,#121d21,#27343a);box-shadow:inset -7px 0 9px rgba(0,0,0,.42)}
+.hk-headlight{position:absolute;z-index:4;right:0;bottom:41%;width:8%;aspect-ratio:1;border:3px solid #48504a;border-radius:50%;background:#fff0ac;box-shadow:18px 0 44px 12px rgba(255,229,153,.32)}
+.hk-headlight::before{content:"";position:absolute;right:93%;top:-6%;width:230%;height:112%;border:3px solid #343c3a;border-radius:2px;background:repeating-linear-gradient(90deg,#293230 0 3px,#60665f 3px 6px)}
+.hk-headlight::after{content:"";position:absolute;right:238%;top:7%;width:75%;aspect-ratio:1;border:2px solid #abb0a6;border-radius:50%;background:radial-gradient(circle,#d9d9ce 0 10%,transparent 11%),conic-gradient(from -30deg,transparent 0 15%,#d9d9ce 15% 18%,transparent 18% 48%,#d9d9ce 48% 51%,transparent 51% 81%,#d9d9ce 81% 84%,transparent 84%),#424a47;box-shadow:inset 0 0 0 1px #424a47}
+.hk-tail-light{position:absolute;z-index:5;left:4%;bottom:37%;width:5%;height:19%;border-radius:2px;background:#a74a3f;box-shadow:inset 0 0 0 2px rgba(74,28,25,.32)}
+.hk-bumper{position:absolute;z-index:3;right:0;bottom:15%;width:22%;height:8%;border-radius:2px;background:#4b514e}
+.hk-wheel{position:absolute;z-index:5;bottom:0;width:18%;aspect-ratio:1;border:10px solid #172125;border-radius:50%;background:#626c69;box-shadow:0 0 0 4px #494c43,inset 0 0 0 6px #222f31}.hk-wheel i{position:absolute;inset:25%;border-radius:50%;background:#a5aaa0}.hk-wheel-back{left:13%}.hk-wheel-front{right:10%}
 
 /* ---- road to Hikone and Lake Biwa ------------------------------------- */
 /* Kept under the historic route-map class for the JS seam, but this is a
@@ -175,8 +184,8 @@ button:focus-visible,a:focus-visible{
 .hk-route-pin-start{left:8%;bottom:29%}.hk-route-pin-end{right:9%;top:29%}
 .hk-route-path{position:absolute;z-index:2;left:13%;right:9%;bottom:24%;height:34%;border-top:5px solid rgba(224,242,229,.32);border-radius:50%;transform:rotate(-4deg)}
 .hk-route-path::before,.hk-route-path::after{content:"";position:absolute;bottom:-21px;width:130px;height:33px;background:repeating-linear-gradient(80deg,transparent 0 13px,#1f3834 14px 19px,transparent 20px 27px);opacity:.8}.hk-route-path::before{left:-2%}.hk-route-path::after{right:2%}
-.hk-route-car{position:absolute;z-index:5;left:18%;bottom:18%;width:124px;height:62px;border:3px solid rgba(255,255,255,.25);border-radius:43px 55px 15px 18px;background:linear-gradient(160deg,#f0e5bf,#aaa78e);box-shadow:0 13px 20px rgba(0,0,0,.28);animation:hk-route-drive 3.4s ease-in-out infinite alternate}
-.hk-route-car::before{content:"";position:absolute;left:29px;right:24px;top:-24px;height:30px;border:4px solid #77796c;border-radius:31px 27px 0 0;background:linear-gradient(135deg,#7aa4a8,#1c4350 72%)}
+.hk-route-car{position:absolute;z-index:5;left:18%;bottom:18%;width:124px;height:62px;border:3px solid rgba(255,255,255,.25);border-radius:4px 6px 2px 3px;background:radial-gradient(circle at 7px 52%,#a8aca2 0 5px,#1d2525 6px 12px,transparent 13px),linear-gradient(160deg,#f0e5bf,#aaa78e);box-shadow:0 13px 20px rgba(0,0,0,.28);animation:hk-route-drive 3.4s ease-in-out infinite alternate}
+.hk-route-car::before{content:"";position:absolute;left:9px;right:25px;top:-27px;height:32px;border:4px solid #515850;border-radius:3px 3px 0 0;background:linear-gradient(135deg,#7aa4a8,#1c4350 72%)}
 .hk-route-car::after{content:"";position:absolute;left:13px;bottom:-14px;width:26px;height:26px;border:7px solid #172125;border-radius:50%;background:#737b76;box-shadow:70px 0 0 -7px #737b76,70px 0 0 0 #172125}
 .hk-route-lake{position:absolute;right:-5%;top:38%;width:42%;height:25%;border-radius:58% 0 0 43%;background:repeating-linear-gradient(176deg,rgba(226,250,242,.14) 0 2px,transparent 2px 12px),#347f8d;box-shadow:0 -8px 18px rgba(216,245,232,.1)}
 
@@ -321,9 +330,9 @@ button:focus-visible,a:focus-visible{
 
 /* ---- environment states ------------------------------------------------ */
 .hk-app:not([data-scene="arrival"]) .hk-car{animation:none;transform:none}
-.hk-app[data-scene="packing"] .hk-hatch{transform:rotate(58deg)}
+.hk-app[data-scene="packing"] .hk-hatch{transform:perspective(240px) rotateY(-65deg)}
 .hk-app[data-scene="drive"] .hk-route-map{opacity:1;transform:none}.hk-app[data-scene="drive"] :is(.hk-sky,.hk-mountains,.hk-yard,.hk-road,.hk-ryokan,.hk-vending,.hk-yard-bench,.hk-yard-tap,.hk-car,.hk-scene){opacity:0;pointer-events:none}
-.hk-app[data-scene="lake"] .hk-lake{opacity:1;transform:none}.hk-app[data-scene="lake"] .hk-sky{background:radial-gradient(circle at 71% 12%,rgba(255,231,177,.35),transparent 25%),linear-gradient(180deg,#3b7286,#efb083 92%)}.hk-app[data-scene="lake"] .hk-moon{opacity:.17}.hk-app[data-scene="lake"] :is(.hk-ryokan,.hk-vending,.hk-yard-bench,.hk-yard-tap){opacity:0;pointer-events:none}.hk-app[data-scene="lake"] .hk-road{opacity:.18}.hk-app[data-scene="lake"] .hk-yard{background:linear-gradient(180deg,rgba(126,132,100,.42),#314e45)}.hk-app[data-scene="lake"] .hk-car{right:6%;bottom:19%;transform:scale(.78);transform-origin:right bottom}.hk-app[data-scene="lake"] .hk-hatch{transform:rotate(58deg)}.hk-app[data-scene="lake"] .hk-scene::before{opacity:0}
+.hk-app[data-scene="lake"] .hk-lake{opacity:1;transform:none}.hk-app[data-scene="lake"] .hk-sky{background:radial-gradient(circle at 71% 12%,rgba(255,231,177,.35),transparent 25%),linear-gradient(180deg,#3b7286,#efb083 92%)}.hk-app[data-scene="lake"] .hk-moon{opacity:.17}.hk-app[data-scene="lake"] :is(.hk-ryokan,.hk-vending,.hk-yard-bench,.hk-yard-tap){opacity:0;pointer-events:none}.hk-app[data-scene="lake"] .hk-road{opacity:.18}.hk-app[data-scene="lake"] .hk-yard{background:linear-gradient(180deg,rgba(126,132,100,.42),#314e45)}.hk-app[data-scene="lake"] .hk-car{right:6%;bottom:19%;transform:scale(.78);transform-origin:right bottom}.hk-app[data-scene="lake"] .hk-hatch{transform:perspective(240px) rotateY(-65deg)}.hk-app[data-scene="lake"] .hk-scene::before{opacity:0}
 .hk-app[data-scene="home"] .hk-home-aquariums{opacity:1;transform:none}.hk-app[data-scene="home"] :is(.hk-sky,.hk-mountains,.hk-yard,.hk-road,.hk-ryokan,.hk-vending,.hk-yard-bench,.hk-yard-tap,.hk-car,.hk-lake){opacity:0;pointer-events:none}.hk-app[data-scene="home"] .hk-scene::before{opacity:0}.hk-app[data-scene="home"] .hk-zone[data-zone="home-tanago"]{left:10%;bottom:22%;width:35%;height:47%;border-radius:12px}.hk-app[data-scene="home"] .hk-zone[data-zone="home-suppon"]{right:10%;bottom:22%;width:35%;height:47%;border-radius:12px}
 
 /* ---- motion ------------------------------------------------------------- */
@@ -352,7 +361,7 @@ button:focus-visible,a:focus-visible{
   .hk-yard{inset:51% 0 0}.hk-road{right:-26%;bottom:5%;width:70%;height:35%;transform:rotate(-10deg)}
   .hk-ryokan{left:0;bottom:63%;width:70%;height:28%;}.hk-roof{height:22%}.hk-window{border-width:4px}.hk-entry{border-width:5px}.hk-noren{font-size:20px}.hk-sign{left:8%;top:57%;font-size:11px;padding:5px 7px}.hk-lantern{right:25%;top:50%}
   .hk-vending{left:2%;bottom:48%;width:58px;height:97px;border-width:3px}.hk-vending-light{left:5px;right:5px;top:6px;height:34px}.hk-vending i{top:11px;width:10px;height:21px}.hk-vending i:nth-of-type(1){left:9px}.hk-vending i:nth-of-type(2){left:23px}.hk-vending i:nth-of-type(3){left:37px}.hk-vending b{left:7px;right:7px;bottom:10px;padding:4px 0;font-size:6px}.hk-yard-bench{left:12%;bottom:48%;width:24%}.hk-yard-tap{left:4%;bottom:38%;transform:scale(.72);transform-origin:bottom left}
-  .hk-car{right:2%;bottom:45%;width:72%;height:24%;}.hk-hatch{transform-origin:right bottom}.hk-wheel{border-width:7px}
+  .hk-car{right:2%;bottom:45%;width:72%;height:24%;}.hk-hatch{transform-origin:right center}.hk-wheel{border-width:7px}
   .hk-scene::before{left:3%;bottom:1%;width:94%;height:37%;transform:perspective(500px) rotateX(49deg)}
   .hk-person,.hk-actor{width:78px;height:138px}.hk-person[data-person="prakhar"],.hk-actor[data-actor="prakhar"],.hk-actor[data-person="prakhar"]{left:18%;bottom:37%}.hk-person[data-person="nishinaga"],.hk-actor[data-actor="nishinaga"],.hk-actor[data-person="nishinaga"]{left:43%;bottom:36%}.hk-person[data-person="watanabe"],.hk-actor[data-actor="watanabe"],.hk-actor[data-person="watanabe"]{right:4%;bottom:43%}.hk-person::before,.hk-actor::before{background:
     var(--accessory),
@@ -383,7 +392,7 @@ button:focus-visible,a:focus-visible{
   .hk-prop[data-location="hook"],.hk-item[data-location="hook"]{left:23%;right:auto;bottom:35%;width:64px;height:64px}
   .hk-zone[data-zone="tap"]{left:2%;bottom:38%}.hk-zone[data-zone="trunk"]{left:25%;right:auto;bottom:45%;width:48%;height:17%}
   .hk-clock{left:max(9px,env(safe-area-inset-left));top:max(112px,calc(env(safe-area-inset-top) + 105px));font-size:11px}.hk-objective{top:max(113px,calc(env(safe-area-inset-top) + 106px));max-width:68vw;padding:7px 10px;font-size:11px}.hk-dialogue{right:4%;top:max(178px,29dvh);width:71vw;padding:9px 11px}.hk-dialogue #hk-speech{font-size:14px}.hk-hint{bottom:max(9px,calc(env(safe-area-inset-bottom) + 5px));max-width:calc(100vw - 14px);padding:8px 10px;font-size:12px}.hk-toast{top:max(113px,calc(env(safe-area-inset-top) + 106px));max-width:68vw;padding:7px 10px;font-size:11px}.hk-stage:has(.hk-actions > *) .hk-hint{bottom:max(84px,calc(env(safe-area-inset-bottom) + 76px));max-width:calc(100vw - 14px)}.hk-app[data-scene="home"] .hk-hint{bottom:max(120px,calc(env(safe-area-inset-bottom) + 112px))}.hk-actions{right:max(8px,env(safe-area-inset-right));bottom:max(8px,env(safe-area-inset-bottom))}.hk-actions button,.hk-actions a,#hk-start,#hk-replay{min-height:64px;min-width:64px;padding:8px 12px;font-size:12px}
-  .hk-route-map{inset:0}.hk-route-pin{min-width:100px;font-size:10px;padding:7px 9px}.hk-route-pin-start{left:3%;bottom:23%}.hk-route-pin-end{right:3%;top:32%}.hk-route-lake{right:-9%;top:39%;width:52%}.hk-route-car{width:94px;height:49px}.hk-route-car::before{left:21px;right:18px;top:-19px;height:25px}.hk-route-car::after{box-shadow:51px 0 0 -7px #737b76,51px 0 0 0 #172125}
+  .hk-route-map{inset:0}.hk-route-pin{min-width:100px;font-size:10px;padding:7px 9px}.hk-route-pin-start{left:3%;bottom:23%}.hk-route-pin-end{right:3%;top:32%}.hk-route-lake{right:-9%;top:39%;width:52%}.hk-route-car{width:94px;height:49px}.hk-route-car::before{left:7px;right:19px;top:-21px;height:25px}.hk-route-car::after{box-shadow:51px 0 0 -7px #737b76,51px 0 0 0 #172125}
   .hk-lake{inset:13% 0 0}.hk-tanago-water{left:10%;top:29%;transform:scale(.72);transform-origin:left top}.hk-suppon-water{right:9%;top:37%;transform:scale(.8)}
   .hk-app[data-scene="lake"] .hk-car{right:1%;bottom:59%;transform:scale(.68)}
   .hk-app[data-scene="lake"] :is(.hk-prop[data-card="rods"],.hk-item[data-item="rods"],.hk-prop[data-card="worms"],.hk-item[data-item="worms"],.hk-prop[data-card="chicken"],.hk-item[data-item="chicken"])[data-location="trunk"]{bottom:68%}
@@ -478,7 +487,7 @@ button:focus-visible,a:focus-visible{
 .hk-app[data-mode="observe"] .hk-scene{transform:translateY(-11dvh)}
 .hk-app[data-mode="plan"] .hk-car{right:5%;bottom:43%;transform:scale(.78);transform-origin:right bottom}
 .hk-app:is([data-mode="run"],[data-mode="observe"]) .hk-car{right:5%;bottom:29%;transform:scale(.72);transform-origin:right bottom}
-.hk-app:is([data-mode="plan"],[data-mode="run"],[data-mode="observe"]) .hk-hatch{transform:rotate(58deg)}
+.hk-app:is([data-mode="plan"],[data-mode="run"],[data-mode="observe"]) .hk-hatch{transform:perspective(240px) rotateY(-65deg)}
 .hk-person.is-waiting,.hk-actor.is-waiting{animation:hk-person-wait 1.15s ease-in-out infinite;filter:drop-shadow(0 0 11px rgba(223,116,95,.75)) drop-shadow(0 12px 10px rgba(0,0,0,.28))}
 .hk-app[data-mode="home"] .hk-actions{right:50%;transform:translateX(50%)}
 .hk-actions #hk-campaign{border-color:rgba(128,216,206,.7);background:rgba(18,91,91,.9)}

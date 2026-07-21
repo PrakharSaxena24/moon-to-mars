@@ -39,8 +39,9 @@ person's status, open a causal report, return to the implicated edit, revise, an
 - Prakhar uses the prior red-cap visual cue. Nishinaga uses the prior blue-towel/scarf visual cue.
   Those are accessories, not player-facing names or model IDs.
 - The player controls the plan for Prakhar and Nishinaga. The player is not a fourth traveler.
-- Watanabe-san owns and drives the car. He states the intent and departure deadline, waits during
-  preparation, and is never an assignment lane or an automatic problem solver.
+- Watanabe-san owns and drives a **Mercedes-Benz G-Class / Geländewagen (ゲレンデ)**. Its exact
+  generation and color remain unspecified. He states the intent and departure deadline, waits
+  during preparation, and is never an assignment lane or an automatic problem solver.
 - The story begins before dawn outside **Ryokan Izumi in Yokkaichi**.
 - The destination is **Lake Biwa in Hikone**.
 - Preparation covers:
@@ -85,7 +86,7 @@ Hikone. Those are tied to the 10-day Ogasawara template and geography.
 
 Watanabe-san arrives at Ryokan Izumi and says, in effect:
 
-> “Hikone, Lake Biwa. I'll drive my car. We leave at 06:20. Bring the tanago and suppon home
+> “Hikone, Lake Biwa. I'll drive my G-Class. We leave at 06:20. Bring the tanago and suppon home
 > alive, in separate aquariums—never as food. Prakhar, Nishinaga: prepare everything.”
 
 ### Transparent initial plan
@@ -133,7 +134,7 @@ wrong answer.
 
 A clean report unlocks the physical story:
 
-- Watanabe-san drives from Yokkaichi to Hikone.
+- Watanabe-san drives his G-Class from Yokkaichi to Hikone.
 - The same prepared trunk opens at Lake Biwa.
 - A short authored montage deploys rods and bait, places tanago in the water-filled box, and keeps
   suppon in its separate carrier.
@@ -243,7 +244,7 @@ reachable, and resize/orientation changes do not reset state.
 
 ### Technical
 
-- `node hikone-verify.js` passes all 212 tutorial contract checks (2026-07-21).
+- `node hikone-verify.js` passes all 216 tutorial contract checks (2026-07-21).
 - `node verify.js` passes all 622 Ogasawara regression checks and invokes the Hikone verifier
   (2026-07-21).
 - JavaScript syntax checks and `git diff --check` are clean (2026-07-21).

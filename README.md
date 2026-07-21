@@ -14,7 +14,8 @@ the hosted guests, strengthen the relationship, and help the team learn without 
 for a system-design failure.
 
 **New — The Hikone Morning / 彦根の朝.** A separate recommended first-play tutorial starts
-outside Ryokan Izumi in Yokkaichi. Watanabe-san (渡邊さん) arrives in his own car and asks
+outside Ryokan Izumi in Yokkaichi. Watanabe-san (渡邊さん) arrives in his own Mercedes-Benz
+G-Class (Geländewagen) and asks
 **Prakhar (プラカール)** and **Nishinaga (西永)** to prepare before he drives them to Lake Biwa
 in Hikone. The learner uses the campaign's real grammar: place timed work on two person lanes,
 connect a required information handoff, freeze and run the plan, observe a causal stall, jump back
