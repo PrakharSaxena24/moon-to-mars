@@ -8,7 +8,7 @@
 
 > **Current next-level roadmap (2026-07-21):** [`Ogasawara Command Room — Immersive Campaign Roadmap`](docs/superpowers/plans/2026-07-21-immersive-command-room-roadmap.md). The three-run Normal → Communications Outage → Principal Unavailable vertical slice is implemented; future work on full-screen layout, campaign progression, replayable scenarios, carryover, or premium presentation must read its implementation checkpoint and playtest gates first.
 >
-> **Standalone first-play tutorial (2026-07-21):** [`The Hikone Morning — Standalone Tutorial Plan`](docs/superpowers/plans/2026-07-21-hikone-tutorial.md). It is separate from the Ogasawara campaign and locks the owner-provided Ryokan Izumi → Lake Biwa story, three-person cast, two-lane preparation lesson, visuals, state boundary, and release gates.
+> **Standalone first-play tutorial (2026-07-21):** [`The Hikone Morning — Playable Tutorial Rebuild`](docs/superpowers/plans/2026-07-21-hikone-tutorial.md). It is separate from the Ogasawara campaign and locks the owner-provided Ryokan Izumi → Lake Biwa story, three-person cast, physical STOW → DEPLOY play loop, consequence-driven preparation and fishing, visuals, state boundary, and release gates. The rejected card/effort/progress implementation must not be restored.
 
 ## User
 - **Prakhar Saxena** (`prakhar.saxena@aibos.co.jp`) — primary user / product owner.

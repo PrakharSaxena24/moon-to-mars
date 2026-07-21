@@ -2,41 +2,19 @@
 'use strict';
 
 /*
- * Standalone acceptance verifier for the locked Hikone tutorial.
+ * Hostile acceptance verifier for The Hikone Morning embodied rebuild.
  *
- * Contract under test
- * -------------------
- * 1. One lesson only: decompose six known requirements, then parallelize them
- *    across Member A and Member B. There is no hidden seventh task/failure.
- * 2. Exact story facts: Watanabe arrives outside Ryokan Izumi in Yokkaichi in
- *    his own generic car, he drives, and the destination is Hikone/Lake Biwa.
- * 3. Exactly three people exist. Watanabe is immutable/non-assignable; only
- *    neutral placeholders Member A and Member B own preparation cards.
- * 4. Cards/effort are frozen: rods 2; worms 1; chicken bait for suppon 1;
- *    water-filled tanago box 3; suppon aquarium transport 4; road drinks 1.
- *    Total effort is 12. Initial assigned effort is 0.
- * 5. Retry passes iff all six are assigned, both lanes are used, and neither
- *    lane exceeds 7 effort. Assignment and load derivation are deterministic.
- * 6. Flow is arrival -> Watanabe brief -> forced 12/0 serial baseline -> retry
- *    assignment -> parallel prep -> trunk proof -> route -> Lake Biwa unload /
- *    aquarium payoff -> completion.
- * 7. The animals are aquarium-bound, never framed as food. The experience is
- *    fictional planning education: no official-guide claim, catch guarantee,
- *    or real animal-handling instructions.
- * 8. It is standalone: only a versioned Hikone completion envelope is persisted
- *    under a dedicated key; no campaign/authoring state is read/written
- *    and no mid-run assignment state auto-resumes.
- * 9. Full-viewport shell: no page scrollbar, shrinkable height chain, internal
- *    overflow escape hatch, phone/short-landscape rules, safe areas.
- * 10. Native-button tap/keyboard path, >=48px targets, phase-heading focus,
- *     aria-live status, decorative visuals with equivalent DOM copy.
- * 11. Reduced motion has a static/instant equivalent and never requires rAF,
- *     pan, parallax, drag, animation, or sound to understand/pass the lesson.
+ * This suite intentionally rejects the superseded card/effort/progress/Next
+ * slideshow. The required learning loop is:
  *
- * Optional pure model seam (strongly recommended and exercised below):
- *   window.HIKONE or module.exports = {
- *     PEOPLE, CARDS, BASELINE,
- *     freshState(), assign(state, cardId, laneId), derive(state)
+ *   notice -> act on the world -> physical consequence -> revise -> succeed
+ *
+ * The browser controller remains responsible for final visual viewport QA.
+ * This file pins deterministic source and pure-model behavior runnable in Node.
+ *
+ * Required pure seam:
+ *   window.HIKONE / module.exports = {
+ *     SCENES, ITEMS, freshState(), reduce(state, action), derive(state)
  *   }
  */
 
@@ -45,224 +23,416 @@ var path = require('path');
 var vm = require('vm');
 
 var ROOT = __dirname;
-var failures = 0, checks = 0;
+var checks = 0;
+var failures = 0;
 
-function pass(message) { checks++; console.log('  \u2713 ' + message); }
-function fail(message, detail) {
-  checks++; failures++;
-  console.error('  \u2717 ' + message + (detail ? ' — ' + detail : ''));
+function pass(message) {
+  checks++;
+  console.log('  \u2713 ' + message);
 }
-function ok(condition, message, detail) { if (condition) pass(message); else fail(message, detail); }
-function section(name) { console.log('\n=== ' + name + ' ==='); }
+
+function fail(message, detail) {
+  checks++;
+  failures++;
+  console.error('  \u2717 ' + message + (detail ? ' \u2014 ' + detail : ''));
+}
+
+function ok(condition, message, detail) {
+  if (condition) pass(message);
+  else fail(message, detail);
+}
+
+function section(name) {
+  console.log('\n=== ' + name + ' ===');
+}
+
 function read(name) {
   var file = path.join(ROOT, name);
-  if (!fs.existsSync(file)) { fail(name + ' exists'); return ''; }
+  if (!fs.existsSync(file)) {
+    fail(name + ' exists');
+    return '';
+  }
   pass(name + ' exists');
   return fs.readFileSync(file, 'utf8');
 }
-function includesAll(haystack, values) {
-  var lower = haystack.toLowerCase();
-  return values.every(function (value) { return lower.indexOf(String(value).toLowerCase()) >= 0; });
+
+function clone(value) {
+  return JSON.parse(JSON.stringify(value));
 }
-function compact(value) { return String(value == null ? '' : value).toLowerCase().replace(/[^a-z0-9]+/g, ''); }
-function labelOf(item) {
-  var value = item && (item.label || item.name || item.title || item.copy || item.text);
-  if (value && typeof value === 'object') value = value.en || value.jp || value.ja;
-  return String(value || '');
-}
-function effortOf(item) { return Number(item && (item.effort != null ? item.effort : (item.load != null ? item.load : item.cost))); }
-function idOf(item) { return String(item && (item.id || item.key || item.cardId || item.taskId) || ''); }
-function laneOf(value) {
-  value = compact(value);
-  if (value === 'a' || value === 'membera' || value === 'lanea') return 'a';
-  if (value === 'b' || value === 'memberb' || value === 'laneb') return 'b';
+
+function stable(value) {
+  if (Array.isArray(value)) return value.map(stable);
+  if (value && typeof value === 'object') {
+    return Object.keys(value).sort().reduce(function (out, key) {
+      out[key] = stable(value[key]);
+      return out;
+    }, {});
+  }
   return value;
 }
 
-section('FILES / STANDALONE BOOT');
+function same(a, b) {
+  return JSON.stringify(stable(a)) === JSON.stringify(stable(b));
+}
+
+function idOf(item) {
+  return String(item && (item.id || item.key || item.itemId || item.name) || '');
+}
+
+function labelOf(item) {
+  var value = item && (item.label || item.name || item.title || item.copy);
+  if (value && typeof value === 'object') value = value.en || value.ja || value.jp;
+  return String(value || '');
+}
+
+function textOf(item) {
+  return (idOf(item) + ' ' + labelOf(item)).toLowerCase();
+}
+
+function stripEvent(value) {
+  var result = clone(value);
+  delete result.lastEvent;
+  delete result.lastAction;
+  delete result.message;
+  return result;
+}
+
+function modelFrom(source) {
+  var moduleBox = { exports: {} };
+  var sandbox = {
+    module: moduleBox,
+    exports: moduleBox.exports,
+    console: console,
+    window: {},
+    globalThis: {},
+    setTimeout: function () { return 0; },
+    clearTimeout: function () {},
+    setInterval: function () { return 0; },
+    clearInterval: function () {},
+    localStorage: {
+      getItem: function () { return null; },
+      setItem: function () {},
+      removeItem: function () {}
+    },
+    matchMedia: function () {
+      return { matches: true, addEventListener: function () {}, removeEventListener: function () {} };
+    }
+  };
+  sandbox.window.localStorage = sandbox.localStorage;
+  sandbox.window.matchMedia = sandbox.matchMedia;
+  sandbox.globalThis = sandbox.window;
+  vm.runInNewContext(source, sandbox, { filename: 'hikone.js', timeout: 1500 });
+  return moduleBox.exports && Object.keys(moduleBox.exports).length ? moduleBox.exports :
+    (sandbox.window.HIKONE || sandbox.window.HIKONE_MODEL || null);
+}
+
+section('FILES / STANDALONE SHELL');
 var html = read('hikone.html');
 var css = read('hikone.css');
 var js = read('hikone.js');
 var combined = html + '\n' + css + '\n' + js;
+var htmlAndJs = html + '\n' + js;
 
 if (!html || !css || !js) {
-  console.error('\nHIKONE VERIFY BLOCKED: implementation files have not landed yet.');
+  console.error('\nHIKONE VERIFY BLOCKED: embodied implementation files are incomplete.');
   process.exitCode = 1;
 } else {
   ok(/<meta[^>]+name=["']viewport["'][^>]+width=device-width/i.test(html), 'mobile viewport metadata is present');
-  ok(/href=["'][^"']*hikone\.css["']/i.test(html), 'HTML loads only the Hikone stylesheet seam');
-  ok(/src=["'][^"']*hikone\.js["']/i.test(html), 'HTML loads only the Hikone script seam');
-  ok(!/(?:src|href)=["']https?:\/\//i.test(html), 'standalone tutorial has no remote runtime dependency');
-  ok(!/(?:app|engine|stage|sound)\.js/i.test(html), 'standalone tutorial does not boot Ogasawara simulation globals');
-  ok(/<main\b/i.test(html), 'document exposes one semantic main experience');
+  ok(/href=["'][^"']*hikone\.css["']/i.test(html), 'standalone Hikone stylesheet is loaded');
+  ok(/src=["'][^"']*hikone\.js["']/i.test(html), 'standalone Hikone script is loaded');
+  ok(!/(?:src|href)=["']https?:\/\//i.test(html), 'there is no remote runtime dependency');
+  ok(!/(?:app|engine|stage|sound)\.js/i.test(html), 'Ogasawara campaign runtime is not booted');
+  ok(/<main\b[^>]*id=["']hk-app["']/i.test(html), 'one semantic standalone application owns the page');
+  ok(/id=["']hk-world["']/i.test(html), '#hk-world is the primary physical play surface');
+  ok(/id=["']hk-scene["']/i.test(html), '#hk-scene is reserved for deterministic interactive objects');
 
-  section('LOCKED STORY FACTS');
-  ['Watanabe', 'Member A', 'Member B', 'Ryokan Izumi', 'Yokkaichi', 'Lake Biwa', 'Hikone'].forEach(function (fact) {
-    ok(combined.toLowerCase().indexOf(fact.toLowerCase()) >= 0, 'exact fact is present: ' + fact);
-  });
-  ['渡辺', '四日市', '琵琶湖', '彦根', 'タナゴ', 'スッポン', 'ミミズ', '飲み物'].forEach(function (fact) {
-    ok(combined.indexOf(fact) >= 0, 'Japanese fact parity is present: ' + fact);
-  });
-  ok(/(?:own|his)\s+(?:generic\s+)?car|car\s+(?:belongs\s+to|owned\s+by)\s+Watanabe/i.test(combined), 'Watanabe arrives in his own car');
-  ok(/Watanabe[^.\n]{0,100}(?:drive|driver)|(?:drive|driver)[^.\n]{0,100}Watanabe/i.test(combined), 'Watanabe—not a member—is the driver');
-  ok(!/Member\s+[AB]\s+(?:(?:will|would|can)\s+)?(?:drive|drives|is\s+the\s+driver)/i.test(combined), 'Member A/B are never described as the driver');
+  section('REJECTED SLIDESHOW MUST STAY DELETED');
+  ok(!/\bhk-panel\b/i.test(combined), 'old hk-panel architecture is absent');
+  ok(!/\bhk-progress(?:-[a-z0-9_-]+)?\b/i.test(combined), 'old hk-progress architecture is absent');
+  ok(!/\bhk-card(?:-[a-z0-9_-]+)?\b/i.test(combined), 'old hk-card classes are absent');
+  ok(!/\btask-card\b|\bmember-lane\b/i.test(combined), 'task-card/member-lane sorting UI is absent');
+  ok(!/\beffort(?:\s+beats?|word|of)?\b/i.test(htmlAndJs), 'player-facing effort values and effort-beat model are absent');
+  ok(!/\bBASELINE\b/.test(js), 'old BASELINE workload constant is absent');
+  ok(!/\bCARDS\b/.test(js), 'old CARDS data model is absent');
+  ok(!/\brenderAssignment\b/.test(js), 'old renderAssignment screen is absent');
+  ok(!/\bnextPhase\b|data-action\s*=\s*["']next["']|["']Next["']|>\s*Next\s*</i.test(htmlAndJs), 'Next-style narration controls are absent');
+  ok(!/12\s*(?:\/|of|\uFF0F)\s*0|max(?:imum)?\s*(?:lane|queue)?\s*7|7\s+or\s+less/i.test(htmlAndJs), 'old queue totals and pass threshold are absent');
 
-  section('LOCKED REQUIREMENTS / AQUARIUM FRAMING');
-  ['rod', 'worm', 'chicken', 'tanago', 'suppon', 'drink', 'aquarium'].forEach(function (fact) {
-    ok(combined.toLowerCase().indexOf(fact) >= 0, 'requirement/framing term is present: ' + fact);
+  section('PHYSICAL WORLD / DIRECT MANIPULATION');
+  ['yard-tap', 'vending', 'car', 'trunk', 'lake', 'route'].forEach(function (part) {
+    ok(new RegExp('hk-' + part, 'i').test(combined), 'world includes physical ' + part.replace('-', ' '));
   });
-  ok(/water[- ]filled[^.\n]{0,80}tanago|tanago[^.\n]{0,80}water[- ]filled/i.test(combined), 'tanago holding box is explicitly water-filled up front');
-  ok(/chicken[^.\n]{0,80}(?:bait|suppon)|(?:bait|suppon)[^.\n]{0,80}chicken/i.test(combined), 'chicken is explicitly suppon bait, not a meal');
-  ok(/(?:not|never)\s+(?:for\s+)?food|not\s+food|食用(?:では|じゃ)ない/i.test(combined), 'copy explicitly says aquarium animals are not food');
-  ok(!/(?:cook|eat|serve)\s+(?:the\s+)?(?:tanago|suppon)|(?:tanago|suppon)\s+(?:meal|dinner|dish|food)/i.test(combined), 'tanago/suppon are never framed as food');
-  ok(!/(?:guaranteed?|will)\s+(?:to\s+)?catch|catch\s+guarantee/i.test(combined), 'copy never guarantees a catch');
-  ok(!/(?:official\s+(?:guide|instruction|advice)|approved\s+handling|veterinary\s+instruction)/i.test(combined), 'copy makes no official-guide or professional-handling claim');
-  ok(!/(?:\b\d+(?:\.\d+)?\s*°[CF]\b|oxygenation\s+rate|dosage|feed\s+every|change\s+the\s+water\s+every)/i.test(combined), 'copy contains no real animal-handling procedure');
-  ok(!/(?:fill-water|waterReady|hidden[-_ ](?:task|failure)|seventh[-_ ](?:task|card))/i.test(js), 'no hidden water failure or seventh repair task was introduced');
+  ok(/data-(?:card|item|object)/.test(js), 'interactive equipment exposes canonical [data-card] or item/object aliases');
+  ok(/data-(?:person|actor)/.test(js) && /(?:cap|towel)/i.test(js), 'Cap and Towel expose canonical [data-person] or actor aliases');
+  ok(/data-zone/.test(js), 'physical world targets expose [data-zone] hooks');
+  ok(/createElement\s*\(\s*["']button["']\s*\)|<button\b/i.test(htmlAndJs), 'actors, objects, and actions use native buttons');
+  ok(/(?:draggable\s*=|setAttribute\s*\(\s*["']draggable|dragstart|pointerdown)/i.test(js), 'objects support pointer/touch direct manipulation');
+  ok(/addEventListener\s*\(\s*["'](?:click|pointerup)["']/i.test(js), 'tap/click is a canonical non-drag path');
+  ok(/(?:dragover|pointermove)/i.test(js) && /(?:drop|pointerup)/i.test(js), 'direct manipulation has move/drop handling');
+  ok(/\.hk-(?:prop|item)[^{]*\{[^}]*min-width\s*:\s*(?:6[4-9]|[7-9]\d)px[^}]*min-height\s*:\s*(?:6[4-9]|[7-9]\d)px/is.test(css), 'core world objects have at least 64px hit areas');
+  ok(/\.hk-person\s*,\s*\.hk-actor\s*\{[^}]*(?:min-)?width\s*:\s*(?:6[4-9]|[7-9]\d|\d{3,})px[^}]*(?:min-)?height\s*:\s*(?:6[4-9]|[7-9]\d|\d{3,})px/is.test(css), 'Cap/Towel actor targets are at least 64px');
+  ok(/\.hk-zone\s*\{[^}]*min-width\s*:\s*(?:6[4-9]|[7-9]\d)px[^}]*min-height\s*:\s*(?:6[4-9]|[7-9]\d)px/is.test(css), 'physical world zones are at least 64px');
+  ok(/\.hk-catch\s*\{[^}]*(?:min-)?width\s*:\s*(?:6[4-9]|[7-9]\d|\d{3,})px[^}]*(?:min-)?height\s*:\s*(?:6[4-9]|[7-9]\d|\d{3,})px/is.test(css), 'caught tanago and suppon have at least 64px hit areas');
+  ok(/\.hk-catch\s*\{[^}]*pointer-events\s*:\s*auto/is.test(css) &&
+    /\.hk-catch\s*\{[^}]*touch-action\s*:\s*none/is.test(css), 'caught animals remain draggable/tappable above the pointer-disabled scene layer');
+  ok(/(?:data-person|data-actor)=["']cap["'][^\n]{0,240}(?:var\(--cap\)|red)|(?:var\(--cap\)|red)[^\n]{0,240}(?:data-person|data-actor)=["']cap["']/i.test(css), 'Cap has a visible red-cap accessory cue');
+  ok(/(?:data-person|data-actor)=["']towel["'][^\n]{0,240}(?:var\(--towel\)|blue)|(?:var\(--towel\)|blue)[^\n]{0,240}(?:data-person|data-actor)=["']towel["']/i.test(css), 'Towel has a visible blue towel/scarf cue');
+  ok(/data-zone=["']home-tanago["']/.test(css) && /data-zone=["']home-suppon["']/.test(css), 'home payoff reserves two distinct aquarium targets');
+  ok(/aria-live\s*=|setAttribute\s*\(\s*["']aria-live/i.test(combined), 'physical consequences have live-region equivalents');
+  ok(/:focus-visible/.test(css), 'keyboard focus is visibly styled');
 
-  section('FLOW / CAUSAL LESSON');
-  [
-    ['arrival', /arrival|arrive/i],
-    ['Watanabe brief', /brief/i],
-    ['forced serial baseline', /serial|one[- ]by[- ]one/i],
-    ['player assignment retry', /retry|try\s+again|assign/i],
-    ['parallel preparation', /parallel/i],
-    ['trunk proof', /trunk/i],
-    ['route vignette', /route|drive/i],
-    ['Lake Biwa unload', /unload/i],
-    ['completion', /complete|completion/i],
-    ['debrief transfer question', /transfer|next\s+(?:trip|plan)|what\s+will\s+you/i]
-  ].forEach(function (entry) { ok(entry[1].test(combined), 'flow includes ' + entry[0]); });
-  ok(/12\s*(?:\/|of|／)\s*0|(?:effort|load)[^\n]{0,60}12[^\n]{0,30}(?:assigned|parallel)[^\n]{0,30}0/i.test(combined), 'forced baseline visibly states 12 total / 0 assigned');
-  ok(/free|no\s+(?:cost|penalty)|減点なし|無料/i.test(combined), 'failed split can be revised without penalty');
-  ok(!/Math\.random\s*\(/.test(js), 'tutorial state/effort logic contains no randomness');
+  section('LOCKED PEOPLE / OBJECTS / PURPOSE');
+  ['Watanabe', 'Cap', 'Towel', 'Ryokan Izumi', 'Yokkaichi', 'Lake Biwa', 'Hikone'].forEach(function (fact) {
+    ok(combined.toLowerCase().indexOf(fact.toLowerCase()) >= 0, 'locked fact is present: ' + fact);
+  });
+  ['\u6E21\u8FBA', '\u56DB\u65E5\u5E02', '\u7435\u7436\u6E56', '\u5F66\u6839', '\u30BF\u30CA\u30B4', '\u30B9\u30C3\u30DD\u30F3', '\u30DF\u30DF\u30BA', '\u98F2\u307F\u7269'].forEach(function (fact) {
+    ok(combined.indexOf(fact) >= 0, 'Japanese fact is present: ' + fact);
+  });
+  ['rod', 'worm', 'chicken', 'tanago', 'suppon', 'drink'].forEach(function (item) {
+    ok(combined.toLowerCase().indexOf(item) >= 0, 'physical preparation is present: ' + item);
+  });
+  ok(/(?:not|never)\s+(?:for\s+)?food|not\s+food|\u98DF\u7528(?:\u3067\u306F|\u3058\u3083)\u306A\u3044/i.test(combined), 'tanago and suppon are explicitly aquarium animals, not food');
+  ok(!/(?:official\s+(?:guide|instruction)|approved\s+handling|veterinary\s+instruction|catch\s+guarantee)/i.test(combined), 'fiction makes no official handling or guaranteed-catch claim');
+  ok(!/(?:\b\d+(?:\.\d+)?\s*\u00B0[CF]\b|oxygenation\s+rate|dosage|feed\s+every|water\s+change\s+schedule)/i.test(combined), 'there is no real animal-care procedure');
+
+  section('EMBODIED CAUSAL SURFACE');
+  ok(/(?:empty|filled|waterline|filledWithWater|tanagoBox)/i.test(js), 'tanago box has explicit empty/filled physical state');
+  var emptyBoxVisual = /data-card=["']tanago-box["']\]\s*::after[^\{]*\{[^}]*content\s*:\s*["']["']/i.test(css);
+  var filledBoxVisual = /(?:data-state=["']filled["']|data-filled=["']true["'])[^\{]*::after[^\{]*\{[^}]*content\s*:\s*["'][^"']*\u2248/i.test(css);
+  ok(emptyBoxVisual && filledBoxVisual, 'empty and filled tanago-box CSS states render differently');
+  ok(/(?:refus|reject|bounce)/i.test(js), 'invalid physical actions expose refusal state');
+  ok(/(?:detour|roadside|vending)[^\n]{0,120}drink|drink[^\n]{0,120}(?:detour|roadside|vending)/i.test(js), 'forgotten drinks cause a non-failing roadside detour');
+  ok(/(?:bare|worm|chicken)[^\n]{0,120}(?:hook|bait)|(?:hook|bait)[^\n]{0,120}(?:bare|worm|chicken)/i.test(js), 'hook state distinguishes bare, worm, and chicken bait');
+  ok(/(?:shallow|shallows)/i.test(js) && /\bdeep\b/i.test(js), 'lake casting distinguishes shallow and deep water');
+  ok(/tanago[^\n]{0,140}(?:box|container)|(?:box|container)[^\n]{0,140}tanago/i.test(js), 'tanago can be transferred into the water-filled box');
+  ok(/suppon[^\n]{0,160}(?:tank|wrong|refus|reject)|(?:tank|wrong|refus|reject)[^\n]{0,160}suppon/i.test(js), 'suppon has wrong-box refusal and separate-tank resolution');
+  ['jetty', 'hook', 'home-tanago', 'home-suppon'].forEach(function (location) {
+    ok(new RegExp('data-location=["\\\']' + location + '["\\\']', 'i').test(css), 'object state has a visible physical placement for ' + location.replace('-', ' '));
+  });
+  ok(/empty-box[^\n]{0,220}(?:data-zone=["']tap|["']tap["'])/i.test(js) &&
+    /bare-hook[^\n]{0,220}(?:data-object=["']worms|["']worms["'])/i.test(js) &&
+    /wrong-container[^\n]{0,260}(?:data-object=["']suppon-tank|["']suppon-tank["'])/i.test(js), 'canonical refusals point at the next useful physical target');
+  ok(/\.has-tanago[^\{]*(?:aquarium-tanago|tanago)[^\{]*\{/i.test(css) &&
+    /\.has-suppon[^\{]*(?:aquarium-suppon|suppon)[^\{]*\{/i.test(css), 'home aquarium inhabitants are gated by actual placement state');
+  ok(!/Math\.random\s*\(/.test(js), 'playable outcomes contain no randomness');
+
+  section('FULL VIEWPORT / RESTART / LANGUAGE / REDUCED MOTION');
+  ok(/html\s*,\s*body[^\{]*\{[^}]*overflow\s*:\s*hidden/is.test(css), 'document-level scrolling is clipped');
+  ok(/100vh/.test(css) && /100dvh/.test(css), 'viewport shell has 100vh fallback and 100dvh ownership');
+  ok(/\.hk-app[^\{]*\{[^}]*overflow\s*:\s*hidden/is.test(css), 'application shell cannot create a page scrollbar');
+  ok(/env\(safe-area-inset-(?:top|right|bottom|left)\)/.test(css), 'safe-area insets are honored');
+  ok(/@media\s*\([^)]*(?:max-aspect-ratio|max-width)/i.test(css), 'portrait/mobile world restaging exists');
+  ok(/@media\s*\([^)]*max-height/i.test(css), 'short-landscape world restaging exists');
+  ok(/id=["']hk-replay["']|#[a-z0-9_-]*replay/i.test(combined), 'restart/replay has a stable control hook');
+  ok(/id=["']hk-lang-en["']/i.test(html) && /id=["']hk-lang-ja["']/i.test(html), 'English and Japanese controls are present');
+  ok(/document\.documentElement\.lang|setAttribute\s*\(\s*["']lang["']/i.test(js), 'language switching updates document language');
+  ok(/prefers-reduced-motion\s*:\s*reduce/.test(css), 'CSS reduced-motion mode exists');
+  ok(/matchMedia\s*\([^)]*prefers-reduced-motion/.test(js), 'JavaScript observes reduced-motion preference');
+  ok(!/requestAnimationFrame\s*\(/.test(js) || /reduced|motion/i.test(js), 'animation-frame work is reduced-motion aware');
 
   section('PERSISTENCE ISOLATION');
-  var storageKeys = [], storagePattern = /["']([^"']*hikone[^"']*(?:v1|\.1))[^"']*["']/ig, storageMatch;
-  while ((storageMatch = storagePattern.exec(js))) if (storageKeys.indexOf(storageMatch[1]) < 0) storageKeys.push(storageMatch[1]);
-  ok(storageKeys.length >= 1, 'uses a dedicated versioned Hikone completion key');
-  ok(!/(?:prs_campaign|campaign_state|campaign_run_state|plan_autosave|authoring)/i.test(js), 'does not read or write campaign/authoring storage');
-  ok(/hikone-tutorial/i.test(js) && /completedAt/.test(js) && /["']?version["']?\s*[:=]\s*1/.test(js), 'completion envelope is kind/version/time bounded');
-  ok(!/localStorage\.(?:setItem|getItem)[^\n]{0,160}(?:assignment|selectedCard|laneLoad|phase)/i.test(js), 'mid-run assignment/phase state is not persisted');
+  ok(/["'][^"']*hikone[^"']*(?:v\d+|\.\d+)[^"']*["']/i.test(js), 'completion uses a dedicated versioned Hikone key');
+  ok(!/(?:prs_campaign|campaign_state|campaign_run_state|plan_autosave|authoring)/i.test(js), 'Hikone never reads or writes campaign/authoring state');
+  ok(/completedAt/.test(js) && /["']?version["']?\s*[:=]\s*\d+/.test(js), 'completion envelope is versioned and timestamped');
+  ok(!/localStorage\.(?:setItem|getItem)[^\n]{0,180}(?:scene|actor|item|hook|tanago|suppon|drink)/i.test(js), 'mid-run physical state is not persisted or resumed');
 
-  section('FULL VIEWPORT / MOBILE / INPUT / REDUCED MOTION');
-  ok(/100dvh/.test(css) && /100vh/.test(css), 'viewport shell has 100vh fallback plus 100dvh');
-  ok(/overflow\s*:\s*hidden/.test(css) && /overflow-x\s*:\s*hidden/.test(css), 'page shell clips document overflow (no horizontal or page scrollbar)');
-  ok(/min-height\s*:\s*0/.test(css), 'shrinkable height-chain escape hatch is present');
-  ok(/overflow(?:-y)?\s*:\s*(?:auto|scroll)/.test(css), 'bounded panel/overlay owns any necessary internal scrolling');
-  ok(/env\(safe-area-inset-(?:top|right|bottom|left)\)/.test(css), 'safe-area insets are honored');
-  ok(/@media\s*\([^)]*max-width/i.test(css), 'phone-width layout rule exists');
-  ok(/@media\s*\([^)]*max-height/i.test(css), 'short-landscape layout rule exists (including 640x360 class)');
-  ok(/min-(?:height|block-size)\s*:\s*(?:4[4-9]|[5-9]\d)px/.test(css), 'primary tap targets are at least 44px');
-  ok(/@media\s*\([^)]*max-width[^}]+font-size\s*:\s*(?:1[6-9]|[2-9]\d)px/is.test(css), 'narrow-screen core text retains a 16px minimum rule');
-  ok(/:focus-visible/.test(css), 'keyboard focus is visibly styled');
-  ok(/prefers-reduced-motion\s*:\s*reduce/.test(css), 'CSS reduced-motion mode exists');
-  ok(/matchMedia\s*\([^)]*prefers-reduced-motion/.test(js), 'JS observes reduced-motion preference');
-  ok(!/requestAnimationFrame\s*\(/.test(js) || /(?:reducedMotion|reduceMotion|\bRM\b)/.test(js), 'any rAF path is explicitly reduced-motion gated');
-  ok(/aria-live\s*=|setAttribute\s*\(\s*["']aria-live/i.test(combined), 'status changes have an aria-live text equivalent');
-  ok(/tabindex\s*=\s*["']-1["']|\.focus\s*\(/i.test(combined), 'phase changes have a programmatic heading/focus target');
-  ok(/<button\b|createElement\s*\(\s*["']button["']/.test(combined), 'card/lane controls use native buttons');
-  ok(/addEventListener\s*\(\s*["']click["']/.test(js), 'canonical card/lane action works by tap/click without drag');
-  ok(!/draggable\s*=\s*["']true["']/.test(html) || /addEventListener\s*\(\s*["']click["']/.test(js), 'drag, if present, is enhancement rather than the only input');
-  ok(/aria-hidden\s*=\s*["']true["']/.test(combined) || !/<canvas\b/i.test(html), 'decorative canvas/art is hidden from AT or absent');
-
-  // Load the optional pure state seam without booting the DOM application.
-  section('PURE STATE / DETERMINISTIC LOAD GATES');
-  var model = null, exportError = null;
-  try {
-    var moduleBox = { exports: {} };
-    var sandbox = { module: moduleBox, exports: moduleBox.exports, console: console,
-      window: {}, globalThis: {}, setTimeout: function () { return 0; }, clearTimeout: function () {},
-      localStorage: { getItem: function () { return null; }, setItem: function () {}, removeItem: function () {} },
-      matchMedia: function () { return { matches: true, addEventListener: function () {}, removeEventListener: function () {} }; } };
-    sandbox.window.localStorage = sandbox.localStorage; sandbox.window.matchMedia = sandbox.matchMedia;
-    sandbox.globalThis = sandbox.window;
-    vm.runInNewContext(js, sandbox, { filename: 'hikone.js', timeout: 1000 });
-    model = moduleBox.exports && Object.keys(moduleBox.exports).length ? moduleBox.exports :
-      (sandbox.window.HIKONE || sandbox.window.HIKONE_MODEL || sandbox.HIKONE || null);
-  } catch (error) { exportError = error; }
-  ok(!!model, 'hikone.js exposes a pure HIKONE model seam for state verification', exportError && exportError.message);
+  section('PURE MODEL / FSM STRUCTURE');
+  var model = null;
+  var modelError = null;
+  try { model = modelFrom(js); }
+  catch (error) { modelError = error; }
+  ok(!!model, 'hikone.js exposes the pure HIKONE seam', modelError && modelError.message);
 
   if (model) {
-    var people = model.PEOPLE || model.people || model.MEMBERS || model.members || [];
-    var cards = model.CARDS || model.cards || model.TASKS || model.tasks || [];
-    var fresh = model.freshState || model.initialState || model.createState;
-    var assign = model.assign;
-    var derive = model.derive || model.evaluate || model.statusFor;
-    var reduce = model.reduce;
-    if (!assign && reduce) assign = function (state, cardId, laneId) {
-      return reduce(state, { type: 'assign', cardId: cardId, laneId: laneId });
-    };
-    ok(Array.isArray(people) && people.length === 3, 'pure model contains exactly Watanabe + Member A/B');
-    ok(Array.isArray(cards) && cards.length === 6, 'pure model contains exactly six known preparation cards');
-    ok(typeof fresh === 'function' && typeof assign === 'function' && typeof derive === 'function', 'pure model exports freshState + assign/reduce + derive');
+    ok(Array.isArray(model.SCENES), 'SCENES is an exported ordered array');
+    ok(Array.isArray(model.ITEMS), 'ITEMS is an exported physical-object array');
+    ok(typeof model.freshState === 'function', 'freshState() is exported');
+    ok(typeof model.reduce === 'function', 'reduce(state, action) is exported');
+    ok(typeof model.derive === 'function', 'derive(state) is exported');
 
-    if (Array.isArray(people) && people.length) {
-      var assignable = people.filter(function (person) { return person.assignable !== false && !/watanabe/i.test(idOf(person) + ' ' + labelOf(person)); });
-      var watanabe = people.filter(function (person) { return /watanabe/i.test(idOf(person) + ' ' + labelOf(person)); })[0];
-      ok(!!watanabe && (watanabe.assignable === false || watanabe.driver === true), 'Watanabe is immutable/non-assignable and identified as driver');
-      ok(assignable.length === 2 && includesAll(assignable.map(function (p) { return idOf(p) + ' ' + labelOf(p); }).join(' '), ['a', 'b']), 'only neutral Member A/B lanes are assignable');
+    if (Array.isArray(model.SCENES)) {
+      ok(same(Array.prototype.slice.call(model.SCENES), ['arrival', 'packing', 'drive', 'lake', 'home']), 'FSM scenes are exactly arrival -> packing -> drive -> lake -> home');
     }
 
-    if (Array.isArray(cards) && cards.length) {
-      var expected = [
-        [/\brods?\b/i, 2, 'rods'], [/worm/i, 1, 'worms'], [/chicken/i, 1, 'chicken bait'],
-        [/(?:tanago.*(?:box|holding)|(?:box|holding).*tanago)/i, 3, 'water-filled tanago box'],
-        [/(?:suppon.*(?:carrier|transport|aquarium)|(?:carrier|transport|aquarium).*suppon)/i, 4, 'suppon aquarium transport'],
-        [/drink/i, 1, 'road drinks']
-      ];
-      expected.forEach(function (entry) {
-        var found = cards.filter(function (card) { return entry[0].test(idOf(card) + ' ' + labelOf(card)); });
-        ok(found.length === 1 && effortOf(found[0]) === entry[1], entry[2] + ' has exact effort ' + entry[1]);
+    if (Array.isArray(model.ITEMS)) {
+      ok(model.ITEMS.length === 6, 'model contains exactly six physical preparations');
+      [
+        [/rod/, 'rods'], [/worm/, 'worms'], [/chicken/, 'chicken bait'],
+        [/tanago.*box|box.*tanago/, 'tanago box'], [/suppon.*tank|tank.*suppon/, 'suppon tank'], [/drink/, 'drinks']
+      ].forEach(function (entry) {
+        var matches = model.ITEMS.filter(function (item) { return entry[0].test(textOf(item)); });
+        ok(matches.length === 1, 'ITEMS has one unambiguous ' + entry[1]);
       });
-      ok(cards.reduce(function (sum, card) { return sum + effortOf(card); }, 0) === 12, 'six card efforts sum to the frozen total 12');
+      ok(model.ITEMS.every(function (item) { return item.effort == null && item.load == null && item.cost == null; }), 'physical items expose no effort/load/cost puzzle values');
     }
 
-    if (typeof fresh === 'function' && typeof assign === 'function' && typeof derive === 'function' && cards.length === 6) {
-      function cardFor(pattern) { return cards.filter(function (card) { return pattern.test(idOf(card) + ' ' + labelOf(card)); })[0]; }
-      var memberA = people.filter(function (person) { return /(?:member|lane)[-_ ]?a\b|\bA\b/.test(idOf(person) + ' ' + labelOf(person)); })[0];
-      var memberB = people.filter(function (person) { return /(?:member|lane)[-_ ]?b\b|\bB\b/.test(idOf(person) + ' ' + labelOf(person)); })[0];
-      var laneAId = memberA ? idOf(memberA) : 'a', laneBId = memberB ? idOf(memberB) : 'b';
-      function put(state, card, lane) { return assign(state, idOf(card), lane === 'a' ? laneAId : laneBId); }
-      function readyOf(result) { return !!(result && (result.ready === true || result.canBegin === true || result.pass === true)); }
-      function loadValue(result, lane) {
-        if (!result) return NaN;
-        var loads = result.loads || result.laneLoads || result.effortByLane || {};
-        var id = lane === 'a' ? laneAId : laneBId;
-        return Number(loads[id] != null ? loads[id] : (loads[lane] != null ? loads[lane] : loads['member-' + lane]));
+    if (typeof model.freshState === 'function' && typeof model.reduce === 'function' && typeof model.derive === 'function') {
+      var fresh = model.freshState();
+      var freshSnapshot = clone(fresh);
+      var derivedA = model.derive(fresh);
+      var derivedB = model.derive(clone(fresh));
+      ok(fresh && fresh.scene === 'arrival', 'fresh state starts in arrival');
+      ok(same(derivedA, derivedB), 'derive() is deterministic for equal serializable state');
+      ok(same(fresh, freshSnapshot), 'derive() does not mutate caller-owned state');
+      ok(same(fresh, JSON.parse(JSON.stringify(fresh))), 'fresh state is JSON serializable');
+
+      var invalidA = model.reduce(fresh, { type: '__QA_UNKNOWN_ACTION__' });
+      var invalidB = model.reduce(clone(fresh), { type: '__QA_UNKNOWN_ACTION__' });
+      ok(invalidA && invalidA !== fresh, 'reduce() returns a new state for fail-closed actions');
+      ok(same(stripEvent(invalidA), stripEvent(fresh)), 'unknown action cannot advance or mutate physical state');
+      ok(same(invalidA, invalidB), 'unknown-action refusal is deterministic');
+      ok(same(fresh, freshSnapshot), 'reduce() does not mutate caller-owned state');
+
+      section('PURE END-TO-END EMBODIED LOOP');
+      var state = model.freshState();
+      var pathActions = [];
+      var ownedInputs = [];
+
+      function advance(action) {
+        var input = state;
+        var snapshot = clone(input);
+        pathActions.push(clone(action));
+        state = model.reduce(input, action);
+        ownedInputs.push({ state: input, snapshot: snapshot });
+        return state;
       }
-      var baseState = fresh(), baseSnapshot = JSON.stringify(baseState), baseDerived = derive(baseState);
-      ok(!readyOf(baseDerived), 'fresh 12/0 state is not ready');
-      ok((baseDerived.assignedCount == null || baseDerived.assignedCount === 0) &&
-        (baseDerived.assignedEffort == null || baseDerived.assignedEffort === 0), 'fresh state starts at zero assigned cards/effort');
 
-      var oneLane = fresh(); cards.forEach(function (card) { oneLane = put(oneLane, card, 'a'); });
-      ok(!readyOf(derive(oneLane)), 'all six on one lane fails the both-lanes/max-7 gate');
+      advance({ type: 'START' });
+      ok(state.scene === 'packing' && state.lastEvent.code === 'packing-started', 'START physically opens the packing scene');
 
-      var over = fresh();
-      [/(?:suppon.*(?:carrier|transport|aquarium)|(?:carrier|transport|aquarium).*suppon)/i,
-        /(?:tanago.*(?:box|holding)|(?:box|holding).*tanago)/i, /\brods?\b/i].forEach(function (pattern) { over = put(over, cardFor(pattern), 'a'); });
-      [/worm/i, /chicken/i, /drink/i].forEach(function (pattern) { over = put(over, cardFor(pattern), 'b'); });
-      ok(!readyOf(derive(over)), '9/3 assignment fails the max-lane-7 gate');
+      var jumpFromPacking = clone(state);
+      var jumped = model.reduce(state, { type: 'ARRIVE_LAKE' });
+      ok(jumped.lastEvent.type === 'refusal' && jumped.scene === 'packing', 'the FSM refuses a packing-to-lake scene jump');
+      ok(same(stripEvent(jumped), stripEvent(jumpFromPacking)), 'an illegal scene jump changes only refusal feedback');
 
-      var balanced = fresh();
-      [/(?:suppon.*(?:carrier|transport|aquarium)|(?:carrier|transport|aquarium).*suppon)/i, /\brods?\b/i, /worm/i].forEach(function (pattern) { balanced = put(balanced, cardFor(pattern), 'a'); });
-      [/(?:tanago.*(?:box|holding)|(?:box|holding).*tanago)/i, /chicken/i, /drink/i].forEach(function (pattern) { balanced = put(balanced, cardFor(pattern), 'b'); });
-      var balancedDerived = derive(balanced);
-      ok(readyOf(balancedDerived), '7/5 assignment passes exactly when all six and both lanes are used');
-      ok(loadValue(balancedDerived, 'a') === 7 && loadValue(balancedDerived, 'b') === 5, 'lane effort is exact deterministic sum (A=7, B=5)');
-      ok(JSON.stringify(baseState) === baseSnapshot, 'assign/derive never mutates the fresh caller-owned state');
+      var watanabeAttempt = model.reduce(state, { type: 'ASSIGN_ITEM', actor: 'watanabe', item: 'rods' });
+      ok(watanabeAttempt.lastEvent.type === 'refusal' && watanabeAttempt.lastEvent.code === 'invalid-assignment', 'Watanabe cannot be used as a third assignment lane');
+      ok(same(stripEvent(watanabeAttempt), stripEvent(state)), 'a Watanabe assignment cannot move equipment or change work state');
 
-      var repeatA = fresh(), repeatB = fresh();
-      cards.forEach(function (card, index) { repeatA = put(repeatA, card, index < 3 ? 'a' : 'b'); });
-      cards.forEach(function (card, index) { repeatB = put(repeatB, card, index < 3 ? 'a' : 'b'); });
-      ok(JSON.stringify(repeatA) === JSON.stringify(repeatB) && JSON.stringify(derive(repeatA)) === JSON.stringify(derive(repeatB)), 'same assignments produce byte-deterministic state and derived loads');
+      advance({ type: 'ASSIGN_ITEM', actor: 'cap', item: 'rods' });
+      advance({ type: 'ASSIGN_ITEM', actor: 'towel', item: 'worms' });
+      ok(state.actors.cap.status === 'working' && state.actors.cap.current === 'rods' &&
+        state.actors.towel.status === 'working' && state.actors.towel.current === 'worms', 'Cap and Towel can work concurrently on distinct real objects');
+      ok(state.items.rods.location === 'carried' && state.items.rods.owner === 'cap' &&
+        state.items.worms.location === 'carried' && state.items.worms.owner === 'towel', 'concurrent assignments visibly transfer object ownership');
+      ok(!model.derive(state).canDepart, 'departure stays locked while concurrent actor jobs are active');
 
-      var invalid = null, invalidRejected = false;
-      try { invalid = assign(fresh(), idOf(cards[0]), 'watanabe'); }
-      catch (error) { invalidRejected = true; }
-      if (!invalidRejected && invalid) invalidRejected = !readyOf(derive(invalid)) && JSON.stringify(invalid).toLowerCase().indexOf('watanabe') < 0;
-      ok(invalidRejected, 'assigning a card to Watanabe fails closed');
+      advance({ type: 'COMPLETE_JOB', actor: 'cap' });
+      advance({ type: 'COMPLETE_JOB', actor: 'towel' });
+      ok(state.items.rods.location === 'trunk' && state.items.worms.location === 'trunk', 'completed actor jobs put rods and worms in the trunk');
+      advance({ type: 'ASSIGN_ITEM', actor: 'cap', item: 'chicken' });
+      advance({ type: 'COMPLETE_JOB', actor: 'cap' });
+      ok(state.items.chicken.location === 'trunk' && state.items.drinks.location === 'vending', 'chicken loads while drinks remain deliberately missable at the vending machine');
+
+      var beforeEmptyBox = clone(state);
+      advance({ type: 'MOVE_ITEM', item: 'tanago-box', target: 'trunk' });
+      ok(state.lastEvent.type === 'refusal' && state.lastEvent.code === 'empty-box', 'an empty tanago box produces the canonical empty-box refusal');
+      ok(state.items['tanago-box'].location === 'yard' && state.items['tanago-box'].water === 'empty', 'empty-box refusal leaves the box physically empty in the yard');
+      ok(same(stripEvent(state), stripEvent(beforeEmptyBox)), 'empty-box refusal changes only feedback, never physical progress');
+
+      advance({ type: 'MOVE_ITEM', item: 'tanago-box', target: 'tap' });
+      ok(state.items['tanago-box'].location === 'tap' && state.items['tanago-box'].status === 'filling', 'moving the tanago box to the tap begins a visible fill state');
+      advance({ type: 'FILL_COMPLETE' });
+      ok(state.items['tanago-box'].water === 'full' && state.items['tanago-box'].status === 'ready', 'the fill consequence makes the tanago box water-full and ready');
+
+      advance({ type: 'MOVE_ITEM', item: 'tanago-box', target: 'trunk' });
+      ok(state.packing.coopItem === 'tanago-box' && state.items['tanago-box'].owner === 'both', 'the filled tanago box begins a two-person cooperative carry');
+      ok(state.actors.cap.current === 'coop:tanago-box' && state.actors.towel.current === 'coop:tanago-box' &&
+        state.actors.cap.status === 'working' && state.actors.towel.status === 'working', 'both actors are concurrently occupied by the heavy filled box');
+      advance({ type: 'COMPLETE_COOP' });
+      ok(state.items['tanago-box'].location === 'trunk' && state.actors.cap.status === 'idle' && state.actors.towel.status === 'idle', 'cooperation loads the filled box and releases both actors');
+
+      advance({ type: 'MOVE_ITEM', item: 'suppon-tank', target: 'trunk' });
+      ok(state.packing.coopItem === 'suppon-tank' && state.items['suppon-tank'].owner === 'both' &&
+        state.actors.cap.current === 'coop:suppon-tank' && state.actors.towel.current === 'coop:suppon-tank', 'the separate suppon tank also requires both people');
+      advance({ type: 'COMPLETE_COOP' });
+      var readyToDepart = model.derive(state);
+      ok(readyToDepart.essentialsLoaded && readyToDepart.canDepart, 'all five essential physical preparations unlock departure');
+      ok(!readyToDepart.drinksLoaded && state.items.drinks.location === 'vending', 'drinks can be omitted without failing the packing phase');
+
+      var plannedDrive = model.reduce(state, { type: 'ASSIGN_ITEM', actor: 'towel', item: 'drinks' });
+      plannedDrive = model.reduce(plannedDrive, { type: 'COMPLETE_JOB', actor: 'towel' });
+      ok(model.derive(plannedDrive).drinksLoaded && plannedDrive.items.drinks.location === 'cabin', 'planning ahead loads optional drinks into the cabin');
+      plannedDrive = model.reduce(plannedDrive, { type: 'DEPART' });
+      ok(plannedDrive.scene === 'drive' && !plannedDrive.drive.detour && plannedDrive.lastEvent.code === 'direct-drive', 'remembered drinks earn a direct drive with no detour');
+      ok(state.scene === 'packing' && state.items.drinks.location === 'vending', 'testing the planned branch cannot mutate the missable-drinks branch');
+
+      advance({ type: 'DEPART' });
+      ok(state.scene === 'drive' && state.drive.detour && !state.drive.detourComplete && state.lastEvent.code === 'drinks-detour', 'omitted drinks cause the recoverable roadside detour');
+      var beforeEarlyArrival = clone(state);
+      advance({ type: 'ARRIVE_LAKE' });
+      ok(state.scene === 'drive' && state.lastEvent.type === 'refusal' && state.lastEvent.code === 'drive-pending', 'the lake cannot be reached before the drinks detour resolves');
+      ok(same(stripEvent(state), stripEvent(beforeEarlyArrival)), 'premature arrival refusal preserves drive state');
+      var beforeDetourClock = state.clockMinutes;
+      advance({ type: 'DETOUR_COMPLETE' });
+      ok(state.drive.detourComplete && state.items.drinks.location === 'cabin' && state.items.drinks.owner === 'watanabe', 'the detour physically recovers the missed drinks into the car cabin');
+      ok(state.clockMinutes === beforeDetourClock + 8, 'forgetting drinks has a deterministic eight-minute consequence');
+      advance({ type: 'ARRIVE_LAKE' });
+      ok(state.scene === 'lake' && state.lastEvent.code === 'lake-arrival', 'resolved travel reaches the lake scene');
+
+      advance({ type: 'MOVE_ITEM', item: 'rods', target: 'jetty' });
+      ok(state.items.rods.location === 'jetty', 'the rods must physically reach the jetty');
+      var beforeBareHook = clone(state);
+      advance({ type: 'CAST', zone: 'shallows' });
+      ok(state.lastEvent.type === 'refusal' && state.lastEvent.code === 'bare-hook', 'casting without bait produces the canonical bare-hook refusal');
+      ok(state.lake.hookBait === null && state.lake.tanago === 'waiting', 'bare-hook refusal produces no hidden catch progress');
+      ok(same(stripEvent(state), stripEvent(beforeBareHook)), 'bare-hook refusal changes only feedback');
+
+      advance({ type: 'BAIT_HOOK', item: 'worms' });
+      ok(state.lake.hookBait === 'worms' && state.items.worms.location === 'hook', 'worms physically occupy the hook before the tanago cast');
+      advance({ type: 'CAST', zone: 'shallows' });
+      ok(state.lake.tanago === 'bite' && state.items.worms.location === 'used' && state.lake.hookBait === null, 'worm plus shallows deterministically produces a tanago bite');
+      advance({ type: 'REEL' });
+      ok(state.lake.tanago === 'caught', 'reeling materializes a movable tanago catch');
+      advance({ type: 'MOVE_CATCH', catch: 'tanago', target: 'tanago-box' });
+      ok(state.lake.tanago === 'boxed' && state.items['tanago-box'].contains === 'tanago', 'the caught tanago transfers into the prepared water box');
+
+      advance({ type: 'BAIT_HOOK', item: 'chicken' });
+      ok(state.lake.hookBait === 'chicken' && state.items.chicken.location === 'hook', 'chicken physically occupies the hook for the suppon attempt');
+      var beforeWrongWater = clone(state);
+      advance({ type: 'CAST', zone: 'shallows' });
+      ok(state.lastEvent.type === 'refusal' && state.lastEvent.code === 'wrong-water', 'chicken in the shallows is refused as the wrong water');
+      ok(state.lake.hookBait === 'chicken' && state.items.chicken.location === 'hook' && same(stripEvent(state), stripEvent(beforeWrongWater)), 'wrong-water refusal preserves bait for immediate revision');
+      advance({ type: 'CAST', zone: 'deep' });
+      ok(state.lake.suppon === 'fighting' && state.items.chicken.location === 'used', 'chicken plus deep water deterministically produces a suppon fight');
+      advance({ type: 'REEL' });
+      ok(state.lake.suppon === 'caught', 'reeling materializes a movable suppon catch');
+
+      var beforeWrongContainer = clone(state);
+      advance({ type: 'MOVE_CATCH', catch: 'suppon', target: 'tanago-box' });
+      ok(state.lastEvent.type === 'refusal' && state.lastEvent.code === 'wrong-container', 'suppon in the fish box produces the canonical wrong-container refusal');
+      ok(state.lake.suppon === 'caught' && state.lake.tanago === 'boxed' &&
+        state.items['tanago-box'].contains === 'tanago' && state.items['suppon-tank'].contains === null, 'wrong-container refusal preserves both animals and both containers');
+      ok(same(stripEvent(state), stripEvent(beforeWrongContainer)), 'wrong-container refusal changes only feedback');
+      advance({ type: 'MOVE_CATCH', catch: 'suppon', target: 'suppon-tank' });
+      ok(state.lake.suppon === 'tanked' && state.items['suppon-tank'].contains === 'suppon' && model.derive(state).canGoHome, 'the separate tank secures the suppon and unlocks home');
+
+      advance({ type: 'GO_HOME' });
+      ok(state.scene === 'home' && !state.completed, 'returning home still requires physical aquarium placement');
+      var beforeWrongHome = clone(state);
+      advance({ type: 'PLACE_HOME', item: 'suppon-tank', target: 'home-tanago' });
+      ok(state.lastEvent.type === 'refusal' && state.lastEvent.code === 'wrong-home' && same(stripEvent(state), stripEvent(beforeWrongHome)), 'the two home aquariums refuse the wrong animal without progress');
+      advance({ type: 'PLACE_HOME', item: 'tanago-box', target: 'home-tanago' });
+      ok(state.home.tanagoPlaced && !state.completed && state.items['tanago-box'].location === 'home-tanago', 'placing only the tanago does not prematurely complete the tutorial');
+      advance({ type: 'PLACE_HOME', item: 'suppon-tank', target: 'home-suppon' });
+      ok(state.completed && state.home.tanagoPlaced && state.home.supponPlaced && state.lastEvent.code === 'tutorial-complete', 'separate final aquarium placements complete the embodied loop');
+      ok(state.items['tanago-box'].location === 'home-tanago' && state.items['suppon-tank'].location === 'home-suppon' && model.derive(state).homeComplete, 'completion keeps tanago and suppon in distinct physical homes');
+
+      var completedState = clone(state);
+      function runPath(actions) {
+        return actions.reduce(function (current, action) { return model.reduce(current, clone(action)); }, model.freshState());
+      }
+      ok(same(runPath(pathActions), completedState) && same(runPath(pathActions), runPath(pathActions)), 'the complete action/refusal path is replay-deterministic');
+      ok(ownedInputs.every(function (entry) { return same(entry.state, entry.snapshot); }), 'no transition in the complete path mutates caller-owned state');
+
+      var japanese = model.reduce(state, { type: 'SET_LANG', language: 'ja' });
+      ok(japanese.language === 'ja' && japanese.completed, 'language switching preserves completed physical state');
+      var invalidLanguage = model.reduce(japanese, { type: 'SET_LANG', language: 'xx' });
+      ok(invalidLanguage.lastEvent.type === 'refusal' && same(stripEvent(invalidLanguage), stripEvent(japanese)), 'invalid language changes are fail-closed');
+      var restarted = model.reduce(japanese, { type: 'RESTART' });
+      ok(restarted.scene === 'arrival' && restarted.language === 'ja' && !restarted.completed, 'restart returns to a clean arrival state while preserving language choice');
+      ok(restarted.items['tanago-box'].water === 'empty' && restarted.items['tanago-box'].contains === null &&
+        restarted.items['suppon-tank'].contains === null && restarted.items.drinks.location === 'vending', 'restart clears every learned-world consequence for replay');
     }
   }
 
@@ -270,5 +440,7 @@ if (!html || !css || !js) {
   if (failures) {
     console.error('HIKONE VERIFY FAILED: ' + failures + ' of ' + checks + ' checks failed.');
     process.exitCode = 1;
-  } else console.log('ALL ' + checks + ' HIKONE CHECKS PASSED \u2713');
+  } else {
+    console.log('ALL ' + checks + ' EMBODIED HIKONE CHECKS PASSED \u2713');
+  }
 }

@@ -15,11 +15,13 @@ for a system-design failure.
 
 **New — The Hikone Morning / 彦根の朝.** A separate recommended first-play tutorial starts
 outside Ryokan Izumi in Yokkaichi. Watanabe-san arrives in his own car and asks two other
-travelers to prepare six known items before he drives them to Lake Biwa in Hikone. The learner
-turns a `12 / 0` serial queue into two visible parallel owner lanes, checks the loaded trunk, and
-sees the same preparations arrive at the lake. It has its own full-viewport page, state, freshwater
-visual identity, bilingual copy, keyboard/tap path, and reduced-motion treatment; it does not alter
-the Ogasawara campaign or its score. The durable implementation handoff is
+travelers to prepare six real items before he drives them to Lake Biwa in Hikone. The learner
+directly gives work to both companions, fills the tanago box at the tap, packs Watanabe's trunk,
+and then deploys that same preparation at the lake by baiting, casting, catching a tanago, and
+securing a suppon in a separate aquarium carrier. Physical refusals and a forgotten-drinks detour
+teach planning through consequences instead of cards, scores, or effort numbers. It has its own
+full-viewport page, deterministic state, bilingual input paths, and reduced-motion treatment; it
+does not alter the Ogasawara campaign or its score. The durable implementation handoff is
 [`docs/superpowers/plans/2026-07-21-hikone-tutorial.md`](docs/superpowers/plans/2026-07-21-hikone-tutorial.md).
 
 **New — the representative fishing day (Day 3, whole-hour block planning).** The heart of the game is the
