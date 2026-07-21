@@ -1104,7 +1104,7 @@
         { id: 'p01', name: L('Matsumoto', '松本'), company: 'co_aibos', roleId: 'owner',      skill: { lead: 5 },                stamina: 4, constraints: {} },
         { id: 'p02', name: L('Inaba', '稲葉'),       company: 'co_aibos', roleId: 'pm',         skill: { plan: 5, coord: 5 },      stamina: 4, constraints: {} },
         { id: 'p03', name: L('Nishinaga', '西永'),    company: 'co_aibos', roleId: 'siteLead',   skill: { field: 5, fishing: 4 },   stamina: 5, constraints: {} },
-        { id: 'p04', name: L('Prakhar', 'プラカル'),      company: 'co_aibos', roleId: 'budgetLead', skill: { finance: 5 },             stamina: 3, constraints: {} },
+        { id: 'p04', name: L('Prakhar', 'プラカール'),    company: 'co_aibos', roleId: 'budgetLead', skill: { finance: 5 },             stamina: 3, constraints: {} },
         { id: 'p05', name: L('Martin', 'マーティン'),    company: 'co_aibos', roleId: 'safetyLead', skill: { fishing: 5, firstAid: 4 },stamina: 5, constraints: {} },
         { id: 'p06', name: L('Kevin', 'ケビン'), company: 'co_aibos', roleId: 'logi',       skill: { logistics: 4, drive: 3 }, stamina: 4, constraints: {} },
         { id: 'p07', name: L('Andrew', 'アンドリュー'),  company: 'co_aibos', roleId: 'comms',      skill: { record: 4 },              stamina: 3, constraints: {} },
@@ -2328,8 +2328,18 @@
       if (at.required !== false && !placed) unplacedRequired.push(at.id);
       if (at.required === false && placed) decoysPlaced.push(at.id);
       // careGuestId tasks are exempt from misassignment — ANY organizer may buddy a care guest (Voyage §3;
-      // the buddies merge re-homes ownerRoleId anyway, this guards direct deck placements too)
-      if (placed && !at.careGuestId) for (j = 0; j < at.assignedIds.length; j++) { var prid = partRole[at.assignedIds[j]]; if (prid && prid !== at.ownerRoleId) { misassigned.push(at.id); break; } }
+      // the buddies merge re-homes ownerRoleId anyway, this guards direct deck placements too).
+      // A task may also name explicit additional roles for genuinely cooperative cross-role work.
+      // The owner role must still be present; the allowlist permits helpers, never substitutes.
+      if (placed && !at.careGuestId) {
+        var allowedRoles = Array.isArray(at.allowedRoleIds) ? at.allowedRoleIds : [], ownerPresent = false, invalidAssignee = false;
+        for (j = 0; j < at.assignedIds.length; j++) {
+          var prid = partRole[at.assignedIds[j]];
+          if (prid === at.ownerRoleId) ownerPresent = true;
+          else if (!prid || allowedRoles.indexOf(prid) < 0) invalidAssignee = true;
+        }
+        if (invalidAssignee || (allowedRoles.length && !ownerPresent)) misassigned.push(at.id);
+      }
     }
     var perP = {}, overbookMin = 0;
     for (i = 0; i < fds.length; i++) { var pt = fds[i]; for (j = 0; j < pt.assignedIds.length; j++) { var pk = pt.assignedIds[j]; (perP[pk] = perP[pk] || []).push({ s: pt.startMin, e: pt.startMin + pt.durMin }); } }

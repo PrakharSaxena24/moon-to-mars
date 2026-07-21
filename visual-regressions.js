@@ -219,7 +219,7 @@ function stageVisualEquivalentRegression() {
   assert.deepStrictEqual(staticRoute.visualEquivalent, movingRoute.visualEquivalent,
     'stage.js: route facts must be identical with and without motion');
 
-  const identity = stage.priorityGuestIdentity({ id: 'gd_watanabe', name: { en: 'Watanabe', jp: '渡辺' } }, 0);
+  const identity = stage.priorityGuestIdentity({ id: 'gd_watanabe', name: { en: 'Watanabe', jp: '渡邊' } }, 0);
   assert.ok(identity && identity.color && identity.shape && identity.name,
     'stage.js: priority guests must have colour, shape, and visible-name identity channels');
   assert.ok(/marker.*visible name/.test(identity.visualEquivalent),

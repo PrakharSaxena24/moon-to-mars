@@ -1,544 +1,840 @@
 (function (root, factory) {
   'use strict';
-  var api = factory();
+  var engine = root && root.PRS;
+  if (!engine && typeof module === 'object' && module.exports && typeof require === 'function') {
+    try { engine = require('./engine.js'); } catch (error) { engine = null; }
+  }
+  var api = factory(engine);
   if (typeof module === 'object' && module.exports) module.exports = api;
   if (root) root.HIKONE = api;
   if (typeof document !== 'undefined') boot(api);
-})(typeof window !== 'undefined' ? window : this, function () {
+})(typeof window !== 'undefined' ? window : this, function (PRS) {
   'use strict';
 
-  var SCENES = ['arrival', 'packing', 'drive', 'lake', 'home'];
-  SCENES.ARRIVAL = 'arrival'; SCENES.PACKING = 'packing'; SCENES.DRIVE = 'drive'; SCENES.LAKE = 'lake'; SCENES.HOME = 'home';
-  Object.freeze(SCENES);
-  var ACTORS = Object.freeze(['cap', 'towel']);
-  var ITEMS = Object.freeze([
-    Object.freeze({ id: 'rods', normal: true, minutes: 4 }),
-    Object.freeze({ id: 'worms', normal: true, minutes: 3 }),
-    Object.freeze({ id: 'chicken', normal: true, minutes: 3 }),
-    Object.freeze({ id: 'tanago-box', normal: false, minutes: 4 }),
-    Object.freeze({ id: 'suppon-tank', normal: false, minutes: 5 }),
-    Object.freeze({ id: 'drinks', normal: true, minutes: 2 })
+  var PHASES = Object.freeze(['arrival', 'plan', 'run', 'observe', 'drive', 'lake', 'home']);
+  var PEOPLE = Object.freeze([
+    Object.freeze({ id: 'prakhar', engineId: 'p04', en: 'Prakhar', ja: 'プラカール', roleId: 'budgetLead', visual: 'red-cap' }),
+    Object.freeze({ id: 'nishinaga', engineId: 'p03', en: 'Nishinaga', ja: '西永', roleId: 'siteLead', visual: 'blue-towel' })
   ]);
+  var ITEMS = Object.freeze([
+    Object.freeze({ id: 'rods', taskId: 'rods' }),
+    Object.freeze({ id: 'worms', taskId: 'bait' }),
+    Object.freeze({ id: 'chicken', taskId: 'bait' }),
+    Object.freeze({ id: 'tanago-box', taskId: 'fill-box' }),
+    Object.freeze({ id: 'suppon-tank', taskId: 'load-carriers' }),
+    Object.freeze({ id: 'drinks', taskId: 'drinks' })
+  ]);
+  var TASKS = Object.freeze([
+    Object.freeze({ id: 'confirm-care', item: null, duration: 5, defaultActor: 'prakhar', defaultStart: 350, produces: ['care-plan'], required: true }),
+    Object.freeze({ id: 'bait', item: 'worms', duration: 5, defaultActor: 'nishinaga', defaultStart: 350, required: true }),
+    Object.freeze({ id: 'rods', item: 'rods', duration: 5, defaultActor: 'prakhar', defaultStart: 355, required: true }),
+    Object.freeze({ id: 'load-carriers', item: 'suppon-tank', duration: 10, defaultActor: 'both', defaultStart: 360, cooperative: true, needsInfo: ['care-plan'], deps: ['fill-box'], required: true }),
+    Object.freeze({ id: 'fill-box', item: 'tanago-box', duration: 5, defaultActor: 'prakhar', defaultStart: 365, produces: ['box-has-water'], required: true }),
+    Object.freeze({ id: 'drinks', item: 'drinks', duration: 5, defaultActor: null, defaultStart: 370, required: true })
+  ]);
+  var SLOTS = Object.freeze([350, 355, 360, 365, 370, 375]);
+  var STORAGE_KEY = 'prs.hikone-planning-tutorial.v3';
   var ACTIONS = Object.freeze({
-    START: 'START', ASSIGN_ITEM: 'ASSIGN_ITEM', COMPLETE_JOB: 'COMPLETE_JOB',
-    MOVE_ITEM: 'MOVE_ITEM', FILL_COMPLETE: 'FILL_COMPLETE', COMPLETE_COOP: 'COMPLETE_COOP',
-    DEPART: 'DEPART', DETOUR_COMPLETE: 'DETOUR_COMPLETE', ARRIVE_LAKE: 'ARRIVE_LAKE',
-    BAIT_HOOK: 'BAIT_HOOK', CAST: 'CAST', REEL: 'REEL', MOVE_CATCH: 'MOVE_CATCH',
-    GO_HOME: 'GO_HOME', PLACE_HOME: 'PLACE_HOME', SET_LANG: 'SET_LANG', RESTART: 'RESTART'
+    START: 'START', MOVE_TASK: 'MOVE_TASK', UNPLACE_TASK: 'UNPLACE_TASK', CONNECT_HANDOFF: 'CONNECT_HANDOFF',
+    RUN_PLAN: 'RUN_PLAN', RUN_TICK: 'RUN_TICK', REVISE_PLAN: 'REVISE_PLAN', CONTINUE_PAYOFF: 'CONTINUE_PAYOFF',
+    DRIVE_TICK: 'DRIVE_TICK', PAYOFF_TICK: 'PAYOFF_TICK', SET_LANG: 'SET_LANG', RESTART: 'RESTART'
   });
 
-  function itemDefinition(id) { return ITEMS.filter(function (item) { return item.id === id; })[0] || null; }
-  function itemState(id) {
-    return {
-      id: id, location: id === 'drinks' ? 'vending' : 'yard', status: id === 'tanago-box' ? 'empty' : 'ready', owner: null,
-      water: id === 'tanago-box' ? 'empty' : null, contains: null
-    };
+  function copy(value) { return JSON.parse(JSON.stringify(value)); }
+  function person(id) { return PEOPLE.filter(function (entry) { return entry.id === id; })[0] || null; }
+  function taskDefinition(id) { return TASKS.filter(function (entry) { return entry.id === id; })[0] || null; }
+  function taskState(definition) { return { id: definition.id, actor: definition.defaultActor, startMin: definition.defaultStart }; }
+  function initialPlan() {
+    return { connected: false, tasks: TASKS.map(taskState) };
   }
-  function freshState() {
-    var items = {};
-    ITEMS.forEach(function (item) { items[item.id] = itemState(item.id); });
-    return {
-      scene: SCENES.ARRIVAL, language: 'en', selected: null, clockMinutes: 285,
-      assignments: { cap: [], towel: [] },
-      actors: {
-        cap: { status: 'idle', current: null, queue: [], workMinutes: 0 },
-        towel: { status: 'idle', current: null, queue: [], workMinutes: 0 }
-      },
-      items: items,
-      packing: { coopItem: null, stationMinutes: 0, coopMinutes: 0 },
-      drive: { detour: false, detourComplete: false },
-      lake: { hookBait: null, castZone: null, tanago: 'waiting', suppon: 'waiting' },
-      home: { tanagoPlaced: false, supponPlaced: false },
-      completed: false,
-      lastEvent: { type: 'status', code: 'arrival' }
-    };
+  function rootIssue(code, atMin, taskId, target, detail) {
+    return { code: code, atMin: atMin, taskId: taskId || null, focusTarget: target || null, detail: detail || null };
   }
-  function copy(state) { return JSON.parse(JSON.stringify(state)); }
-  function withEvent(state, type, code, detail) {
+  function normalizePlan(plan) {
+    var source = plan && typeof plan === 'object' ? plan : {};
+    var rows = Array.isArray(source.tasks) ? source.tasks : [];
+    var roots = [], known = {};
+    var tasks = TASKS.map(function (definition) {
+      known[definition.id] = true;
+      var matches = rows.filter(function (row) { return row && row.id === definition.id; });
+      if (matches.length !== 1) {
+        return { id: definition.id, actor: null, startMin: definition.defaultStart };
+      }
+      var row = matches[0], actor = row.actor == null ? null : row.actor, startMin = row.startMin;
+      var actorOk = actor == null || (definition.cooperative ? actor === 'both' : actor === 'prakhar' || actor === 'nishinaga');
+      var timeOk = SLOTS.indexOf(startMin) >= 0;
+      if (!actorOk || !timeOk) return { id: definition.id, actor: null, startMin: definition.defaultStart };
+      return { id: definition.id, actor: actor, startMin: startMin };
+    });
+    rows.forEach(function (row) {
+      if (!row || !known[row.id]) roots.push(rootIssue('task-unplanned', 350, null, 'run', { reason: 'unknown-task', taskId: row && row.id || null }));
+    });
+    return { plan: { connected: source.connected === true, tasks: tasks }, roots: roots };
+  }
+  function eventState(state, type, code, detail) {
     state.lastEvent = { type: type, code: code, detail: detail || null };
     return state;
   }
-  function refusal(state, code, detail) { return withEvent(copy(state), 'refusal', code, detail); }
-  function updatePackingClock(state) {
-    state.clockMinutes = 285 + Math.max(state.actors.cap.workMinutes, state.actors.towel.workMinutes, state.packing.stationMinutes) + state.packing.coopMinutes;
+  function refusal(state, code, detail) { return eventState(copy(state), 'refusal', code, detail); }
+  function worldSceneFor(phase) {
+    if (phase === 'arrival') return 'arrival';
+    if (phase === 'drive') return 'drive';
+    if (phase === 'lake') return 'lake';
+    if (phase === 'home') return 'home';
+    return 'packing';
   }
-  function beginQueuedJob(state, actorId) {
-    var actor = state.actors[actorId];
-    if (!actor || actor.status !== 'idle' || !actor.queue.length) return;
-    var itemId = actor.queue.shift();
-    actor.status = 'working';
-    actor.current = itemId;
-    state.items[itemId].status = 'working';
-    state.items[itemId].location = 'carried';
-  }
-  function startCooperativeCarry(state, itemId) {
-    if (state.actors.cap.status !== 'idle' || state.actors.towel.status !== 'idle' || state.packing.coopItem) return false;
-    state.packing.coopItem = itemId;
-    state.actors.cap.status = state.actors.towel.status = 'working';
-    state.actors.cap.current = state.actors.towel.current = 'coop:' + itemId;
-    state.items[itemId].status = 'moving';
-    state.items[itemId].location = 'carried';
-    state.items[itemId].owner = 'both';
-    return true;
-  }
-  function derive(state) {
-    var loaded = ITEMS.filter(function (item) { return ['trunk', 'cabin'].indexOf(state.items[item.id].location) >= 0; }).map(function (item) { return item.id; });
-    var essentials = ['rods', 'worms', 'chicken', 'tanago-box', 'suppon-tank'];
-    var actorsIdle = ACTORS.every(function (id) { return state.actors[id].status === 'idle' && !state.actors[id].queue.length; });
-    var essentialsLoaded = essentials.every(function (id) { return loaded.indexOf(id) >= 0; });
+  function freshState() {
     return {
-      loaded: loaded,
-      missing: ITEMS.map(function (item) { return item.id; }).filter(function (id) { return loaded.indexOf(id) < 0; }),
-      essentialsLoaded: essentialsLoaded,
-      drinksLoaded: loaded.indexOf('drinks') >= 0,
-      actorsIdle: actorsIdle,
-      canDepart: state.scene === SCENES.PACKING && essentialsLoaded && actorsIdle && !state.packing.coopItem,
-      canGoHome: state.scene === SCENES.LAKE && state.lake.tanago === 'boxed' && state.lake.suppon === 'tanked',
-      hookReady: state.lake.hookBait !== null,
-      homeComplete: state.home.tanagoPlaced && state.home.supponPlaced,
-      completed: state.completed
+      phase: 'arrival', scene: 'arrival', language: 'en', plan: initialPlan(), attempt: 0, revision: 0,
+      focusTarget: null, run: null, report: null, payoffStep: 0, completed: false,
+      clockMinutes: 350, lastEvent: { type: 'status', code: 'arrival', detail: null }
     };
   }
+  function getTask(plan, id) {
+    return plan && plan.tasks ? plan.tasks.filter(function (task) { return task.id === id; })[0] || null : null;
+  }
+  function actorIds(task) {
+    if (!task || !task.actor) return [];
+    return task.actor === 'both' ? ['prakhar', 'nishinaga'] : [task.actor];
+  }
+  function engineIds(task) {
+    return actorIds(task).map(function (id) { return person(id).engineId; });
+  }
+  function engineRoleFor(task, fallback) {
+    var ids = actorIds(task);
+    return ids.length ? person(ids[0]).roleId : fallback;
+  }
+  function engineTask(plan, definition) {
+    var placed = getTask(plan, definition.id);
+    var assigned = placed && placed.actor ? (definition.cooperative ? ['p03', 'p04'] : engineIds(placed)) : [];
+    return {
+      id: definition.id,
+      name: { en: definition.id, jp: definition.id },
+      station: definition.id === 'fill-box' ? 'clinic' : 'lodging',
+      ownerRoleId: definition.cooperative ? 'siteLead' : engineRoleFor(placed, definition.defaultActor === 'nishinaga' ? 'siteLead' : 'budgetLead'),
+      allowedRoleIds: definition.cooperative ? ['budgetLead'] : [],
+      assignedIds: assigned,
+      startMin: placed ? placed.startMin : definition.defaultStart,
+      durMin: definition.duration,
+      baseStartMin: definition.defaultStart,
+      deps: (definition.deps || []).slice(), difficulty: 1,
+      neededResources: [], neededInfo: (definition.needsInfo || []).slice(),
+      produces: (definition.produces || []).slice(), assumeOn: [],
+      required: definition.required !== false, guestFacing: false, carries: []
+    };
+  }
+  function buildCampaignPlan(plan) {
+    plan = normalizePlan(plan).plan;
+    var tasks = TASKS.map(function (definition) { return engineTask(plan, definition); });
+    var confirm = tasks.filter(function (task) { return task.id === 'confirm-care'; })[0];
+    var load = tasks.filter(function (task) { return task.id === 'load-carriers'; })[0];
+    var handoffs = [];
+    if (plan.connected && confirm && load && confirm.ownerRoleId !== load.ownerRoleId) {
+      handoffs.push({
+        id: 'hk-care-handoff', cardId: 'care-plan', fromRoleId: confirm.ownerRoleId, fromTaskId: confirm.id,
+        toRoleId: load.ownerRoleId, toTaskId: load.id,
+        trigger: { type: 'onTaskDone', taskId: confirm.id }, channel: 'faceToFace', ifLate: 'idle'
+      });
+    }
+    return {
+      participants: PEOPLE.map(function (entry) { return { id: entry.engineId, roleId: entry.roleId, name: { en: entry.en, jp: entry.ja } }; }),
+      roles: { budgetLead: { holder: 'p04' }, siteLead: { holder: 'p03' } },
+      infoCards: [{ id: 'care-plan', ownerRoleId: confirm ? confirm.ownerRoleId : 'budgetLead', name: { en: 'Live transport plan', jp: '生体運搬計画' } }],
+      tasks: [], handoffs: [], manifest: [],
+      days: { hikone: { tasks: tasks, handoffs: handoffs } }
+    };
+  }
+  function campaignEvidence(plan) {
+    var campaignPlan = buildCampaignPlan(plan);
+    if (!PRS || typeof PRS.daySchedule !== 'function' || typeof PRS.dayReadiness !== 'function') {
+      return { available: false, plan: campaignPlan, schedule: null, rawReadiness: [], readiness: [] };
+    }
+    try {
+      var schedule = PRS.daySchedule(campaignPlan, 'hikone');
+      var rawReadiness = PRS.dayReadiness(campaignPlan, 'hikone');
+      var readiness = rawReadiness.slice();
+      return { available: true, plan: campaignPlan, schedule: schedule, rawReadiness: rawReadiness, readiness: readiness };
+    } catch (error) {
+      return { available: false, plan: campaignPlan, schedule: null, rawReadiness: [], readiness: [], error: String(error && error.message || error) };
+    }
+  }
+  function overlapMinutes(a, b) {
+    return Math.max(0, Math.min(a.startMin + taskDefinition(a.id).duration, b.startMin + taskDefinition(b.id).duration) - Math.max(a.startMin, b.startMin));
+  }
+  function taskOrder(id) {
+    for (var i = 0; i < TASKS.length; i++) if (TASKS[i].id === id) return i;
+    return TASKS.length;
+  }
+  function sortRoots(roots) {
+    var rank = { 'bad-order': 0, overlap: 1, 'drinks-missing': 2, 'task-unplanned': 3, 'late-departure': 4 };
+    return roots.map(function (root, index) { return { root: root, index: index }; }).sort(function (a, b) {
+      var atA = typeof a.root.atMin === 'number' ? a.root.atMin : Infinity;
+      var atB = typeof b.root.atMin === 'number' ? b.root.atMin : Infinity;
+      var rankA = Object.prototype.hasOwnProperty.call(rank, a.root.code) ? rank[a.root.code] : 99;
+      var rankB = Object.prototype.hasOwnProperty.call(rank, b.root.code) ? rank[b.root.code] : 99;
+      return atA - atB || rankA - rankB || taskOrder(a.root.taskId) - taskOrder(b.root.taskId) || a.index - b.index;
+    }).map(function (entry) { return entry.root; });
+  }
+  function planRoots(plan) {
+    var roots = [];
+    var confirm = getTask(plan, 'confirm-care'), load = getTask(plan, 'load-carriers'), fill = getTask(plan, 'fill-box');
+    var confirmPlaced = confirm && confirm.actor;
+    var loadPlaced = load && load.actor;
+    if (confirmPlaced && loadPlaced) {
+      var sharedOwner = confirm.actor === 'nishinaga';
+      if (!sharedOwner && !plan.connected) {
+        return [rootIssue('missing-handoff', load.startMin, 'load-carriers', 'handoff', { from: confirm.actor, to: 'nishinaga' })];
+      }
+      if (!sharedOwner && plan.connected && confirm.startMin + taskDefinition('confirm-care').duration > load.startMin) {
+        return [rootIssue('late-handoff', load.startMin, 'confirm-care', 'confirm-care')];
+      }
+    }
 
+    if (fill && fill.actor && load && load.actor && fill.startMin + taskDefinition('fill-box').duration > load.startMin) {
+      roots.push(rootIssue('bad-order', load.startMin, 'load-carriers', 'fill-box', { dependency: 'fill-box' }));
+    }
+
+    var missing = plan.tasks.filter(function (task) {
+      var definition = taskDefinition(task.id);
+      return definition && definition.required && !task.actor;
+    });
+    missing.forEach(function (task) {
+      roots.push(rootIssue(task.id === 'drinks' ? 'drinks-missing' : 'task-unplanned', task.startMin, task.id, task.id, { taskId: task.id }));
+    });
+
+    PEOPLE.forEach(function (entry) {
+      var assigned = plan.tasks.filter(function (task) { return actorIds(task).indexOf(entry.id) >= 0; });
+      for (var i = 0; i < assigned.length; i++) for (var j = i + 1; j < assigned.length; j++) {
+        var minutes = overlapMinutes(assigned[i], assigned[j]);
+        var dependencyPair = [assigned[i].id, assigned[j].id].sort().join('|') === 'fill-box|load-carriers';
+        if (minutes > 0 && !(dependencyPair && roots.some(function (root) { return root.code === 'bad-order'; }))) {
+          roots.push(rootIssue('overlap', Math.max(assigned[i].startMin, assigned[j].startMin), assigned[j].id, assigned[j].id,
+            { personId: entry.id, otherId: assigned[i].id, minutes: minutes }));
+        }
+      }
+    });
+    return sortRoots(roots);
+  }
+  function effectiveTasks(plan, roots) {
+    var tasks = plan.tasks.filter(function (task) { return !!task.actor; }).map(function (task) {
+      var definition = taskDefinition(task.id);
+      return { id: task.id, actor: task.actor, startMin: task.startMin, endMin: task.startMin + definition.duration, effectiveStart: task.startMin, effectiveEnd: task.startMin + definition.duration };
+    });
+    var byId = {}, scheduled = {}, availability = { prakhar: -Infinity, nishinaga: -Infinity };
+    tasks.forEach(function (task) { byId[task.id] = task; });
+    var unresolvedLoad = roots.some(function (root) { return root.code === 'missing-handoff'; }) ? byId['load-carriers'] : null;
+    var pending = tasks.filter(function (task) { return task !== unresolvedLoad; });
+    function dependencies(task) {
+      var deps = (taskDefinition(task.id).deps || []).slice();
+      if (task.id === 'load-carriers' && byId['confirm-care']) deps.push('confirm-care');
+      return deps.filter(function (id, index) { return byId[id] && deps.indexOf(id) === index; });
+    }
+    while (pending.length) {
+      var ready = pending.filter(function (task) {
+        return dependencies(task).every(function (id) { return !!scheduled[id]; });
+      });
+      if (!ready.length) ready = pending.slice();
+      ready.sort(function (a, b) { return a.startMin - b.startMin || taskOrder(a.id) - taskOrder(b.id); });
+      var next = ready[0], start = next.startMin;
+      dependencies(next).forEach(function (id) { start = Math.max(start, scheduled[id].effectiveEnd); });
+      actorIds(next).forEach(function (id) { start = Math.max(start, availability[id]); });
+      next.effectiveStart = start; next.effectiveEnd = start + taskDefinition(next.id).duration; scheduled[next.id] = next;
+      actorIds(next).forEach(function (id) { availability[id] = next.effectiveEnd; });
+      pending.splice(pending.indexOf(next), 1);
+    }
+    if (unresolvedLoad) { unresolvedLoad.effectiveStart = 380; unresolvedLoad.effectiveEnd = null; }
+    return tasks;
+  }
+  function itemFrame(tasks, atMin) {
+    var items = {};
+    ITEMS.forEach(function (item) {
+      items[item.id] = { id: item.id, location: item.id === 'drinks' ? 'vending' : 'yard', status: item.id === 'tanago-box' ? 'empty' : 'ready', water: item.id === 'tanago-box' ? 'empty' : null, contains: null };
+    });
+    function done(id) {
+      var task = tasks.filter(function (entry) { return entry.id === id; })[0];
+      return !!task && task.effectiveEnd != null && task.effectiveEnd <= atMin;
+    }
+    if (done('bait')) { items.worms.location = 'trunk'; items.chicken.location = 'trunk'; items.worms.status = items.chicken.status = 'loaded'; }
+    if (done('rods')) { items.rods.location = 'trunk'; items.rods.status = 'loaded'; }
+    if (done('fill-box')) { items['tanago-box'].location = 'tap'; items['tanago-box'].water = 'full'; items['tanago-box'].status = 'filled'; }
+    if (done('load-carriers')) {
+      items['tanago-box'].location = 'trunk'; items['tanago-box'].water = 'full'; items['tanago-box'].status = 'loaded';
+      items['suppon-tank'].location = 'trunk'; items['suppon-tank'].status = 'loaded';
+    }
+    if (done('drinks')) { items.drinks.location = 'cabin'; items.drinks.status = 'loaded'; }
+    return items;
+  }
+  function frameCode(atMin, roots, tasks, plan) {
+    if (atMin === 350) return 'rehearsal-start';
+    var first = roots[0];
+    if (first && first.code === 'missing-handoff' && atMin >= first.atMin) return 'handoff-wait';
+    if (first && first.code === 'late-handoff' && atMin >= first.atMin) return 'handoff-late';
+    if (first && first.code === 'bad-order' && atMin >= first.atMin && atMin < (getTask(plan, 'fill-box').startMin + taskDefinition('fill-box').duration)) return 'empty-box-wait';
+    var ending = tasks.filter(function (task) { return task.effectiveEnd === atMin; })[0];
+    if (ending && ending.id === 'confirm-care' && plan.connected) return 'handoff-delivered';
+    if (ending) return 'task-done';
+    return 'clock-advance';
+  }
+  function makeFrames(plan, roots, tasks) {
+    var maxEnd = 380;
+    tasks.forEach(function (task) { if (task.effectiveEnd != null) maxEnd = Math.max(maxEnd, task.effectiveEnd); });
+    maxEnd = Math.min(400, Math.ceil(maxEnd / 5) * 5);
+    var frames = [];
+    for (var at = 350; at <= maxEnd; at += 5) {
+      var actorState = { prakhar: { status: 'idle', taskId: null }, nishinaga: { status: 'idle', taskId: null }, watanabe: { status: 'waiting', taskId: null } };
+      var statusRank = { idle: 0, waiting: 1, working: 2 };
+      function showActor(actorId, status, taskId) {
+        if (statusRank[status] > statusRank[actorState[actorId].status]) actorState[actorId] = { status: status, taskId: taskId };
+      }
+      tasks.forEach(function (task) {
+        actorIds(task).forEach(function (actorId) {
+          if (at >= task.startMin && at < task.effectiveStart) showActor(actorId, 'waiting', task.id);
+          if (task.effectiveEnd != null && at >= task.effectiveStart && at < task.effectiveEnd) showActor(actorId, 'working', task.id);
+        });
+      });
+      frames.push({ atMin: at, code: frameCode(at, roots, tasks, plan), actors: actorState, items: itemFrame(tasks, at) });
+    }
+    frames[frames.length - 1].code = roots.length ? 'run-needs-revision' : 'run-clean';
+    return frames;
+  }
+  function simulatePlan(plan) {
+    var normalized = normalizePlan(plan), frozen = normalized.plan;
+    var roots = normalized.roots.concat(planRoots(frozen));
+    var tasks = effectiveTasks(frozen, roots);
+    var latest = null;
+    tasks.forEach(function (task) {
+      if (task.effectiveEnd != null && (!latest || task.effectiveEnd > latest.effectiveEnd)) latest = task;
+    });
+    if (latest && latest.effectiveEnd > 380 && !roots.some(function (root) { return root.code === 'missing-handoff' || root.code === 'task-unplanned'; })) {
+      roots.push(rootIssue('late-departure', 380, latest.id, latest.id, { readyAt: latest.effectiveEnd }));
+    }
+    roots = sortRoots(roots);
+    var evidence = campaignEvidence(frozen);
+    if (!roots.length && !evidence.available) {
+      roots.push(rootIssue('engine-unavailable', 350, null, 'run', { error: evidence.error || null }));
+    } else if (!roots.length && evidence.readiness.length) {
+      var engineIssue = evidence.readiness[0], engineTaskState = getTask(frozen, engineIssue.taskId);
+      roots.push(rootIssue('campaign-gap', engineTaskState ? engineTaskState.startMin : 350, engineIssue.taskId || null, engineTaskState ? engineTaskState.id : 'run', { type: engineIssue.type || 'UNKNOWN' }));
+    }
+    var waitMinutes = 0, detourMinutes = 0;
+    tasks.forEach(function (task) { waitMinutes += Math.max(0, task.effectiveStart - task.startMin); });
+    roots.forEach(function (root) {
+      if (root.code === 'drinks-missing') detourMinutes = 8;
+    });
+    var hardIncomplete = roots.some(function (root) { return root.code === 'missing-handoff' || root.code === 'engine-unavailable' || root.code === 'campaign-gap' || (root.code === 'task-unplanned' && root.taskId !== 'drinks'); });
+    var departureMin = hardIncomplete ? null : Math.max(380, latest ? latest.effectiveEnd : 380);
+    var success = roots.length === 0 && evidence.available && evidence.readiness.length === 0;
+    return {
+      success: success, roots: roots, primaryRoot: roots[0] || null,
+      waitMinutes: waitMinutes, detourMinutes: detourMinutes, departureMin: departureMin,
+      engineEvidence: evidence, tasks: tasks, frames: makeFrames(frozen, roots, tasks), fingerprint: planFingerprint(frozen)
+    };
+  }
+  function planFingerprint(plan) {
+    var source = JSON.stringify(normalizePlan(plan).plan), hash = 2166136261;
+    for (var i = 0; i < source.length; i++) { hash ^= source.charCodeAt(i); hash = Math.imul(hash, 16777619); }
+    return ('00000000' + (hash >>> 0).toString(16)).slice(-8);
+  }
+  function derive(state) {
+    var preview = simulatePlan(state.plan);
+    return {
+      phase: state.phase, scene: state.scene, canRun: state.phase === 'plan', canRevise: state.phase === 'observe' && !!state.report && !state.report.success,
+      canContinue: state.phase === 'observe' && !!state.report && state.report.success,
+      preview: preview, connected: state.plan.connected, completed: state.completed
+    };
+  }
   function reduce(state, action) {
-    state = state || freshState();
-    action = action || {};
-    var next, actor, item, definition;
-
+    state = state || freshState(); action = action || {};
+    var next, task, definition, result, nextIndex;
     if (action.type === ACTIONS.RESTART) {
       next = freshState(); next.language = state.language === 'ja' ? 'ja' : 'en';
-      return withEvent(next, 'status', 'restart');
+      return eventState(next, 'status', 'restart');
     }
     if (action.type === ACTIONS.SET_LANG) {
       if (action.language !== 'en' && action.language !== 'ja') return refusal(state, 'invalid-language');
-      next = copy(state); next.language = action.language; return withEvent(next, 'status', 'language');
+      next = copy(state); next.language = action.language; return eventState(next, 'status', 'language');
     }
     if (action.type === ACTIONS.START) {
-      if (state.scene !== SCENES.ARRIVAL) return refusal(state, 'wrong-scene');
-      next = copy(state); next.scene = SCENES.PACKING; return withEvent(next, 'status', 'packing-started');
+      if (state.phase !== 'arrival') return refusal(state, 'wrong-phase');
+      next = copy(state); next.phase = 'plan'; next.scene = worldSceneFor(next.phase); next.focusTarget = 'run';
+      return eventState(next, 'status', 'plan-opened');
     }
-    if (action.type === ACTIONS.ASSIGN_ITEM) {
-      definition = itemDefinition(action.item);
-      if (state.scene !== SCENES.PACKING || ACTORS.indexOf(action.actor) < 0 || !definition) return refusal(state, 'invalid-assignment');
-      item = state.items[action.item];
-      if (!definition.normal) {
-        if (action.item === 'tanago-box' && item.water !== 'full') return refusal(state, 'empty-box');
-        if (item.status !== 'ready' || ['yard', 'tap'].indexOf(item.location) < 0) return refusal(state, 'item-unavailable');
-        next = copy(state);
-        if (!startCooperativeCarry(next, action.item)) return refusal(state, 'both-needed');
-        return withEvent(next, 'success', 'cooperative-carry', { item: action.item, requestedBy: action.actor });
+    if (action.type === ACTIONS.MOVE_TASK) {
+      if (state.phase !== 'plan') return refusal(state, 'planning-closed');
+      definition = taskDefinition(action.taskId);
+      if (!definition || SLOTS.indexOf(action.startMin) < 0 || ['prakhar', 'nishinaga', 'both'].indexOf(action.actor) < 0) return refusal(state, 'invalid-placement');
+      if (definition.cooperative && action.actor !== 'both') return refusal(state, 'both-required');
+      if (!definition.cooperative && action.actor === 'both') return refusal(state, 'single-owner-task');
+      next = copy(state); task = getTask(next.plan, action.taskId); if (!task) return refusal(state, 'invalid-plan');
+      task.actor = action.actor; task.startMin = action.startMin; next.focusTarget = action.taskId;
+      return eventState(next, 'success', 'task-moved', { taskId: action.taskId, actor: action.actor, startMin: action.startMin });
+    }
+    if (action.type === ACTIONS.UNPLACE_TASK) {
+      if (state.phase !== 'plan') return refusal(state, 'planning-closed');
+      definition = taskDefinition(action.taskId); if (!definition) return refusal(state, 'unknown-task');
+      next = copy(state); task = getTask(next.plan, action.taskId); if (!task) return refusal(state, 'invalid-plan');
+      task.actor = null; next.focusTarget = action.taskId;
+      return eventState(next, 'success', 'task-unplanned', { taskId: action.taskId });
+    }
+    if (action.type === ACTIONS.CONNECT_HANDOFF) {
+      if (state.phase !== 'plan') return refusal(state, 'planning-closed');
+      next = copy(state); next.plan.connected = action.connected !== false; next.focusTarget = 'handoff';
+      return eventState(next, 'success', next.plan.connected ? 'handoff-connected' : 'handoff-removed');
+    }
+    if (action.type === ACTIONS.RUN_PLAN) {
+      if (state.phase !== 'plan') return refusal(state, 'wrong-phase');
+      result = simulatePlan(state.plan); next = copy(state); next.phase = 'run'; next.scene = worldSceneFor(next.phase); next.attempt += 1; next.focusTarget = null; next.report = null;
+      next.plan = copy(normalizePlan(state.plan).plan);
+      next.run = { snapshot: copy(next.plan), fingerprint: result.fingerprint, result: result, frameIndex: 0, frame: copy(result.frames[0]) };
+      next.clockMinutes = next.run.frame.atMin;
+      return eventState(next, 'status', 'run-started', { attempt: next.attempt, fingerprint: result.fingerprint });
+    }
+    if (action.type === ACTIONS.RUN_TICK) {
+      if (state.phase !== 'run' || !state.run) return refusal(state, 'run-not-active');
+      next = copy(state); nextIndex = next.run.frameIndex + 1;
+      if (nextIndex < next.run.result.frames.length) {
+        next.run.frameIndex = nextIndex; next.run.frame = copy(next.run.result.frames[nextIndex]); next.clockMinutes = next.run.frame.atMin;
+        return eventState(next, 'status', next.run.frame.code, { atMin: next.clockMinutes });
       }
-      if (!item || ['yard', 'vending'].indexOf(item.location) < 0 || item.status !== 'ready') return refusal(state, 'item-unavailable');
-      next = copy(state); actor = next.actors[action.actor]; item = next.items[action.item];
-      item.owner = action.actor; item.status = 'queued'; item.location = 'assigned';
-      actor.queue.push(action.item); next.assignments[action.actor].push(action.item); beginQueuedJob(next, action.actor);
-      return withEvent(next, 'success', 'item-assigned', { actor: action.actor, item: action.item });
+      next.phase = 'observe'; next.scene = worldSceneFor(next.phase); next.report = copy(next.run.result); next.focusTarget = next.report.primaryRoot ? next.report.primaryRoot.focusTarget : 'continue';
+      return eventState(next, next.report.success ? 'success' : 'consequence', next.report.success ? 'report-clean' : 'report-gap');
     }
-    if (action.type === ACTIONS.COMPLETE_JOB) {
-      if (state.scene !== SCENES.PACKING || ACTORS.indexOf(action.actor) < 0) return refusal(state, 'invalid-job');
-      actor = state.actors[action.actor];
-      if (!actor || actor.status !== 'working' || !actor.current || actor.current.indexOf('coop:') === 0) return refusal(state, 'invalid-job');
-      next = copy(state); actor = next.actors[action.actor]; definition = itemDefinition(actor.current); item = next.items[actor.current];
-      item.location = item.id === 'drinks' ? 'cabin' : 'trunk'; item.status = 'loaded'; actor.workMinutes += definition.minutes; actor.current = null; actor.status = 'idle';
-      beginQueuedJob(next, action.actor); updatePackingClock(next);
-      return withEvent(next, 'success', 'item-loaded', { actor: action.actor, item: item.id });
+    if (action.type === ACTIONS.REVISE_PLAN) {
+      if (state.phase !== 'observe' || !state.report || state.report.success) return refusal(state, 'nothing-to-revise');
+      next = copy(state); next.phase = 'plan'; next.scene = worldSceneFor(next.phase); next.revision += 1; next.focusTarget = next.report.primaryRoot ? next.report.primaryRoot.focusTarget : null; next.run = null;
+      return eventState(next, 'status', 'revision-opened', { target: next.focusTarget });
     }
-    if (action.type === ACTIONS.MOVE_ITEM) {
-      item = state.items[action.item];
-      if (!item) return refusal(state, 'unknown-item');
-      if (state.scene === SCENES.PACKING && action.item === 'tanago-box' && action.target === 'tap') {
-        if (item.location !== 'yard' || item.water !== 'empty') return refusal(state, 'item-unavailable');
-        next = copy(state); next.items['tanago-box'].location = 'tap'; next.items['tanago-box'].status = 'filling';
-        return withEvent(next, 'success', 'box-filling');
+    if (action.type === ACTIONS.CONTINUE_PAYOFF) {
+      if (state.phase !== 'observe' || !state.report || !state.report.success) return refusal(state, 'rehearsal-not-clean');
+      next = copy(state); next.phase = 'drive'; next.scene = 'drive'; next.payoffStep = 0; next.clockMinutes = 380; next.run = null;
+      return eventState(next, 'success', 'drive-started');
+    }
+    if (action.type === ACTIONS.DRIVE_TICK) {
+      if (state.phase !== 'drive') return refusal(state, 'wrong-phase');
+      next = copy(state); next.phase = 'lake'; next.scene = 'lake'; next.payoffStep = 0; next.clockMinutes = 426;
+      return eventState(next, 'success', 'lake-arrival');
+    }
+    if (action.type === ACTIONS.PAYOFF_TICK) {
+      if (state.phase !== 'lake') return refusal(state, 'wrong-phase');
+      next = copy(state); next.payoffStep += 1;
+      if (next.payoffStep >= 4) {
+        next.phase = 'home'; next.scene = 'home'; next.completed = true; next.clockMinutes = 520;
+        return eventState(next, 'complete', 'tutorial-complete');
       }
-      if (state.scene === SCENES.PACKING && action.target === 'trunk') {
-        if (action.item === 'tanago-box' && item.water !== 'full') return refusal(state, 'empty-box');
-        if (action.item !== 'tanago-box' && action.item !== 'suppon-tank') return refusal(state, 'choose-person');
-        if (item.status !== 'ready' || (item.location !== 'yard' && item.location !== 'tap')) return refusal(state, 'item-unavailable');
-        next = copy(state);
-        if (!startCooperativeCarry(next, action.item)) return refusal(state, 'both-needed');
-        return withEvent(next, 'success', 'cooperative-carry', { item: action.item });
-      }
-      if (state.scene === SCENES.LAKE && action.item === 'rods' && action.target === 'jetty') {
-        if (item.location !== 'trunk') return refusal(state, 'item-unavailable');
-        next = copy(state); next.items.rods.location = 'jetty'; next.items.rods.status = 'ready';
-        return withEvent(next, 'success', 'rods-at-jetty');
-      }
-      return refusal(state, 'invalid-move');
-    }
-    if (action.type === ACTIONS.FILL_COMPLETE) {
-      item = state.items['tanago-box'];
-      if (state.scene !== SCENES.PACKING || item.status !== 'filling' || item.location !== 'tap') return refusal(state, 'invalid-fill');
-      next = copy(state); item = next.items['tanago-box']; item.water = 'full'; item.status = 'ready'; next.packing.stationMinutes = 3; updatePackingClock(next);
-      return withEvent(next, 'success', 'box-filled');
-    }
-    if (action.type === ACTIONS.COMPLETE_COOP) {
-      if (state.scene !== SCENES.PACKING || !state.packing.coopItem) return refusal(state, 'invalid-cooperative-job');
-      next = copy(state); item = next.items[next.packing.coopItem]; definition = itemDefinition(item.id);
-      item.location = 'trunk'; item.status = 'loaded'; next.packing.coopMinutes += definition.minutes; next.packing.coopItem = null;
-      ACTORS.forEach(function (id) { next.actors[id].status = 'idle'; next.actors[id].current = null; beginQueuedJob(next, id); });
-      updatePackingClock(next); return withEvent(next, 'success', 'cooperative-loaded', { item: item.id });
-    }
-    if (action.type === ACTIONS.DEPART) {
-      if (!derive(state).canDepart) return refusal(state, 'not-ready');
-      next = copy(state); next.scene = SCENES.DRIVE; next.drive.detour = !derive(state).drinksLoaded;
-      return withEvent(next, next.drive.detour ? 'consequence' : 'success', next.drive.detour ? 'drinks-detour' : 'direct-drive');
-    }
-    if (action.type === ACTIONS.DETOUR_COMPLETE) {
-      if (state.scene !== SCENES.DRIVE || !state.drive.detour || state.drive.detourComplete) return refusal(state, 'invalid-detour');
-      next = copy(state); next.drive.detourComplete = true; next.items.drinks.location = 'cabin'; next.items.drinks.status = 'loaded'; next.items.drinks.owner = 'watanabe'; next.clockMinutes += 8;
-      return withEvent(next, 'consequence', 'detour-complete');
-    }
-    if (action.type === ACTIONS.ARRIVE_LAKE) {
-      if (state.scene !== SCENES.DRIVE || (state.drive.detour && !state.drive.detourComplete)) return refusal(state, 'drive-pending');
-      next = copy(state); next.scene = SCENES.LAKE; next.clockMinutes += 46;
-      return withEvent(next, 'success', 'lake-arrival');
-    }
-    if (action.type === ACTIONS.BAIT_HOOK) {
-      if (state.scene !== SCENES.LAKE || ['worms', 'chicken'].indexOf(action.item) < 0) return refusal(state, 'invalid-bait');
-      if (state.items.rods.location !== 'jetty') return refusal(state, 'rods-first');
-      if (state.lake.hookBait) return refusal(state, 'hook-occupied');
-      if (state.items[action.item].location !== 'trunk') return refusal(state, 'bait-unavailable');
-      if (action.item === 'chicken' && state.lake.tanago !== 'boxed') return refusal(state, 'tanago-first');
-      next = copy(state); next.lake.hookBait = action.item; next.items[action.item].location = 'hook'; next.items[action.item].status = 'baited';
-      return withEvent(next, 'success', 'hook-baited', { item: action.item });
-    }
-    if (action.type === ACTIONS.CAST) {
-      if (state.scene !== SCENES.LAKE || ['shallows', 'deep'].indexOf(action.zone) < 0) return refusal(state, 'invalid-cast');
-      if (state.items.rods.location !== 'jetty') return refusal(state, 'rods-first');
-      if (!state.lake.hookBait) return refusal(state, 'bare-hook');
-      if ((state.lake.hookBait === 'worms' && action.zone !== 'shallows') || (state.lake.hookBait === 'chicken' && action.zone !== 'deep')) return refusal(state, 'wrong-water');
-      next = copy(state); next.lake.castZone = action.zone;
-      if (next.lake.hookBait === 'worms') next.lake.tanago = 'bite'; else next.lake.suppon = 'fighting';
-      next.items[next.lake.hookBait].location = 'used'; next.items[next.lake.hookBait].status = 'used'; next.lake.hookBait = null;
-      return withEvent(next, 'success', action.zone === 'shallows' ? 'tanago-bite' : 'suppon-fight');
-    }
-    if (action.type === ACTIONS.REEL) {
-      if (state.scene !== SCENES.LAKE) return refusal(state, 'invalid-reel');
-      next = copy(state);
-      if (state.lake.tanago === 'bite') { next.lake.tanago = 'caught'; return withEvent(next, 'success', 'tanago-caught'); }
-      if (state.lake.suppon === 'fighting') { next.lake.suppon = 'caught'; return withEvent(next, 'success', 'suppon-caught'); }
-      return refusal(state, 'nothing-on-line');
-    }
-    if (action.type === ACTIONS.MOVE_CATCH) {
-      if (state.scene !== SCENES.LAKE || ['tanago', 'suppon'].indexOf(action.catch) < 0) return refusal(state, 'invalid-catch');
-      if (action.catch === 'suppon' && action.target === 'tanago-box') return refusal(state, 'wrong-container');
-      if (action.catch === 'tanago' && action.target !== 'tanago-box') return refusal(state, 'wrong-container');
-      if (action.catch === 'suppon' && action.target !== 'suppon-tank') return refusal(state, 'wrong-container');
-      if (state.lake[action.catch] !== 'caught') return refusal(state, 'catch-unavailable');
-      if (action.catch === 'tanago' && state.items['tanago-box'].water !== 'full') return refusal(state, 'empty-box');
-      next = copy(state); next.lake[action.catch] = action.catch === 'tanago' ? 'boxed' : 'tanked';
-      item = next.items[action.target]; item.contains = action.catch; item.status = 'occupied';
-      return withEvent(next, 'success', action.catch === 'tanago' ? 'tanago-boxed' : 'suppon-tanked');
-    }
-    if (action.type === ACTIONS.GO_HOME) {
-      if (!derive(state).canGoHome) return refusal(state, 'animals-not-secure');
-      next = copy(state); next.scene = SCENES.HOME; next.clockMinutes += 46;
-      return withEvent(next, 'success', 'home-arrival');
-    }
-    if (action.type === ACTIONS.PLACE_HOME) {
-      if (state.scene !== SCENES.HOME) return refusal(state, 'wrong-scene');
-      if (action.item === 'tanago-box' && action.target === 'home-tanago') {
-        next = copy(state); next.items['tanago-box'].location = 'home-tanago'; next.home.tanagoPlaced = true;
-      } else if (action.item === 'suppon-tank' && action.target === 'home-suppon') {
-        next = copy(state); next.items['suppon-tank'].location = 'home-suppon'; next.home.supponPlaced = true;
-      } else return refusal(state, 'wrong-home');
-      if (next.home.tanagoPlaced && next.home.supponPlaced) next.completed = true;
-      return withEvent(next, 'success', next.completed ? 'tutorial-complete' : 'home-placed', { item: action.item });
+      return eventState(next, 'success', ['lake-setup', 'tanago-secured', 'suppon-secured'][next.payoffStep - 1] || 'lake-payoff');
     }
     return refusal(state, 'invalid-action');
   }
+  function completionEnvelope(state, now) {
+    if (!state || !state.completed) return null;
+    return { kind: 'hikone-planning-tutorial', version: 3, completed: true, attempts: state.attempt, revisions: state.revision, completedAt: now || new Date().toISOString() };
+  }
+  function saveCompletion(storage, state, now) {
+    var envelope = completionEnvelope(state, now); if (!envelope || !storage || typeof storage.setItem !== 'function') return false;
+    try { storage.setItem(STORAGE_KEY, JSON.stringify(envelope)); return true; } catch (error) { return false; }
+  }
+  function loadCompletion(storage) {
+    if (!storage || typeof storage.getItem !== 'function') return null;
+    try {
+      var value = JSON.parse(storage.getItem(STORAGE_KEY) || 'null');
+      return value && value.kind === 'hikone-planning-tutorial' && value.version === 3 && value.completed === true ? value : null;
+    } catch (error) { return null; }
+  }
 
-  return { SCENES: SCENES, ACTORS: ACTORS, ITEMS: ITEMS, ACTIONS: ACTIONS, freshState: freshState, reduce: reduce, derive: derive };
+  return {
+    PHASES: PHASES, PEOPLE: PEOPLE, ITEMS: ITEMS, TASKS: TASKS, SLOTS: SLOTS, ACTIONS: ACTIONS, STORAGE_KEY: STORAGE_KEY,
+    freshState: freshState, reduce: reduce, derive: derive, simulatePlan: simulatePlan, buildCampaignPlan: buildCampaignPlan,
+    campaignEvidence: campaignEvidence, planFingerprint: planFingerprint, saveCompletion: saveCompletion, loadCompletion: loadCompletion
+  };
 });
 
 function boot(HIKONE) {
   'use strict';
-  var STORAGE_KEY = 'prs.hikone-tutorial.v1';
   var COPY = {
     en: {
-      actors: { cap: 'Cap', towel: 'Towel', watanabe: 'Watanabe-san' },
-      items: { rods: 'fishing rods', worms: 'worms', chicken: 'chicken bait', 'tanago-box': 'tanago water box', 'suppon-tank': 'suppon tank', drinks: 'drinks' },
-      zones: { tap: 'water tap', trunk: 'open trunk', jetty: 'jetty', hook: 'hook', shallows: 'tanago shallows', deep: 'deep water', 'home-tanago': 'tanago aquarium', 'home-suppon': 'suppon aquarium' },
-      location: { arrival: 'Ryokan Izumi · Yokkaichi', packing: 'Ryokan Izumi · Yokkaichi', drive: 'Yokkaichi → Hikone', lake: 'Lake Biwa · Hikone', home: 'Aquarium room' },
-      arrivalSpeech: 'I’ll drive my car to Hikone. You two load the rods, worms, chicken bait, water box, suppon tank—and remember drinks. The tanago and suppon are for separate aquariums, never food.',
-      arrivalObjective: 'Watanabe-san has arrived outside Ryokan Izumi.', arrivalHint: 'Take the car key to begin packing.', key: '🔑 Pack the car',
-      packingObjective: 'Use Cap and Towel to prepare Watanabe-san’s car.', packingHint: 'Tap a person, then an item—or drag an item onto them. Either person will call the other for a heavy container.',
-      depart: 'Close the hatch & go',
-      driveDirect: 'Everything is aboard. Straight to Lake Biwa.', driveDetour: 'No drinks. We have to stop on the way.', detourDone: 'Drinks collected. The missed item cost us a detour.',
-      lakeObjective: 'Use the equipment you packed.', lakeHint: 'Move rods to the jetty. Put bait on the hook, then choose the water.',
-      reel: 'Reel!', goodPrep: 'Good prep. Drinks up—kanpai!', home: 'Drive home', homeObjective: 'Bring each animal to its own aquarium.', homeHint: 'Move the water box and tank to their matching aquariums.',
-      replay: '↻ Replay', back: 'Journeys', complete: 'Both animals are safely in separate aquariums. Planning carried through to the end.',
-      soundOff: 'Sound off', soundOn: 'Sound on', exit: 'Exit',
+      actors: { prakhar: 'Prakhar', nishinaga: 'Nishinaga', watanabe: 'Watanabe-san' },
+      actorShort: { prakhar: 'Prakhar', nishinaga: 'Nishinaga', both: 'Both' },
+      items: { rods: 'fishing rods', worms: 'worms', chicken: 'chicken bait', 'tanago-box': 'tanago water box', 'suppon-tank': 'suppon carrier', drinks: 'drinks' },
+      tasks: {
+        'confirm-care': ['Confirm live transport', 'Separate aquariums; never food'], bait: ['Gather both baits', 'Worms for tanago · chicken for suppon'],
+        rods: ['Gather fishing rods', 'Check reels and stow together'], 'load-carriers': ['Load both carriers', 'A two-person lift; water box must be full'],
+        'fill-box': ['Fill tanago box', 'Prepare water before loading'], drinks: ['Get road drinks', 'Bring them into the car plan']
+      },
+      location: { arrival: 'Ryokan Izumi · Yokkaichi', packing: 'Ryokan Izumi · Yokkaichi', drive: 'Yokkaichi → Hikone', lake: 'Lake Biwa · Hikone', home: 'Separate aquarium room' },
+      loop: ['Plan', 'Run', 'Observe', 'Revise'],
+      arrivalSpeech: 'Hikone, Lake Biwa. I’ll drive my car. We leave at 06:20. Bring the tanago and suppon home alive, in separate aquariums—never as food. Prakhar, Nishinaga: prepare everything.',
+      arrivalObjective: 'Watanabe-san arrives outside Ryokan Izumi.', arrivalHint: 'Open the shared morning plan.', start: 'Open the plan',
+      planObjective: 'Build the morning before anyone moves.', planHint: 'Drag a task, or select it and choose a highlighted slot. Set people, time and information—then rehearse even if the plan is incomplete.',
+      planTitle: 'Hikone morning plan', planKicker: '05:50–06:20 · Ryokan Izumi', deck: 'Unplanned work', deckEmpty: 'Everything is on the timeline', remove: 'Move selected task to deck',
+      connection: 'Information handoff', connect: 'Connect face to face', connected: 'Connected · face to face', sameOwner: 'Already with Nishinaga', connectionHint: '“Live transport plan” must reach the person loading the carriers before that work starts.',
+      runPlan: 'Run rehearsal', frozen: 'Plan frozen for this run', runObjective: 'Watch the authored plan execute.',
+      runStatus: { idle: 'ready', working: 'working', waiting: 'waiting' },
+      observeObjective: 'Read the first cause, then return to its exact plan control.', reportKicker: 'Rehearsal evidence',
+      revise: 'Show in plan', reload: 'Reload tutorial', continue: 'Continue to Lake Biwa',
+      cleanTitle: 'The rehearsal is clean.', cleanSummary: 'Both people finish the trunk by 06:20. The plan—not a last-second rescue—made the trip ready.',
+      roots: {
+        'missing-handoff': ['Nishinaga waited at the trunk', 'The live-transport plan stayed with Prakhar. Draw a timed face-to-face handoff, or give the confirming task to the person who loads.'],
+        'late-handoff': ['The information arrived too late', 'Confirm the transport plan earlier, or move loading later.'],
+        'bad-order': ['The carrier reached the trunk empty', 'Filling the tanago box is planned after loading. Move Fill before Load; more than one schedule can work.'],
+        'drinks-missing': ['Drinks never entered the plan', 'The run would need an eight-minute roadside stop. Put Drinks on a person’s timeline.'],
+        'task-unplanned': ['Required work is still in the deck', 'Place that task on a person and a time before the next rehearsal.'],
+        overlap: ['One person has two jobs at once', 'Move or reassign one block. The rehearsal will not invent a second copy of that person.'],
+        'late-departure': ['The plan misses the 06:20 departure', 'Move or reassign the last task so the trunk is ready before Watanabe-san must drive.'],
+        'campaign-gap': ['The campaign engine found another plan gap', 'Return to the highlighted task and repair the campaign readiness evidence before continuing.'],
+        'engine-unavailable': ['The rehearsal engine is unavailable', 'Reload the tutorial so the same engine used by the Ogasawara campaign can verify this plan.']
+      },
+      evidence: 'Evidence', wait: 'Wait', detour: 'Detour', departure: 'Trunk ready', minutes: 'min', also: 'Also observed',
+      driveSpeech: 'The trunk matches the plan. I’ll drive.', driveObjective: 'Yokkaichi → Lake Biwa, Hikone',
+      lakeLines: ['The same prepared trunk opens at Lake Biwa.', 'Rods and bait deploy in the planned order.', 'Tanago goes straight into the water-filled box.', 'Suppon stays in its separate carrier.'],
+      homeObjective: 'The plan carried through to two separate aquariums.', complete: 'Plan → Run → Observe → Revise. This is the same loop you will use for Ogasawara.',
+      replay: 'Replay tutorial', campaign: 'Start Ogasawara campaign', soundOff: 'Sound off', soundOn: 'Sound on', exit: 'Exit',
       event: {
-        'packing-started': 'Choose Cap or Towel and give each person work.', 'item-assigned': 'Work assigned.', 'item-loaded': 'Loaded into the trunk.',
-        'empty-box': 'The tanago box is empty. Fill it at the tap first.', 'box-filling': 'Water runs into the tanago box…', 'box-filled': 'The water box is full—and now too heavy for one person.',
-        'both-needed': 'Both people must be free for that heavy container.', 'cooperative-carry': 'Cap and Towel lift together.', 'cooperative-loaded': 'Heavy container loaded together.',
-        'not-ready': 'Fishing equipment is still missing.', 'drinks-detour': 'The car leaves—but nobody loaded the drinks.', 'direct-drive': 'No missing stop. Straight to Hikone.',
-        'detour-complete': 'Drinks collected during the detour.', 'lake-arrival': 'Lake Biwa. Open the same trunk and use what you packed.',
-        'rods-first': 'Take the rods to the jetty first.', 'rods-at-jetty': 'Rods ready at the jetty.', 'bare-hook': 'A bare hook will not attract anything.',
-        'tanago-first': 'Catch and secure the tanago first.', 'hook-baited': 'Bait is on the hook.', 'wrong-water': 'That bait belongs in the other fishing spot.',
-        'tanago-bite': 'The float dips in the shallows!', 'suppon-fight': 'Something heavy pulls from the deep—hold the line!',
-        'tanago-caught': 'Tanago caught. Put it straight into the water box.', 'suppon-caught': 'Suppon brought to shore. Choose its container carefully.',
-        'wrong-container': 'Not the fish box. The suppon needs its separate tank.', 'tanago-boxed': 'The tanago swims in the prepared water box.', 'suppon-tanked': 'The suppon is secured in its separate tank.',
-        'animals-not-secure': 'Secure both animals before driving home.', 'home-arrival': 'Back home. Two animals, two separate aquariums.', 'wrong-home': 'That is the other animal’s aquarium.',
-        'home-placed': 'One aquarium is ready.', 'tutorial-complete': 'Complete: both aquarium homes are ready.', 'choose-person': 'Choose Cap or Towel to carry that item.',
-        'item-unavailable': 'That item is already being handled.', 'invalid-move': 'That does not belong there.', 'nothing-on-line': 'Nothing is pulling the line yet.'
+        'plan-opened': 'The world is the evidence. The timeline is the control surface.', 'task-moved': 'Task placed on the shared timeline.', 'task-unplanned': 'Task returned to the deck.',
+        'selection-cancelled': 'Task move cancelled.',
+        'handoff-connected': 'Face-to-face handoff drawn.', 'handoff-removed': 'Handoff removed.', 'run-started': 'The plan is frozen. Rehearsal started.',
+        'handoff-wait': 'Nishinaga is waiting: the transport plan never arrived.', 'handoff-late': 'The transport plan arrived after loading was due.',
+        'empty-box-wait': 'Loading waits. The tanago box is still empty.', 'handoff-delivered': 'The live-transport plan reaches Nishinaga.',
+        'run-needs-revision': 'The rehearsal found a plan gap.', 'run-clean': 'The rehearsal reaches 06:20 cleanly.', 'report-gap': 'Observe the cause, then revise the plan.',
+        'report-clean': 'The rehearsal is clean.', 'revision-opened': 'The exact plan control is highlighted.', 'drive-started': 'The clean plan becomes the real trip.',
+        'lake-arrival': 'Lake Biwa. The prepared plan is ready to deploy.', 'lake-setup': 'Rods and bait deploy from the trunk.', 'tanago-secured': 'Tanago is secured in the water-filled box.',
+        'suppon-secured': 'Suppon is secured separately.', 'tutorial-complete': 'The animals arrive at two separate aquariums.',
+        'both-required': 'Loading the carriers uses both people.', 'single-owner-task': 'Choose one person for this task.', 'planning-closed': 'Return to the plan before editing.'
       }
     },
     ja: {
-      actors: { cap: 'キャップ', towel: 'タオル', watanabe: '渡辺さん' },
+      actors: { prakhar: 'プラカール', nishinaga: '西永', watanabe: '渡邊さん' },
+      actorShort: { prakhar: 'プラカール', nishinaga: '西永', both: '二人' },
       items: { rods: '釣り竿', worms: 'ミミズ', chicken: '鶏肉のエサ', 'tanago-box': 'タナゴ用水箱', 'suppon-tank': 'スッポン用ケース', drinks: '飲み物' },
-      zones: { tap: '水道', trunk: '開いたトランク', jetty: '桟橋', hook: '針', shallows: 'タナゴの浅瀬', deep: '深場', 'home-tanago': 'タナゴ水槽', 'home-suppon': 'スッポン水槽' },
-      location: { arrival: '旅館いずみ・四日市', packing: '旅館いずみ・四日市', drive: '四日市 → 彦根', lake: '琵琶湖・彦根', home: '水槽の部屋' },
-      arrivalSpeech: '私の車で彦根へ行きます。二人で竿、ミミズ、鶏肉のエサ、水箱、スッポン用ケースを積んで。飲み物も忘れずに。タナゴとスッポンは別々の水槽へ迎え、食用ではありません。',
-      arrivalObjective: '渡辺さんが旅館いずみ前に到着しました。', arrivalHint: '車の鍵から準備を始めます。', key: '🔑 車に積む',
-      packingObjective: 'キャップとタオルで渡辺さんの車を準備します。', packingHint: '人をタップしてから物をタップ。ドラッグでも操作できます。重いケースではもう一人を呼びます。',
-      depart: 'ハッチを閉めて出発',
-      driveDirect: '全部あります。琵琶湖へ直行します。', driveDetour: '飲み物がない。途中で寄り道です。', detourDone: '飲み物を購入。忘れ物で寄り道になりました。',
-      lakeObjective: '積んだ道具を実際に使います。', lakeHint: '竿を桟橋へ。針にエサを付け、釣る場所を選びます。',
-      reel: '引き上げる！', goodPrep: 'いい準備だ。飲み物で乾杯！', home: '家へ帰る', homeObjective: 'それぞれ別の水槽へ迎えます。', homeHint: '水箱とケースを正しい水槽へ。',
-      replay: '↻ もう一度', back: '旅を選ぶ', complete: 'タナゴとスッポンを別々の水槽へ迎えました。計画が最後までつながりました。',
-      soundOff: '音声オフ', soundOn: '音声オン', exit: '退出',
+      tasks: {
+        'confirm-care': ['生体運搬を確認', '別々の水槽へ。食用ではない'], bait: ['二つのエサを用意', 'タナゴはミミズ・スッポンは鶏肉'],
+        rods: ['釣り竿を用意', 'リールを確認してまとめる'], 'load-carriers': ['二つのケースを積む', '二人で運ぶ。水箱には先に水が必要'],
+        'fill-box': ['タナゴ用水箱に水', '積み込む前に水を準備'], drinks: ['道中の飲み物', '車の計画に入れる']
+      },
+      location: { arrival: '旅館いずみ・四日市', packing: '旅館いずみ・四日市', drive: '四日市 → 彦根', lake: '琵琶湖・彦根', home: '別々の水槽の部屋' },
+      loop: ['計画', '実行', '観察', '修正'],
+      arrivalSpeech: '彦根の琵琶湖へ行こう。私の車で、運転は私。06:20出発だ。タナゴとスッポンは生きたまま別々の水槽へ迎える。食用ではない。プラカール、西永、二人で全部準備して。',
+      arrivalObjective: '渡邊さんが旅館いずみ前に到着。', arrivalHint: '共有の朝計画を開きます。', start: '計画を開く',
+      planObjective: '人が動く前に、朝を組み立てます。', planHint: '仕事をドラッグ、または選択して強調枠へ配置。人・時刻・情報を決め、不完全でも実行します。',
+      planTitle: '彦根の朝計画', planKicker: '05:50–06:20・旅館いずみ', deck: '未配置の仕事', deckEmpty: 'すべてタイムライン上にあります', remove: '選択中の仕事を未配置へ',
+      connection: '情報の受け渡し', connect: '対面でつなぐ', connected: '接続済み・対面', sameOwner: 'すでに西永が保有', connectionHint: '「生体運搬計画」はケース積込の開始前に担当者へ届く必要があります。',
+      runPlan: 'リハーサル実行', frozen: 'この実行では計画を固定', runObjective: '作成した計画が動く様子を観察します。',
+      runStatus: { idle: '待機', working: '作業中', waiting: '手待ち' },
+      observeObjective: '最初の原因を読み、該当する計画箇所へ戻ります。', reportKicker: 'リハーサルの証拠', revise: '計画で確認', reload: 'チュートリアルを再読込', continue: '琵琶湖へ進む',
+      cleanTitle: 'クリーンなリハーサルです。', cleanSummary: '二人が06:20までに積込を完了。直前の救済ではなく、計画によって準備できました。',
+      roots: {
+        'missing-handoff': ['西永がトランク前で手待ち', '生体運搬計画がプラカールの手元に残りました。時間のある対面連絡を引くか、確認作業を積込担当へ移します。'],
+        'late-handoff': ['情報の到着が遅い', '生体運搬の確認を早めるか、積込を後ろへ移します。'],
+        'bad-order': ['空の水箱がトランクへ', 'タナゴ用水箱への給水が積込より後です。給水を先へ。正解は一つではありません。'],
+        'drinks-missing': ['飲み物が計画にない', '道中で8分の寄り道が必要になります。飲み物を人と時刻に配置します。'],
+        'task-unplanned': ['必要な仕事が未配置です', '次の実行前に、人と時刻を決めます。'],
+        overlap: ['一人に同時刻の仕事が二つ', '片方を移動または再担当。リハーサルは人を分身させません。'],
+        'late-departure': ['06:20の出発に間に合いません', '最後の仕事を移動または再担当し、渡邊さんの出発前にトランクを準備します。'],
+        'campaign-gap': ['キャンペーンエンジンが別の不備を検出', '強調された仕事に戻り、次へ進む前に準備判定を修正します。'],
+        'engine-unavailable': ['リハーサルエンジンを利用できません', '再読み込みし、小笠原キャンペーンと同じエンジンで計画を確認します。']
+      },
+      evidence: '証拠', wait: '手待ち', detour: '寄り道', departure: 'トランク準備', minutes: '分', also: 'ほかの観察',
+      driveSpeech: 'トランクが計画どおりだ。運転は私に任せて。', driveObjective: '四日市 → 彦根・琵琶湖',
+      lakeLines: ['琵琶湖で同じトランクが開きます。', '竿とエサを計画した順に使います。', 'タナゴは水入りの箱へ。', 'スッポンは別のケースへ。'],
+      homeObjective: '計画は二つの別々の水槽までつながりました。', complete: '計画 → 実行 → 観察 → 修正。小笠原でも同じ流れを使います。',
+      replay: 'もう一度', campaign: '小笠原キャンペーンへ', soundOff: '音声オフ', soundOn: '音声オン', exit: '退出',
       event: {
-        'packing-started': 'キャップかタオルを選び、準備を分担します。', 'item-assigned': '担当を決めました。', 'item-loaded': 'トランクへ積みました。',
-        'empty-box': 'タナゴ用の箱が空です。先に水道で水を入れます。', 'box-filling': 'タナゴ用の箱に水を入れています…', 'box-filled': '水が入り、一人では重くなりました。',
-        'both-needed': '重いケースには二人の手が必要です。', 'cooperative-carry': '二人で持ち上げます。', 'cooperative-loaded': '二人で重いケースを積みました。',
-        'not-ready': 'まだ釣り道具が足りません。', 'drinks-detour': '出発しましたが、飲み物を積んでいません。', 'direct-drive': '忘れ物なし。彦根へ直行です。',
-        'detour-complete': '寄り道で飲み物を用意しました。', 'lake-arrival': '琵琶湖です。同じトランクの道具を使います。',
-        'rods-first': 'まず竿を桟橋へ。', 'rods-at-jetty': '竿を桟橋に用意しました。', 'bare-hook': 'エサのない針では釣れません。',
-        'tanago-first': '先にタナゴを釣って水箱へ。', 'hook-baited': '針にエサを付けました。', 'wrong-water': 'そのエサはもう一方の釣り場で使います。',
-        'tanago-bite': '浅瀬でウキが沈みました！', 'suppon-fight': '深場から強い引き。糸を保って！',
-        'tanago-caught': 'タナゴを釣りました。水入りの箱へ。', 'suppon-caught': 'スッポンを岸へ。正しいケースを選びます。',
-        'wrong-container': '魚の箱ではありません。スッポンは別のケースへ。', 'tanago-boxed': 'タナゴが水箱で泳いでいます。', 'suppon-tanked': 'スッポンを別のケースに確保しました。',
-        'animals-not-secure': '両方を安全にケースへ入れてから帰ります。', 'home-arrival': '帰宅。二匹には別々の水槽があります。', 'wrong-home': 'それはもう一方の水槽です。',
-        'home-placed': '一つの水槽へ迎えました。', 'tutorial-complete': '完了：両方の水槽へ迎えました。', 'choose-person': 'キャップかタオルを担当に選びます。',
-        'item-unavailable': 'その物はすでに運んでいます。', 'invalid-move': 'そこには置けません。', 'nothing-on-line': 'まだ引きはありません。'
+        'plan-opened': '世界が証拠、タイムラインが操作面です。', 'task-moved': '仕事を共有タイムラインへ配置しました。', 'task-unplanned': '仕事を未配置へ戻しました。',
+        'selection-cancelled': '仕事の移動を取り消しました。',
+        'handoff-connected': '対面の情報線を引きました。', 'handoff-removed': '情報線を外しました。', 'run-started': '計画を固定して実行開始。',
+        'handoff-wait': '西永が手待ち：生体運搬計画が届いていません。', 'handoff-late': '生体運搬計画の到着が積込開始より後です。',
+        'empty-box-wait': '積込が停止。タナゴ用水箱はまだ空です。', 'handoff-delivered': '生体運搬計画が西永へ届きました。',
+        'run-needs-revision': 'リハーサルが計画の弱点を発見。', 'run-clean': '06:20までクリーンに到達。', 'report-gap': '原因を観察し、計画を修正します。',
+        'report-clean': 'クリーンなリハーサルです。', 'revision-opened': '該当する計画箇所を強調しました。', 'drive-started': 'クリーンな計画が実際の旅になります。',
+        'lake-arrival': '琵琶湖。準備した計画を使います。', 'lake-setup': 'トランクから竿とエサを展開。', 'tanago-secured': 'タナゴを水入りの箱へ。',
+        'suppon-secured': 'スッポンを別のケースへ。', 'tutorial-complete': '二匹が別々の水槽へ到着。',
+        'both-required': 'ケース積込には二人が必要です。', 'single-owner-task': 'この仕事は一人を選びます。', 'planning-closed': '編集するには計画へ戻ります。'
       }
     }
   };
 
-  var app = document.getElementById('hk-app');
-  var stage = document.getElementById('hk-stage');
-  var scene = document.getElementById('hk-scene') || document.getElementById('hk-world');
-  var objective = document.getElementById('hk-objective');
-  var hint = document.getElementById('hk-hint');
-  var speech = document.getElementById('hk-speech');
-  var speaker = document.getElementById('hk-speaker');
-  var toast = document.getElementById('hk-toast');
-  var actions = document.getElementById('hk-actions');
-  var clock = document.getElementById('hk-clock');
-  var locationLabel = document.getElementById('hk-location');
-  var live = document.getElementById('hk-live');
-  var langEn = document.getElementById('hk-lang-en');
-  var langJa = document.getElementById('hk-lang-ja');
-  var soundButton = document.getElementById('hk-sound');
-  var exit = document.querySelector('.hk-exit');
+  var app = document.getElementById('hk-app'), stage = document.getElementById('hk-stage');
+  var scene = document.getElementById('hk-scene'), planPanel = document.getElementById('hk-plan'), runPanel = document.getElementById('hk-run'), reportPanel = document.getElementById('hk-report');
+  var objective = document.getElementById('hk-objective'), hint = document.getElementById('hk-hint'), speech = document.getElementById('hk-speech'), speaker = document.getElementById('hk-speaker');
+  var toast = document.getElementById('hk-toast'), actions = document.getElementById('hk-actions'), clock = document.getElementById('hk-clock'), locationLabel = document.getElementById('hk-location');
+  var live = document.getElementById('hk-live'), langEn = document.getElementById('hk-lang-en'), langJa = document.getElementById('hk-lang-ja'), soundButton = document.getElementById('hk-sound'), exit = document.querySelector('.hk-exit');
   var reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
-  var state = HIKONE.freshState();
-  var selected = null;
-  var sound = false;
-  var timers = {};
-  var audioContext = null;
-  var drag = null;
-  var suppressClickUntil = 0;
+  var state = HIKONE.freshState(), selectedTask = null, sound = false, audioContext = null, timers = {}, drag = null, suppressClickUntil = 0, lastFocusedTarget = null, lastReportFocusKey = null, pendingPlanFocus = null;
   document.body.classList.remove('no-js');
 
   function c() { return COPY[state.language]; }
-  function labelItem(id) { return c().items[id] || id; }
+  function esc(value) { return String(value == null ? '' : value).replace(/[&<>"']/g, function (ch) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]; }); }
+  function formatClock(total) { var hour = Math.floor(total / 60) % 24, minute = total % 60; return (hour < 10 ? '0' : '') + hour + ':' + (minute < 10 ? '0' : '') + minute; }
+  function setText(element, value) { value = String(value == null ? '' : value); if (element.textContent !== value) element.textContent = value; }
   function announce(message) { live.textContent = ''; window.setTimeout(function () { live.textContent = message; }, 10); }
   function tone(kind) {
     if (!sound) return;
     try {
       audioContext = audioContext || new (window.AudioContext || window.webkitAudioContext)();
-      var oscillator = audioContext.createOscillator(); var gain = audioContext.createGain();
-      oscillator.frequency.value = kind === 'refusal' ? 190 : kind === 'complete' ? 720 : 430;
-      gain.gain.setValueAtTime(.0001, audioContext.currentTime); gain.gain.exponentialRampToValueAtTime(.05, audioContext.currentTime + .01); gain.gain.exponentialRampToValueAtTime(.0001, audioContext.currentTime + .16);
+      var oscillator = audioContext.createOscillator(), gain = audioContext.createGain();
+      oscillator.frequency.value = kind === 'wait' ? 190 : kind === 'complete' ? 720 : 430;
+      gain.gain.setValueAtTime(.0001, audioContext.currentTime); gain.gain.exponentialRampToValueAtTime(.045, audioContext.currentTime + .01); gain.gain.exponentialRampToValueAtTime(.0001, audioContext.currentTime + .16);
       oscillator.connect(gain).connect(audioContext.destination); oscillator.start(); oscillator.stop(audioContext.currentTime + .18);
     } catch (error) { sound = false; }
   }
   function showEvent(event) {
-    var text = c().event[event.code] || event.code.replace(/-/g, ' ');
+    var text = c().event[event.code]; if (!text) return;
     toast.textContent = text; toast.classList.add('is-visible'); announce(text);
-    window.clearTimeout(timers.toast); timers.toast = window.setTimeout(function () { toast.textContent = ''; toast.classList.remove('is-visible'); }, reducedMotion.matches ? 1800 : 2400);
-    tone(event.type === 'refusal' ? 'refusal' : event.code === 'tutorial-complete' ? 'complete' : 'success');
-    if (event.type === 'refusal') {
-      var reject = null, cue = null;
-      if (event.code === 'empty-box') { reject = scene.querySelector('[data-object="tanago-box"]'); cue = scene.querySelector('[data-zone="tap"]'); }
-      if (event.code === 'bare-hook') cue = scene.querySelector('[data-object="' + (state.lake.tanago === 'boxed' ? 'chicken' : 'worms') + '"]');
-      if (event.code === 'wrong-container') { reject = scene.querySelector('[data-object="tanago-box"]'); cue = scene.querySelector('[data-object="suppon-tank"]'); }
-      if (event.code === 'wrong-water') cue = scene.querySelector('[data-zone="' + (state.lake.hookBait === 'worms' ? 'shallows' : 'deep') + '"]');
-      if (reject) { reject.classList.add('is-reject'); window.setTimeout(function () { reject.classList.remove('is-reject'); }, 700); }
-      if (cue) { cue.classList.add('is-missing', 'is-target'); window.setTimeout(function () { cue.classList.remove('is-missing', 'is-target'); }, 1500); }
-    }
+    window.clearTimeout(timers.toast); timers.toast = window.setTimeout(function () { toast.textContent = ''; toast.classList.remove('is-visible'); }, reducedMotion.matches ? 1300 : 2100);
+    tone(event.type === 'refusal' || event.type === 'consequence' || /wait|gap/.test(event.code) ? 'wait' : event.type === 'complete' ? 'complete' : 'success');
   }
-  function formatClock(total) { var hour = Math.floor(total / 60) % 24; var minute = total % 60; return (hour < 10 ? '0' : '') + hour + ':' + (minute < 10 ? '0' : '') + minute; }
-  function button(markup) { var holder = document.createElement('div'); holder.innerHTML = markup.trim(); return holder.firstChild; }
+  function loopStrip(active) {
+    return '<ol class="hk-loop" aria-label="' + esc(c().loop.join(' → ')) + '">' + c().loop.map(function (label, index) {
+      var steps = ['plan', 'run', 'observe', 'revise'], status = steps[index] === active ? ' is-current' : '';
+      if ((active === 'run' && index === 0) || (active === 'observe' && index < 2) || (active === 'revise' && index < 3)) status += ' is-done';
+      return '<li class="' + status.trim() + '"><span>' + (index + 1) + '</span><b>' + esc(label) + '</b></li>';
+    }).join('') + '</ol>';
+  }
   function buildWorld() {
     scene.innerHTML = '';
-    ['cap', 'towel', 'watanabe'].forEach(function (id) {
-      scene.appendChild(button('<button type="button" class="hk-person hk-actor" data-person="' + id + '" data-actor="' + id + '" data-name="' + c().actors[id] + '" aria-label="' + c().actors[id] + '"></button>'));
+    ['prakhar', 'nishinaga', 'watanabe'].forEach(function (id) {
+      var element = document.createElement('div'); element.className = 'hk-person hk-actor'; element.dataset.person = id; element.dataset.actor = id; element.dataset.name = c().actors[id]; element.setAttribute('role', 'img'); element.setAttribute('aria-label', c().actors[id]); scene.appendChild(element);
     });
     HIKONE.ITEMS.forEach(function (definition) {
-      scene.appendChild(button('<button type="button" class="hk-prop hk-item" data-card="' + definition.id + '" data-object="' + definition.id + '" data-item="' + definition.id + '" aria-label="' + labelItem(definition.id) + '"><span class="hk-sr-label">' + labelItem(definition.id) + '</span></button>'));
+      var element = document.createElement('div'); element.className = 'hk-prop hk-item'; element.dataset.card = definition.id; element.dataset.object = definition.id; element.dataset.item = definition.id; element.setAttribute('role', 'img'); element.setAttribute('aria-label', c().items[definition.id]);
+      element.innerHTML = '<span class="hk-sr-label">' + esc(c().items[definition.id]) + '</span>'; scene.appendChild(element);
     });
-    ['tap', 'trunk', 'jetty', 'hook', 'shallows', 'deep', 'home-tanago', 'home-suppon'].forEach(function (id) {
-      scene.appendChild(button('<button type="button" class="hk-zone" data-zone="' + id + '" aria-label="' + c().zones[id] + '">' + c().zones[id] + '</button>'));
-    });
-    scene.appendChild(button('<button type="button" class="hk-catch hk-catch-tanago" data-catch="tanago" aria-label="Tanago / タナゴ">🐟</button>'));
-    scene.appendChild(button('<button type="button" class="hk-catch hk-catch-suppon" data-catch="suppon" aria-label="Suppon / スッポン">🐢</button>'));
+    var tanago = document.createElement('span'); tanago.className = 'hk-catch hk-catch-tanago'; tanago.dataset.catch = 'tanago'; tanago.setAttribute('role', 'img'); tanago.setAttribute('aria-label', 'Tanago / タナゴ'); scene.appendChild(tanago);
+    var suppon = document.createElement('span'); suppon.className = 'hk-catch hk-catch-suppon'; suppon.dataset.catch = 'suppon'; suppon.setAttribute('role', 'img'); suppon.setAttribute('aria-label', 'Suppon / スッポン'); scene.appendChild(suppon);
+  }
+  function defaultItems() {
+    var out = {}; HIKONE.ITEMS.forEach(function (item) { out[item.id] = { id: item.id, location: item.id === 'drinks' ? 'vending' : 'yard', status: item.id === 'tanago-box' ? 'empty' : 'ready', water: item.id === 'tanago-box' ? 'empty' : null, contains: null }; }); return out;
+  }
+  function physicalItems() {
+    if ((state.phase === 'run' || state.phase === 'observe') && state.run && state.run.frame) return state.run.frame.items;
+    var items = defaultItems();
+    if (state.phase === 'drive') return items;
+    if (state.phase === 'lake' || state.phase === 'home') {
+      ['rods', 'worms', 'chicken', 'tanago-box', 'suppon-tank'].forEach(function (id) { items[id].location = 'trunk'; items[id].status = 'loaded'; });
+      items['tanago-box'].water = 'full'; items.drinks.location = 'cabin'; items.drinks.status = 'loaded';
+      if (state.payoffStep >= 1 || state.phase === 'home') items.rods.location = 'jetty';
+      if (state.payoffStep >= 2 || state.phase === 'home') { items['tanago-box'].contains = 'tanago'; items['tanago-box'].status = 'occupied'; }
+      if (state.payoffStep >= 3 || state.phase === 'home') { items['suppon-tank'].contains = 'suppon'; items['suppon-tank'].status = 'occupied'; }
+      if (state.phase === 'home') { items['tanago-box'].location = 'home-tanago'; items['suppon-tank'].location = 'home-suppon'; }
+    }
+    return items;
+  }
+  function actorFrame() {
+    if (state.phase === 'run' && state.run && state.run.frame) return state.run.frame.actors;
+    return { prakhar: { status: 'idle', taskId: null }, nishinaga: { status: 'idle', taskId: null }, watanabe: { status: 'waiting', taskId: null } };
   }
   function setVisible(element, visible) { element.hidden = !visible; element.setAttribute('aria-hidden', visible ? 'false' : 'true'); }
   function renderWorld() {
-    app.dataset.scene = state.scene; stage.dataset.phase = state.scene;
-    document.documentElement.lang = state.language; locationLabel.textContent = c().location[state.scene]; clock.textContent = formatClock(state.clockMinutes);
+    app.dataset.scene = state.scene; app.dataset.mode = state.phase; stage.dataset.phase = state.phase; document.documentElement.lang = state.language;
+    locationLabel.textContent = c().location[state.scene] || c().location.packing; clock.textContent = formatClock(state.clockMinutes);
+    var actors = actorFrame();
     scene.querySelectorAll('[data-person]').forEach(function (element) {
-      var id = element.dataset.person; element.dataset.name = c().actors[id]; element.setAttribute('aria-label', c().actors[id]);
-      var actorState = state.actors[id]; element.dataset.status = actorState ? actorState.status : 'waiting';
-      element.classList.toggle('is-working', !!actorState && actorState.status === 'working'); element.classList.toggle('is-selected', !!selected && selected.kind === 'actor' && selected.id === id);
-      element.classList.toggle('is-target', state.scene === 'packing' && id !== 'watanabe' && !!selected && selected.kind === 'item');
-      setVisible(element, state.scene !== 'drive' && state.scene !== 'home'); element.disabled = id === 'watanabe' || state.scene !== 'packing';
+      var id = element.dataset.person, info = actors[id] || { status: 'waiting' }; element.dataset.name = c().actors[id]; element.setAttribute('aria-label', c().actors[id]); element.dataset.status = info.status;
+      element.classList.toggle('is-working', info.status === 'working'); element.classList.toggle('is-waiting', info.status === 'waiting'); element.dataset.task = info.taskId || '';
+      setVisible(element, state.phase !== 'drive' && state.phase !== 'home');
     });
+    var items = physicalItems();
     scene.querySelectorAll('[data-object]').forEach(function (element) {
-      var id = element.dataset.object; var item = state.items[id];
-      element.setAttribute('aria-label', labelItem(id)); element.dataset.location = item.location; element.dataset.state = id === 'tanago-box' && item.water === 'full' ? 'filled' : item.status; element.dataset.filled = id === 'tanago-box' && item.water === 'full' ? 'true' : 'false'; element.dataset.owner = item.owner || '';
-      element.classList.toggle('is-selected', !!selected && selected.kind === 'item' && selected.id === id);
-      element.classList.toggle('is-target', state.scene === 'lake' && !!selected && selected.kind === 'catch' && ['tanago-box', 'suppon-tank'].indexOf(id) >= 0);
-      element.classList.toggle('is-loaded', ['trunk', 'cabin'].indexOf(item.location) >= 0); element.classList.toggle('is-ready', item.status === 'ready' || item.status === 'occupied');
-      element.classList.toggle('is-missing', state.scene === 'packing' && state.lastEvent.code === 'not-ready' && ['trunk', 'cabin'].indexOf(item.location) < 0);
-      var visible = state.scene === 'packing' || (state.scene === 'lake' && item.location !== 'used') || (state.scene === 'home' && (id === 'tanago-box' || id === 'suppon-tank'));
-      setVisible(element, visible); element.disabled = !visible || item.status === 'working' || item.status === 'moving' || item.status === 'filling';
+      var item = items[element.dataset.object]; element.dataset.location = item.location; element.dataset.state = item.water === 'full' ? 'filled' : item.status; element.dataset.filled = item.water === 'full' ? 'true' : 'false'; element.setAttribute('aria-label', c().items[item.id]);
+      var visible = ['plan', 'run', 'observe', 'lake'].indexOf(state.phase) >= 0 || (state.phase === 'home' && (item.id === 'tanago-box' || item.id === 'suppon-tank'));
+      setVisible(element, visible);
     });
-    scene.querySelectorAll('[data-zone]').forEach(function (element) {
-      var zone = element.dataset.zone; var visible = state.scene === 'packing' ? (zone === 'tap' || zone === 'trunk') : state.scene === 'lake' ? ['jetty', 'hook', 'shallows', 'deep'].indexOf(zone) >= 0 : state.scene === 'home' ? zone.indexOf('home-') === 0 : false;
-      var targetable = false;
-      if (visible && selected && selected.kind === 'item') {
-        if (state.scene === 'packing') targetable = (selected.id === 'tanago-box' && state.lastEvent.code === 'empty-box' && zone === 'tap') || (['tanago-box', 'suppon-tank'].indexOf(selected.id) >= 0 && zone === 'trunk');
-        if (state.scene === 'lake') targetable = (selected.id === 'rods' && zone === 'jetty') || (['worms', 'chicken'].indexOf(selected.id) >= 0 && zone === 'hook');
-        if (state.scene === 'home') targetable = (selected.id === 'tanago-box' && zone === 'home-tanago') || (selected.id === 'suppon-tank' && zone === 'home-suppon');
-      }
-      if (visible && !selected && state.scene === 'lake' && state.items.rods.location === 'jetty') {
-        targetable = (state.lake.tanago === 'waiting' && zone === 'shallows') || (state.lake.tanago === 'boxed' && state.lake.suppon === 'waiting' && zone === 'deep');
-      }
-      setVisible(element, visible); element.classList.toggle('is-target', targetable); element.classList.toggle('is-active', (zone === 'hook' && !!state.lake.hookBait) || (zone === 'jetty' && state.items.rods.location === 'jetty'));
-    });
-    var tanagoCatch = scene.querySelector('[data-catch="tanago"]'); var supponCatch = scene.querySelector('[data-catch="suppon"]');
-    setVisible(tanagoCatch, state.scene === 'lake' && state.lake.tanago === 'caught'); setVisible(supponCatch, state.scene === 'lake' && state.lake.suppon === 'caught');
-    tanagoCatch.classList.toggle('is-selected', !!selected && selected.kind === 'catch' && selected.id === 'tanago'); supponCatch.classList.toggle('is-selected', !!selected && selected.kind === 'catch' && selected.id === 'suppon');
-    var homeWorld = document.querySelector('.hk-home-aquariums');
-    homeWorld.classList.toggle('has-tanago', state.home.tanagoPlaced); homeWorld.classList.toggle('has-suppon', state.home.supponPlaced);
+    var tanago = scene.querySelector('[data-catch="tanago"]'), suppon = scene.querySelector('[data-catch="suppon"]');
+    setVisible(tanago, state.phase === 'lake' && state.payoffStep >= 2); setVisible(suppon, state.phase === 'lake' && state.payoffStep >= 3);
+    var home = document.querySelector('.hk-home-aquariums'); home.classList.toggle('has-tanago', state.phase === 'home'); home.classList.toggle('has-suppon', state.phase === 'home');
+  }
+  function taskCopy(id) { return c().tasks[id] || [id, '']; }
+  function planFocusKey(element) {
+    if (!element || typeof element.closest !== 'function' || !planPanel.contains(element)) return null;
+    var task = element.closest('[data-task]'), slot = element.closest('[data-slot]');
+    if (task) return { type: 'task', id: task.dataset.task };
+    if (slot) return { type: 'slot', person: slot.dataset.person, minute: slot.dataset.minute };
+    if (element.closest('[data-deck-drop]')) return { type: 'deck-drop' };
+    if (element.closest('[data-connect]')) return { type: 'handoff' };
+    if (element.closest('[data-run-plan]')) return { type: 'run' };
+    return null;
+  }
+  function findPlanFocus(key) {
+    if (!key) return null;
+    if (key.type === 'task') return Array.prototype.slice.call(planPanel.querySelectorAll('[data-task]')).filter(function (element) { return element.dataset.task === key.id; })[0] || null;
+    if (key.type === 'slot') return Array.prototype.slice.call(planPanel.querySelectorAll('[data-slot]')).filter(function (element) { return element.dataset.person === key.person && element.dataset.minute === key.minute; })[0] || null;
+    if (key.type === 'deck-drop') return planPanel.querySelector('[data-deck-drop]');
+    if (key.type === 'handoff') return planPanel.querySelector('[data-connect]');
+    if (key.type === 'run') return planPanel.querySelector('[data-run-plan]');
+    return null;
+  }
+  function revealAndFocus(target, pulse) {
+    if (!target) return;
+    if (pulse) target.classList.add('is-focus-target');
+    window.setTimeout(function () {
+      try { target.scrollIntoView({ block: 'nearest', inline: 'center' }); } catch (error) {}
+      try { target.focus({ preventScroll: true }); } catch (error) { target.focus(); }
+    }, 20);
+  }
+  function taskBlock(task, laneId, mirror) {
+    var def = HIKONE.TASKS.filter(function (entry) { return entry.id === task.id; })[0], text = taskCopy(task.id), col = HIKONE.SLOTS.indexOf(task.startMin) + 2, span = Math.max(1, def.duration / 5);
+    if (col < 2) col = 2;
+    if (mirror) return '<span class="hk-task-block is-coop is-mirror" aria-hidden="true" style="grid-column:' + col + '/span ' + span + '"><b>' + esc(text[0]) + '</b></span>';
+    return '<button type="button" class="hk-task-block' + (task.actor === 'both' ? ' is-coop' : '') + (selectedTask === task.id ? ' is-selected' : '') + '" data-task="' + esc(task.id) + '" data-fix-target="' + esc(task.id) + '" style="grid-column:' + col + '/span ' + span + '" tabindex="' + (selectedTask && selectedTask !== task.id ? '-1' : '0') + '" aria-pressed="' + (selectedTask === task.id ? 'true' : 'false') + '"><b>' + esc(text[0]) + '</b><small>' + formatClock(task.startMin) + ' · ' + def.duration + c().minutes + '</small></button>';
+  }
+  function laneHtml(personId) {
+    var personTasks = state.plan.tasks.filter(function (task) { return task.actor === personId || (task.actor === 'both' && personId === 'prakhar'); });
+    var mirrors = state.plan.tasks.filter(function (task) { return task.actor === 'both' && personId === 'nishinaga'; });
+    var slots = HIKONE.SLOTS.map(function (minute, index) {
+      var selectedDefinition = selectedTask ? HIKONE.TASKS.filter(function (entry) { return entry.id === selectedTask; })[0] : null;
+      var targetName = selectedDefinition && selectedDefinition.cooperative ? c().actorShort.both : c().actors[personId];
+      var label = selectedTask ? (state.language === 'ja' ? taskCopy(selectedTask)[0] + 'を' + targetName + 'の' + formatClock(minute) + 'へ移動' : 'Move ' + taskCopy(selectedTask)[0] + ' to ' + targetName + ' at ' + formatClock(minute)) : c().actors[personId] + ' · ' + formatClock(minute);
+      return '<button type="button" class="hk-slot' + (selectedTask ? ' is-armed' : '') + '" data-slot data-person="' + personId + '" data-minute="' + minute + '" style="grid-column:' + (index + 2) + '" tabindex="' + (selectedTask ? '0' : '-1') + '" aria-label="' + esc(label) + '"></button>';
+    }).join('');
+    return '<div class="hk-lane" data-person-lane="' + personId + '"><div class="hk-lane-label"><span class="hk-lane-avatar ' + personId + '"></span><strong>' + esc(c().actors[personId]) + '</strong></div>' + personTasks.map(function (task) { return taskBlock(task, personId, false); }).join('') + mirrors.map(function (task) { return taskBlock(task, personId, true); }).join('') + slots + '</div>';
+  }
+  function renderPlan() {
+    setVisible(planPanel, state.phase === 'plan'); if (state.phase !== 'plan') return;
+    var oldRail = planPanel.querySelector('.hk-timeline-scroll'), oldScrollLeft = oldRail ? oldRail.scrollLeft : 0;
+    var restoreFocus = pendingPlanFocus || planFocusKey(document.activeElement); pendingPlanFocus = null;
+    var unplanned = state.plan.tasks.filter(function (task) { return !task.actor; });
+    var deck = unplanned.length ? unplanned.map(function (task) { var text = taskCopy(task.id); return '<button type="button" class="hk-deck-task' + (selectedTask === task.id ? ' is-selected' : '') + '" data-task="' + task.id + '" data-fix-target="' + task.id + '" aria-pressed="' + (selectedTask === task.id ? 'true' : 'false') + '"><b>' + esc(text[0]) + '</b><small>' + esc(text[1]) + '</small></button>'; }).join('') : '<span class="hk-deck-empty">' + esc(c().deckEmpty) + '</span>';
+    var confirm = state.plan.tasks.filter(function (task) { return task.id === 'confirm-care'; })[0], sourceName = confirm && confirm.actor ? c().actorShort[confirm.actor] : '—';
+    var sharedOwner = !!(confirm && confirm.actor === 'nishinaga'), handoffSatisfied = state.plan.connected || sharedOwner;
+    planPanel.innerHTML = '<div class="hk-planner-head">' + loopStrip(state.revision ? 'revise' : 'plan') + '<div><span>' + esc(c().planKicker) + '</span><h2>' + esc(c().planTitle) + '</h2></div></div>' +
+      '<div class="hk-plan-body"><aside class="hk-deck" id="hk-deck" data-deck><strong>' + esc(c().deck) + '</strong><div>' + deck + '</div><button type="button" class="hk-deck-drop" data-deck-drop' + (selectedTask ? '' : ' disabled') + '>' + esc(c().remove) + '</button></aside>' +
+      '<div class="hk-timeline-scroll"><div class="hk-timeline" id="hk-timeline"><div class="hk-time-axis"><span></span>' + HIKONE.SLOTS.map(function (minute) { return '<b>' + formatClock(minute) + '</b>'; }).join('') + '</div>' + laneHtml('prakhar') + laneHtml('nishinaga') + '</div></div></div>' +
+      '<div class="hk-connect-row"><div><strong>' + esc(c().connection) + '</strong><small>' + esc(c().connectionHint) + '</small></div><button type="button" id="hk-handoff" class="hk-handoff' + (handoffSatisfied ? ' is-connected' : '') + '" data-connect data-fix-target="handoff" aria-pressed="' + (handoffSatisfied ? 'true' : 'false') + '"' + (sharedOwner ? ' disabled' : '') + '><span>' + esc(sourceName) + '</span><i>→</i><span>' + esc(c().actors.nishinaga) + '</span><b>' + esc(sharedOwner ? c().sameOwner : (state.plan.connected ? c().connected : c().connect)) + '</b></button>' +
+      '<button type="button" class="hk-run-plan" id="hk-run-plan" data-run-plan><span>▶</span><b>' + esc(c().runPlan) + '</b><small>' + esc(c().frozen) + '</small></button></div>';
+    var newRail = planPanel.querySelector('.hk-timeline-scroll'); if (newRail) newRail.scrollLeft = oldScrollLeft;
+    if (!focusPlanTarget() && restoreFocus) revealAndFocus(findPlanFocus(restoreFocus), false);
+  }
+  function focusPlanTarget() {
+    if (!state.focusTarget || lastFocusedTarget === state.revision + ':' + state.focusTarget) return false;
+    var selector = state.focusTarget === 'run' ? '#hk-run-plan' : '[data-fix-target="' + state.focusTarget + '"]';
+    var target = planPanel.querySelector(selector); if (!target) return false;
+    lastFocusedTarget = state.revision + ':' + state.focusTarget; revealAndFocus(target, true); return true;
+  }
+  function renderRun() {
+    setVisible(runPanel, state.phase === 'run'); if (state.phase !== 'run' || !state.run) return;
+    var frame = state.run.frame, rows = ['prakhar', 'nishinaga'].map(function (id) { var info = frame.actors[id], task = info.taskId ? taskCopy(info.taskId)[0] : ''; return '<div class="hk-run-person is-' + info.status + '"><span class="hk-run-avatar ' + id + '"></span><strong>' + esc(c().actors[id]) + '</strong><b>' + esc(c().runStatus[info.status]) + '</b><small>' + esc(task) + '</small></div>'; }).join('');
+    runPanel.innerHTML = loopStrip('run') + '<div class="hk-run-head"><span>' + esc(c().frozen) + ' · #' + state.attempt + '</span><strong>' + formatClock(frame.atMin) + '</strong></div><div class="hk-run-people">' + rows + '</div>';
+  }
+  function rootCopy(root) { return root && c().roots[root.code] ? c().roots[root.code] : [root ? root.code : '', '']; }
+  function renderReport() {
+    setVisible(reportPanel, state.phase === 'observe'); if (state.phase !== 'observe' || !state.report) return;
+    var report = state.report, primary = report.primaryRoot, copyRoot = rootCopy(primary), secondary = report.roots.slice(1);
+    var title = report.success ? c().cleanTitle : formatClock(primary.atMin) + ' · ' + copyRoot[0], summary = report.success ? c().cleanSummary : copyRoot[1];
+    var secondaryHtml = secondary.length ? '<div class="hk-report-also"><strong>' + esc(c().also) + '</strong>' + secondary.map(function (root) { return '<span>' + formatClock(root.atMin) + ' · ' + esc(rootCopy(root)[0]) + '</span>'; }).join('') + '</div>' : '';
+    var reportAction = report.success ? 'continue' : (primary.code === 'engine-unavailable' ? 'reload' : 'revise');
+    var reportActionLabel = reportAction === 'continue' ? c().continue : (reportAction === 'reload' ? c().reload : c().revise);
+    var reportActionId = reportAction === 'continue' ? 'hk-continue' : (reportAction === 'reload' ? 'hk-reload' : 'hk-revise-plan');
+    reportPanel.innerHTML = loopStrip('observe') + '<div class="hk-report-copy"><span class="hk-report-kicker">' + esc(c().reportKicker) + ' · #' + state.attempt + '</span><h2 tabindex="-1" id="hk-report-title">' + esc(title) + '</h2><p>' + esc(summary) + '</p>' + secondaryHtml + '</div>' +
+      '<div class="hk-report-evidence"><strong>' + esc(c().evidence) + '</strong><span><b>' + esc(c().wait) + '</b>' + report.waitMinutes + c().minutes + '</span><span><b>' + esc(c().detour) + '</b>' + report.detourMinutes + c().minutes + '</span><span><b>' + esc(c().departure) + '</b>' + (report.departureMin == null ? '—' : formatClock(report.departureMin)) + '</span></div>' +
+      '<button type="button" class="hk-report-action" id="' + reportActionId + '" data-report-action="' + reportAction + '">' + esc(reportActionLabel) + '<span>→</span></button>';
+    var reportFocusKey = state.attempt + ':' + report.fingerprint;
+    if (lastReportFocusKey !== reportFocusKey) {
+      lastReportFocusKey = reportFocusKey;
+      window.setTimeout(function () { var titleEl = document.getElementById('hk-report-title'); if (titleEl) titleEl.focus({ preventScroll: true }); }, 20);
+    }
   }
   function renderCopy() {
     langEn.setAttribute('aria-pressed', state.language === 'en' ? 'true' : 'false'); langJa.setAttribute('aria-pressed', state.language === 'ja' ? 'true' : 'false');
-    soundButton.setAttribute('aria-pressed', sound ? 'true' : 'false'); soundButton.title = sound ? c().soundOn : c().soundOff; var soundText = soundButton.querySelector('b'); if (soundText) soundText.textContent = soundButton.title;
-    var exitText = exit && exit.querySelector('b'); if (exitText) exitText.textContent = c().exit;
-    actions.innerHTML = '';
-    if (state.scene === 'arrival') { speaker.textContent = c().actors.watanabe; speech.textContent = c().arrivalSpeech; objective.textContent = c().arrivalObjective; hint.textContent = c().arrivalHint; actions.appendChild(button('<button type="button" id="hk-start" data-action="start">' + c().key + '</button>')); }
-    if (state.scene === 'packing') {
-      speaker.textContent = ''; speech.textContent = ''; objective.textContent = c().packingObjective; hint.textContent = c().packingHint;
-      actions.appendChild(button('<button type="button" id="hk-depart" data-action="depart">' + c().depart + '</button>'));
-    }
-    if (state.scene === 'drive') { speaker.textContent = c().actors.watanabe; speech.textContent = state.drive.detour && !state.drive.detourComplete ? c().driveDetour : state.drive.detour ? c().detourDone : c().driveDirect; objective.textContent = c().location.drive; hint.textContent = ''; }
-    if (state.scene === 'lake') {
-      speaker.textContent = ''; speech.textContent = ''; objective.textContent = c().lakeObjective; hint.textContent = c().lakeHint;
-      if (state.lake.tanago === 'bite' || state.lake.suppon === 'fighting') actions.appendChild(button('<button type="button" id="hk-reel" data-action="reel">🎣 ' + c().reel + '</button>'));
-      if (HIKONE.derive(state).canGoHome) { speaker.textContent = c().actors.watanabe; speech.textContent = c().goodPrep; hint.textContent = ''; actions.appendChild(button('<button type="button" id="hk-home" data-action="home">' + c().home + '</button>')); }
-    }
-    if (state.scene === 'home') {
-      speaker.textContent = state.completed ? c().actors.watanabe : ''; speech.textContent = state.completed ? c().complete : ''; objective.textContent = c().homeObjective; hint.textContent = state.completed ? '' : c().homeHint;
-      if (state.completed) { actions.appendChild(button('<button type="button" id="hk-replay" data-action="replay">' + c().replay + '</button>')); actions.appendChild(button('<a id="hk-back" href="index.html">' + c().back + '</a>')); }
-    }
+    soundButton.setAttribute('aria-pressed', sound ? 'true' : 'false'); soundButton.title = sound ? c().soundOn : c().soundOff; soundButton.querySelector('b').textContent = soundButton.title; exit.querySelector('b').textContent = c().exit;
+    var speakerText = '', speechText = '', objectiveText = '', hintText = '', actionMarkup = '';
+    if (state.phase === 'arrival') { speakerText = c().actors.watanabe; speechText = c().arrivalSpeech; objectiveText = c().arrivalObjective; hintText = c().arrivalHint; actionMarkup = '<button type="button" id="hk-start" data-action="start">' + esc(c().start) + '</button>'; }
+    if (state.phase === 'plan') { objectiveText = c().planObjective; hintText = c().planHint; }
+    if (state.phase === 'run') objectiveText = c().runObjective;
+    if (state.phase === 'observe') objectiveText = c().observeObjective;
+    if (state.phase === 'drive') { speakerText = c().actors.watanabe; speechText = c().driveSpeech; objectiveText = c().driveObjective; }
+    if (state.phase === 'lake') { speakerText = c().actors.watanabe; speechText = c().lakeLines[Math.min(state.payoffStep, c().lakeLines.length - 1)]; objectiveText = c().location.lake; }
+    if (state.phase === 'home') { speakerText = c().actors.watanabe; speechText = c().complete; objectiveText = c().homeObjective; actionMarkup = '<button type="button" id="hk-replay" data-action="replay">' + esc(c().replay) + '</button><a id="hk-campaign" href="index.html">' + esc(c().campaign) + '</a>'; }
+    setText(speaker, speakerText); setText(speech, speechText); setText(objective, objectiveText); setText(hint, hintText);
+    if (actions.innerHTML !== actionMarkup) actions.innerHTML = actionMarkup;
   }
-  function render() { renderWorld(); renderCopy(); syncTimers(); }
-  function persist() { try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ kind: 'hikone-tutorial', version: 2, completed: true, completedAt: new Date().toISOString() })); } catch (error) { /* play remains complete */ } }
+  function render() { renderWorld(); renderPlan(); renderRun(); renderReport(); renderCopy(); syncTimers(); }
   function dispatch(action, quiet) {
-    var previous = state; state = HIKONE.reduce(state, action); selected = null; render();
-    if (!quiet && (state.lastEvent.code !== previous.lastEvent.code || state.lastEvent.type === 'refusal' || action.type)) showEvent(state.lastEvent);
-    if (state.completed && !previous.completed) persist();
+    var previous = state; state = HIKONE.reduce(state, action); if (action.type === 'MOVE_TASK' || action.type === 'UNPLACE_TASK') selectedTask = null;
+    render();
+    var repeatableFeedback = action.type === 'MOVE_TASK' || action.type === 'UNPLACE_TASK' || action.type === 'CONNECT_HANDOFF' || state.lastEvent.type === 'refusal';
+    if (!quiet && (repeatableFeedback || state.lastEvent.code !== previous.lastEvent.code)) showEvent(state.lastEvent);
+    if (state.completed && !previous.completed) HIKONE.saveCompletion(window.localStorage, state);
   }
-  function duration(key, ms) {
-    if (!reducedMotion.matches) return ms;
-    if (key === 'detour' || key === 'arrive') return Math.min(1400, ms);
-    return Math.min(420, ms);
-  }
-  function schedule(key, ms, action) { if (timers[key]) return; timers[key] = window.setTimeout(function () { timers[key] = null; dispatch(action); }, duration(key, ms)); }
+  function duration(ms) { return reducedMotion.matches ? Math.min(180, ms) : ms; }
+  function schedule(key, ms, action) { if (timers[key]) return; timers[key] = window.setTimeout(function () { timers[key] = null; dispatch(action); }, duration(ms)); }
   function syncTimers() {
-    ['cap', 'towel'].forEach(function (id) {
-      var actor = state.actors[id]; if (state.scene === 'packing' && actor.status === 'working' && actor.current && actor.current.indexOf('coop:') !== 0) schedule('actor-' + id, 1550, { type: 'COMPLETE_JOB', actor: id });
-    });
-    if (state.scene === 'packing' && state.items['tanago-box'].status === 'filling') schedule('fill', 1450, { type: 'FILL_COMPLETE' });
-    if (state.scene === 'packing' && state.packing.coopItem) schedule('coop', 1900, { type: 'COMPLETE_COOP' });
-    if (state.scene === 'drive') {
-      if (state.drive.detour && !state.drive.detourComplete) schedule('detour', 4800, { type: 'DETOUR_COMPLETE' });
-      else schedule('arrive', 2200, { type: 'ARRIVE_LAKE' });
-    }
+    if (state.phase === 'run' && state.run) schedule('run-' + state.run.frameIndex, 620, { type: 'RUN_TICK' });
+    if (state.phase === 'drive') schedule('drive', 1900, { type: 'DRIVE_TICK' });
+    if (state.phase === 'lake') schedule('lake-' + state.payoffStep, 1450, { type: 'PAYOFF_TICK' });
   }
-  function assign(actorId, itemId) { dispatch({ type: 'ASSIGN_ITEM', actor: actorId, item: itemId }); }
-  function useItemOnZone(itemId, zoneId) {
-    if (state.scene === 'packing') dispatch({ type: 'MOVE_ITEM', item: itemId, target: zoneId });
-    else if (state.scene === 'lake' && itemId === 'rods' && zoneId === 'jetty') dispatch({ type: 'MOVE_ITEM', item: itemId, target: zoneId });
-    else if (state.scene === 'lake' && (itemId === 'worms' || itemId === 'chicken') && zoneId === 'hook') dispatch({ type: 'BAIT_HOOK', item: itemId });
-    else if (state.scene === 'home') dispatch({ type: 'PLACE_HOME', item: itemId, target: zoneId });
-    else dispatch({ type: 'MOVE_ITEM', item: itemId, target: zoneId });
+  function handlePlanClick(target) {
+    var task = target.closest('[data-task]'), slot = target.closest('[data-slot]');
+    if (task) {
+      selectedTask = task.dataset.task;
+      var selectedState = state.plan.tasks.filter(function (entry) { return entry.id === selectedTask; })[0];
+      pendingPlanFocus = { type: 'slot', person: selectedState && selectedState.actor === 'nishinaga' ? 'nishinaga' : 'prakhar', minute: String(selectedState ? selectedState.startMin : HIKONE.SLOTS[0]) };
+      renderPlan(); return;
+    }
+    if (slot && selectedTask) {
+      var def = HIKONE.TASKS.filter(function (entry) { return entry.id === selectedTask; })[0];
+      pendingPlanFocus = { type: 'task', id: selectedTask };
+      dispatch({ type: 'MOVE_TASK', taskId: selectedTask, actor: def.cooperative ? 'both' : slot.dataset.person, startMin: Number(slot.dataset.minute) }); return;
+    }
+    if (target.closest('[data-deck-drop]') && selectedTask) { pendingPlanFocus = { type: 'task', id: selectedTask }; dispatch({ type: 'UNPLACE_TASK', taskId: selectedTask }); return; }
+    if (target.closest('[data-connect]')) { dispatch({ type: 'CONNECT_HANDOFF', connected: !state.plan.connected }); return; }
+    if (target.closest('[data-run-plan]')) { dispatch({ type: 'RUN_PLAN' }); }
   }
-  function handleClick(target) {
-    var action = target.closest('[data-action]');
-    if (action) {
-      if (action.dataset.action === 'start') dispatch({ type: 'START' });
-      if (action.dataset.action === 'depart') dispatch({ type: 'DEPART' });
-      if (action.dataset.action === 'reel') dispatch({ type: 'REEL' });
-      if (action.dataset.action === 'home') dispatch({ type: 'GO_HOME' });
-      if (action.dataset.action === 'replay') { Object.keys(timers).forEach(function (key) { window.clearTimeout(timers[key]); timers[key] = null; }); dispatch({ type: 'RESTART' }); }
-      return;
-    }
-    var actor = target.closest('[data-actor]'); var item = target.closest('[data-object]'); var zone = target.closest('[data-zone]'); var caught = target.closest('[data-catch]');
-    if (actor && actor.dataset.actor !== 'watanabe') {
-      if (selected && selected.kind === 'item') assign(actor.dataset.actor, selected.id); else { selected = { kind: 'actor', id: actor.dataset.actor }; render(); }
-      return;
-    }
-    if (item) {
-      if (selected && selected.kind === 'actor') { assign(selected.id, item.dataset.object); return; }
-      if (selected && selected.kind === 'catch') { dispatch({ type: 'MOVE_CATCH', catch: selected.id, target: item.dataset.object }); return; }
-      selected = { kind: 'item', id: item.dataset.object }; render(); return;
-    }
-    if (caught) { selected = { kind: 'catch', id: caught.dataset.catch }; render(); return; }
-    if (zone) {
-      if (selected && selected.kind === 'item') useItemOnZone(selected.id, zone.dataset.zone);
-      else if (selected && selected.kind === 'catch') dispatch({ type: 'MOVE_CATCH', catch: selected.id, target: zone.dataset.zone });
-      else if (state.scene === 'lake' && (zone.dataset.zone === 'shallows' || zone.dataset.zone === 'deep')) dispatch({ type: 'CAST', zone: zone.dataset.zone });
-    }
+  function clearDrag() {
+    planPanel.classList.remove('is-pointer-dragging');
+    if (!drag) return;
+    drag.element.classList.remove('is-dragging'); drag.element.style.translate = '';
+    if (drag.ghost && drag.ghost.parentNode) drag.ghost.parentNode.removeChild(drag.ghost);
+    drag = null;
   }
-  function drop(source, target) {
-    if (!target) return;
-    var actor = target.closest('[data-actor]'); var zone = target.closest('[data-zone]'); var item = target.closest('[data-object]');
-    if (source.kind === 'item' && actor) assign(actor.dataset.actor, source.id);
-    else if (source.kind === 'item' && zone) useItemOnZone(source.id, zone.dataset.zone);
-    else if (source.kind === 'catch' && item) dispatch({ type: 'MOVE_CATCH', catch: source.id, target: item.dataset.object });
+  function moveDragGhost(event) {
+    if (!drag.ghost) {
+      drag.ghost = drag.element.cloneNode(true); drag.ghost.removeAttribute('id'); drag.ghost.removeAttribute('data-fix-target'); drag.ghost.removeAttribute('aria-pressed'); drag.ghost.setAttribute('aria-hidden', 'true'); drag.ghost.tabIndex = -1; drag.ghost.classList.add('hk-drag-ghost');
+      drag.ghost.style.width = drag.rect.width + 'px'; drag.ghost.style.height = drag.rect.height + 'px'; document.body.appendChild(drag.ghost);
+    }
+    drag.ghost.style.left = (event.clientX - drag.offsetX) + 'px'; drag.ghost.style.top = (event.clientY - drag.offsetY) + 'px';
   }
-  scene.addEventListener('pointerdown', function (event) {
-    var source = event.target.closest('[data-object],[data-catch]'); if (!source || source.disabled) return;
-    drag = { pointerId: event.pointerId, element: source, kind: source.dataset.object ? 'item' : 'catch', id: source.dataset.object || source.dataset.catch, x: event.clientX, y: event.clientY, moved: false };
-    source.setPointerCapture && source.setPointerCapture(event.pointerId);
+  planPanel.addEventListener('pointerdown', function (event) {
+    var task = event.target.closest('[data-task]'); if (!task) return;
+    var rect = task.getBoundingClientRect();
+    drag = { pointerId: event.pointerId, element: task, taskId: task.dataset.task, x: event.clientX, y: event.clientY, offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top, rect: rect, ghost: null, moved: false };
+    if (task.setPointerCapture) task.setPointerCapture(event.pointerId);
   });
-  scene.addEventListener('pointermove', function (event) {
-    if (!drag || drag.pointerId !== event.pointerId) return; var dx = event.clientX - drag.x; var dy = event.clientY - drag.y;
+  planPanel.addEventListener('pointermove', function (event) {
+    if (!drag || drag.pointerId !== event.pointerId) return; var dx = event.clientX - drag.x, dy = event.clientY - drag.y;
     if (Math.abs(dx) + Math.abs(dy) > 8) drag.moved = true;
-    if (drag.moved) { drag.element.classList.add('is-dragging'); drag.element.style.translate = dx + 'px ' + dy + 'px'; }
+    if (drag.moved) {
+      planPanel.classList.add('is-pointer-dragging');
+      drag.element.classList.add('is-dragging'); moveDragGhost(event);
+      var rail = planPanel.querySelector('.hk-timeline-scroll'); if (rail) { var bounds = rail.getBoundingClientRect(), edge = Math.min(52, bounds.width * .2); if (event.clientX < bounds.left + edge) rail.scrollLeft -= 9; if (event.clientX > bounds.right - edge) rail.scrollLeft += 9; }
+    }
   });
-  scene.addEventListener('pointerup', function (event) {
-    if (!drag || drag.pointerId !== event.pointerId) return; var source = drag; drag = null;
-    source.element.classList.remove('is-dragging'); source.element.style.translate = ''; source.element.style.pointerEvents = 'none'; var target = document.elementFromPoint(event.clientX, event.clientY); source.element.style.pointerEvents = '';
-    if (source.moved) { event.preventDefault(); suppressClickUntil = Date.now() + 300; drop(source, target); }
+  planPanel.addEventListener('pointerup', function (event) {
+    if (!drag || drag.pointerId !== event.pointerId) return; var source = drag, moved = drag.moved;
+    source.element.style.pointerEvents = 'none'; var target = document.elementFromPoint(event.clientX, event.clientY); source.element.style.pointerEvents = ''; clearDrag();
+    if (!moved) return;
+    event.preventDefault(); suppressClickUntil = Date.now() + 300; var slot = target && target.closest('[data-slot]'), deck = target && target.closest('[data-deck]');
+    if (slot) { var def = HIKONE.TASKS.filter(function (entry) { return entry.id === source.taskId; })[0]; pendingPlanFocus = { type: 'task', id: source.taskId }; dispatch({ type: 'MOVE_TASK', taskId: source.taskId, actor: def.cooperative ? 'both' : slot.dataset.person, startMin: Number(slot.dataset.minute) }); }
+    else if (deck) { pendingPlanFocus = { type: 'task', id: source.taskId }; dispatch({ type: 'UNPLACE_TASK', taskId: source.taskId }); }
   });
-  scene.addEventListener('pointercancel', function () {
-    if (!drag) return; drag.element.classList.remove('is-dragging'); drag.element.style.translate = ''; drag = null;
+  planPanel.addEventListener('pointercancel', clearDrag); planPanel.addEventListener('lostpointercapture', function () { if (drag && drag.moved) clearDrag(); });
+  planPanel.addEventListener('click', function (event) { if (Date.now() < suppressClickUntil) { event.preventDefault(); return; } handlePlanClick(event.target); });
+  planPanel.addEventListener('keydown', function (event) {
+    if (event.key !== 'Escape' || !selectedTask) return;
+    var cancelledTask = selectedTask; selectedTask = null; pendingPlanFocus = { type: 'task', id: cancelledTask }; event.preventDefault(); renderPlan(); showEvent({ type: 'status', code: 'selection-cancelled' });
   });
-  scene.addEventListener('click', function (event) { if (Date.now() < suppressClickUntil) { event.preventDefault(); return; } handleClick(event.target); });
-  actions.addEventListener('click', function (event) { handleClick(event.target); });
+  actions.addEventListener('click', function (event) {
+    var action = event.target.closest('[data-action]'); if (!action) return;
+    if (action.dataset.action === 'start') dispatch({ type: 'START' });
+    if (action.dataset.action === 'replay') { Object.keys(timers).forEach(function (key) { window.clearTimeout(timers[key]); timers[key] = null; }); selectedTask = null; lastFocusedTarget = null; lastReportFocusKey = null; dispatch({ type: 'RESTART' }); }
+  });
+  reportPanel.addEventListener('click', function (event) {
+    var action = event.target.closest('[data-report-action]'); if (!action) return;
+    if (action.dataset.reportAction === 'revise') dispatch({ type: 'REVISE_PLAN' });
+    if (action.dataset.reportAction === 'continue') dispatch({ type: 'CONTINUE_PAYOFF' });
+    if (action.dataset.reportAction === 'reload') window.location.reload();
+  });
   langEn.addEventListener('click', function () { dispatch({ type: 'SET_LANG', language: 'en' }, true); buildWorld(); render(); });
   langJa.addEventListener('click', function () { dispatch({ type: 'SET_LANG', language: 'ja' }, true); buildWorld(); render(); });
   soundButton.addEventListener('click', function () { sound = !sound; renderCopy(); announce(sound ? c().soundOn : c().soundOff); if (sound) tone('success'); });
-  reducedMotion.addEventListener && reducedMotion.addEventListener('change', render);
-
+  if (reducedMotion.addEventListener) reducedMotion.addEventListener('change', render);
   buildWorld(); render();
 }

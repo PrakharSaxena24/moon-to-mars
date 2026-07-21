@@ -3235,6 +3235,10 @@ console.log('\n=== INTEGRITY REGRESSIONS — browser-facing contracts ===');
   ok(visualRegressionRun.status === 0,
     'wildlife timer retention and inferred-return phone labels pass executable visual regressions' +
       (visualRegressionRun.status === 0 ? '' : ' (' + String(visualRegressionRun.stderr || visualRegressionRun.error || '').trim() + ')'));
+  var hikoneRegressionRun = runRegressionScript('hikone-verify.js');
+  ok(hikoneRegressionRun.status === 0,
+    'campaign-aligned Hikone planning tutorial passes its executable contract' +
+      (hikoneRegressionRun.status === 0 ? '' : ' (' + String(hikoneRegressionRun.stderr || hikoneRegressionRun.error || '').trim() + ')'));
 
   // Execute sound.js in an isolated process with resume() rejected. Waiting a
   // full event-loop turn catches both a false enabled flag and an unhandled

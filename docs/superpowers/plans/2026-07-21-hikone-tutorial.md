@@ -1,260 +1,276 @@
-# The Hikone Morning — Playable Tutorial Rebuild
+# The Hikone Morning — Campaign-Aligned Tutorial
 
-**Status:** Playable rebuild implemented; owner playtest and push approval pending
+**Status:** Campaign-aligned rebuild implemented locally; automated gates pass; owner/browser playtest pending
 **Updated:** 2026-07-21
-**Product relationship:** A standalone first-play tutorial, separate from the Ogasawara campaign
+**Product relationship:** A separate first-play story that teaches the Ogasawara campaign's real interaction grammar
 **Working title:** The Hikone Morning / 彦根の朝
-**Review gate:** Do not push the rebuild until the owner can play the complete path and approves it
 
-This is the authoritative handoff for future sessions and agents. The owner-provided story facts below
-must not be replaced by web research or invented lore.
+This is the authoritative handoff for future sessions and agents. Read this file before changing
+`hikone.html`, `hikone.css`, `hikone.js`, or `hikone-verify.js`. The owner-provided story facts in
+section 2 must not be replaced by web research or invented lore.
 
-## Implementation checkpoint — 2026-07-21
+## 1. Product decision
 
-- `hikone.html`, `hikone.css`, and `hikone.js` now implement the embodied arrival → packing → drive →
-  Lake Biwa → home loop described below.
-- The rejected card, effort-number, progress-bar, large-panel, and Next-screen architecture is removed.
-- The player directly uses Cap and Towel, fills the empty tanago box, experiences two-person carries,
-  may cause the drinks detour, baits/casts/catches both animals, recovers from the wrong container, and
-  places the two animals into separate home aquariums.
-- `hikone-verify.js` executes the full deterministic success/refusal/recovery path and pins direct
-  manipulation, no-scroll, language, reduced-motion, restart, isolation, and old-architecture
-  rejection. All 180 tutorial checks pass.
-- The existing Ogasawara regression suite remains green with all 621 checks passing.
-- Wide and phone environmental-shell renders passed before controller integration. A supported live
-  browser binding was unavailable after integration, so a real owner/browser playthrough is still a
-  release gate; do not describe the pre-controller screenshots as final gameplay evidence.
-- Do not commit, push, or replace the live tutorial until the owner reviews this local rebuild.
+The earlier physical-adventure rebuild was substantially more playable than the rejected slideshow,
+but it still taught the wrong product. It asked the player to drag gear, fill a box, bait a hook,
+cast, reel, and place animals. The Ogasawara campaign instead asks the player to:
 
-## 1. Why the previous version was rejected
+> **plan → freeze the plan → run automatically → observe causal evidence → jump to the exact plan
+> control → revise → rerun**
 
-The first implementation was an illustrated training presentation, not a game. It used cards, effort
-numbers, progress bars, large text panels, validation gates, and repeated Next-style transitions. The
-world, people, car, equipment, and animals were decorative. It stopped at readiness instead of letting
-the player fish.
+The Hikone tutorial must use that same grammar. The Ryokan, people, car, trunk, road, Lake Biwa, and
+aquariums remain, but the physical world is now **execution evidence**, not a separate adventure-game
+control system. The timeline is the control surface.
 
-Delete that interaction architecture. In particular, do not restore:
+The hard semantic-parity gate is:
 
-- task cards, member lanes, effort values, queue totals, scores, thresholds, or progress bars;
-- a forced bad answer followed by a written explanation of the correct answer;
-- large modal panels covering the world;
-- a sequence where most actions only advance narration;
-- a guaranteed success animation disconnected from the player's physical actions;
-- a Lake Biwa scene with no baiting, casting, catching, or animal transfer.
+> After completing Hikone, the campaign may introduce more content and complexity, but it must not
+> introduce a new core interaction verb.
 
-The tutorial must use this loop:
+The tutorial player must already know how to place/assign/time work, connect information, Run, read a
+person's status, open a causal report, return to the implicated edit, revise, and rerun.
 
-> **notice → act on the world → see a physical consequence → revise → succeed**
+## 2. Locked owner facts and names
 
-## 2. Locked owner facts
-
-- Exactly three people travel: **Watanabe-san and two companions**.
-- The two companions are temporary visual roles called **Cap** and **Towel** in implementation notes;
-  these are not approved real names.
-- The player directly uses Cap and Towel to prepare the trip. The player is not a fourth traveler.
-- The scene starts before dawn outside **Ryokan Izumi in Yokkaichi**.
-- Watanabe-san arrives in **his own car**, proposes going to Hikone, and drives.
+- Exactly three people travel:
+  - **Watanabe-san / 渡邊さん** — authoritative Kanji: `WORLD.md:50,156`;
+  - **Prakhar / プラカール** — authoritative Japanese: `WORLD.md:125`;
+  - **Nishinaga / 西永** — authoritative Kanji: `WORLD.md:124`.
+- Prakhar uses the prior red-cap visual cue. Nishinaga uses the prior blue-towel/scarf visual cue.
+  Those are accessories, not player-facing names or model IDs.
+- The player controls the plan for Prakhar and Nishinaga. The player is not a fourth traveler.
+- Watanabe-san owns and drives the car. He states the intent and departure deadline, waits during
+  preparation, and is never an assignment lane or an automatic problem solver.
+- The story begins before dawn outside **Ryokan Izumi in Yokkaichi**.
 - The destination is **Lake Biwa in Hikone**.
-- The companions must prepare:
+- Preparation covers:
   1. fishing rods;
-  2. worms as bait for tanago;
-  3. chicken as bait for suppon;
-  4. a holding box filled with water for caught tanago;
-  5. a separate aquarium transport tank for a suppon; and
+  2. worms for tanago;
+  3. chicken bait for suppon;
+  4. a water-filled tanago transport box;
+  5. a separate suppon carrier/tank; and
   6. drinks for the road.
-- Caught tanago and suppon are brought home for **separate aquariums**, not eaten.
-- The treatment is symbolic planning fiction, not real animal-care or fishing instruction.
-- The exact facade, car model, likenesses, and companion names remain replaceable until the owner
-  supplies references.
+- Tanago and suppon are brought home alive for **separate aquariums**, never for food.
+- This is symbolic planning fiction, not fishing or animal-care instruction.
 
-## 3. Fable consultation — decisive direction
+## 3. Exact shared gameplay grammar
 
-Fable was consulted headlessly at maximum effort without repository access or tools. No private source
-or workspace file was shared. Three independent internal reviewers separately reached the same product
-diagnosis.
+The standalone tutorial mirrors these campaign concepts:
 
-Fable's replacement concept is:
+| Campaign | Hikone tutorial |
+|---|---|
+| `#fd-deck` unplanned task chips | `#hk-deck` unplanned morning work |
+| per-person authored lanes | Prakhar and Nishinaga lanes |
+| scheduled task blocks | 05:50–06:20 five-minute blocks |
+| information sockets/arrows | live-transport plan face-to-face handoff |
+| `#launch` freezes a plan snapshot | `#hk-run-plan` freezes a deep copy and fingerprint |
+| automatic clock simulation | deterministic morning runner and actor statuses |
+| waits/stalls on the world stage | Nishinaga waits at the trunk; empty box blocks loading |
+| causal report/fix pack | first-root report with timestamp and evidence |
+| `navigateToFault()` | `#hk-revise-plan` focuses the exact handoff/task control |
+| rerun preserves authoring | revisions keep the player's plan and increment the attempt |
 
-> **THE TRUNK IS THE PLAN — STOW, THEN DEPLOY**
+`engine.js` is loaded before `hikone.js`. The tutorial builds a minimal `plan.days.hikone` object and
+calls the campaign's exported `daySchedule()` and `dayReadiness()` functions. The shared scheduler's
+explicit `allowedRoleIds` contract models the cooperative cross-role carrier lift without suppressing
+readiness evidence. A small tutorial-domain adapter remains only for the visible empty-water-box
+consequence, because the full Ogasawara simulator and geography are not generic.
 
-At Ryokan Izumi, the player handles real objects and gets them into Watanabe's trunk. At Lake Biwa,
-the same trunk opens with the same arrangement and the player deploys those objects into the world.
-Readiness is stored in physical state, not text or numbers:
+Do not use `P.createSim()`, `P.scoreTrip()`, `P.planClusters()`, or the Ogasawara stage renderer for
+Hikone. Those are tied to the 10-day Ogasawara template and geography.
 
-- the tanago box is visibly empty or full of water;
-- the hook is bare, worm-baited, or chicken-baited;
-- the tanago and suppon have visibly separate containers;
-- forgotten drinks cause an observable roadside delay;
-- unused companions visibly wait while the other works.
+## 4. Seed plan and learning path
 
-One owner requirement strengthens Fable's proposal: Cap and Towel remain directly player-controlled.
-The player gives normal objects to either companion so both can work at the same time. Heavy prepared
-containers require both companions. There is no character-selection form; assignment happens by
-touching and dragging people and objects in the scene.
+### Briefing
 
-## 4. Core play grammar
+Watanabe-san arrives at Ryokan Izumi and says, in effect:
 
-### Canonical input
+> “Hikone, Lake Biwa. I'll drive my car. We leave at 06:20. Bring the tanago and suppon home
+> alive, in separate aquariums—never as food. Prakhar, Nishinaga: prepare everything.”
 
-- Pointer/touch: drag an object to Cap, Towel, or a valid world target.
-- Tap/keyboard fallback: select an object, then activate the person or target.
-- Native semantic controls and visible focus are required.
-- A direct manipulation should produce feedback within 100 ms.
-- Invalid actions must bounce/refuse visibly and point toward the next useful target; never show a
-  generic error modal.
+### Transparent initial plan
 
-### Preparation actions
+The player sees the complete authored data; no hidden fact is sprung after Run.
 
-- Give rods, worms, chicken bait, and drinks to Cap or Towel.
-- The chosen companion physically checks/carries the object to the trunk or cabin.
-- Both companions may work concurrently.
-- Trying to load the empty tanago box produces a hollow `kon-kon`, returns it, and highlights the tap.
-- Place the box under the tap to fill it; the waterline must visibly rise and slosh.
-- The filled box is heavy and requires both companions to carry it.
-- The separate suppon tank also requires both companions.
-- The preparation area visibly empties as the trunk fills.
-- Watanabe remains beside his car and is never an assignment target.
-- The car may leave without drinks so the player can experience the omission; all fishing equipment and
-  containers are required before departure.
+| Time | Prakhar | Nishinaga |
+|---|---|---|
+| 05:50 | Confirm live transport | Gather worms + chicken |
+| 05:55 | Gather rods | — |
+| 06:00 | Load both carriers — cooperative span across both people |
+| 06:05 | Fill tanago box | — |
+| 06:10 | — | drinks begin in the unplanned deck |
 
-### Planning lesson
+The live-transport confirmation produces one information fact. Loading needs that fact. The initial
+plan has no arrow. The tanago box's Fill task is also visibly scheduled after Load, and Drinks are
+visibly unplanned.
 
-The lesson is not “balance two numbers.” The player learns:
+An expert may repair all visible gaps before the first Run. There is no forced bad choice or locked
+wrong answer.
 
-1. translate Watanabe's intent into visible things and states;
-2. give real work to both available people so one does not stand idle;
-3. test readiness through physical evidence;
-4. experience the downstream cost of an omission;
-5. use the same prepared plan when circumstances change at the lake.
+### Canonical three-run learning path
 
-No score, capacity puzzle, countdown, visible timer, or single perfect assignment is required.
+1. **Run 1 — information wait**
+   - The plan is deep-copied and fingerprinted.
+   - At 06:00, Nishinaga waits at the trunk because the live-transport plan stayed with Prakhar.
+   - The first-root report explains the person, place, time, and missing handoff.
+   - **Show in plan** focuses the handoff control. The player may draw the face-to-face arrow or
+     reassign the confirming task to the loading owner.
 
-## 5. Target first-play flow
+2. **Run 2 — dependency/order consequence**
+   - The information reaches loading.
+   - Loading then waits because Fill is scheduled after Load; the box is visibly still empty.
+   - Drinks are also reported as unplanned and would cause an eight-minute roadside detour.
+   - **Show in plan** focuses the Fill block. The player moves Fill before Load, moves conflicting
+     work or reassigns it, and places Drinks from the deck.
 
-### 0:00–0:18 — Arrival
+3. **Run 3 — clean rehearsal**
+   - A valid example is: Confirm/ Bait at 05:50, Fill/Rods at 05:55, both-person Load at 06:00,
+     Drinks at 06:10.
+   - Alternative non-overlapping schedules are valid. There is no single magic answer.
+   - Both people finish the trunk by 06:20. The report says the rehearsal is clean.
 
-- Predawn Ryokan Izumi. Cap and Towel wait in the gravel forecourt.
-- Watanabe's light-colored wagon arrives, suspension settles, and the hatch opens.
-- Watanabe says only the equivalent of: **“Lake Biwa—let's go. I'll drive; you two prepare.”**
-- Tanago, suppon, and aquarium-not-food meaning are communicated with restrained visual thought cues.
-- If the player waits six seconds, one legal object glints once.
+### Payoff
 
-### 0:18–1:40 — Pack the real trunk
+A clean report unlocks the physical story:
 
-The player uses Cap and Towel on six physical preparations: rod bundle, worm jar, chicken bait tray,
-empty clear tanago box beside the outdoor tap, separate suppon tank, and drinks at the vending machine.
+- Watanabe-san drives from Yokkaichi to Hikone.
+- The same prepared trunk opens at Lake Biwa.
+- A short authored montage deploys rods and bait, places tanago in the water-filled box, and keeps
+  suppon in its separate carrier.
+- The final view shows two separate home aquariums.
+- The transfer line explicitly says that Ogasawara uses the same Plan → Run → Observe → Revise loop.
 
-- After the first assignment, the other idle companion gives a subtle hand cue toward another object.
-- Normal jobs run concurrently when both companions are used.
-- Empty-box refusal teaches that naming an item is not enough; its state matters.
-- Filled box and suppon tank use a short two-person carry.
-- Trunk positions remain stable so the player builds a spatial memory of the plan.
-- Departure is a physical action on the hatch/car, not a Next button.
+There is no gameplay-critical bait-drag/cast/reel/catch FSM. Fishing is the emotional payoff for a
+clean plan, not a second unrelated tutorial game.
 
-### 1:40–2:00 — Yokkaichi to Hikone
+## 5. State boundary
 
-- A short one-way side-scrolling trip connects the two places.
-- If drinks were packed, a bottle is passed forward and Watanabe gives a relieved sigh.
-- If drinks were forgotten, Watanabe pulls over at a roadside machine. The player watches a short delay
-  caused by their omission; the run continues without failure.
-- A wordless beat makes clear that tanago and suppon are going to aquariums, not a meal.
-
-### 2:00–3:20 — Use the plan at Lake Biwa
-
-- The hatch reopens and holds for a beat, showing the same object arrangement.
-- Move rods to the jetty.
-- A bare-hook shallow cast makes tanago inspect and refuse it; the worm jar pulses.
-- Put a worm on the hook, cast to shallow water, react to the bobber, and land a tanago.
-- Drag the tanago into the water-filled box; it settles and swims calmly.
-- Put chicken bait on the hook. A shallow cast is refused and the deeper suppon ripple pulses.
-- Cast deep and complete a short hold/tap struggle to land the suppon.
-- If the suppon is dragged to the tanago box, the fish scatter, the suppon snaps at the outside, and the
-  separate tank glows. It then bounces back safely.
-- Move the suppon into its separate tank.
-- Missed bite/fight timing gives a deterministic retry within four seconds, never a loss screen.
-
-### 3:20–3:35 — Payoff
-
-- Watanabe claps, hands out the prepared drinks, and the three share a small `kanpai`.
-- Wide Lake Biwa view: tanago in its water box, suppon in its separate tank, car and Hikone horizon.
-- Minimal text: **“Good prep.” / 「いい準備だ。」**
-- Crossfade to the two separate home aquariums, followed by a quiet continuation/replay choice.
-
-Target completion time is three to five minutes. No single non-interactive beat should exceed 20 seconds.
-
-## 6. World and visual direction
-
-- The physical scene owns the viewport. No dashboard, card tray, or large reading panel.
-- Fixed logical stage around 960×600, uniformly scaled to fit the browser; portrait may recompose to
-  600×960 while preserving the same objects and relationships.
-- Full-height `100dvh` shell with no document scrollbar or horizontally clipped essential content.
-- Predawn indigo, warm ryokan light, freshwater turquoise, reed green, sunrise peach, and cream car.
-- Cap wears a red cap; Towel wears a blue towel/scarf; Watanabe stays anchored to the driver side/key.
-- Do not put A/B/W letters on their chests.
-- Props use strong CSS/HTML silhouettes and thick outlines: rods/reels, lidded worm jar, sealed chicken
-  bait, transparent box with waterline, latched/pumped separate tank, bottle carrier, hook/bobber,
-  tanago, and suppon.
-- Hit areas are at least 64 px for core world objects.
-- Contextual speech/objective copy is one or two short lines and never covers the main action.
-- Physical sound is optional and always paired with a visual response.
-
-## 7. Deterministic state boundary
-
-Suggested serializable state:
+The pure CommonJS/browser seam exports:
 
 ```text
-scene: arrival | packing | drive | lake | home
-actors.cap: idle | working | carrying | helping
-actors.towel: idle | working | carrying | helping
-items.<id>.location: bench | tap | actor | trunk | cabin | shore | hook | container
-tanagoBox.filled: boolean
-hook.bait: bare | worm | chicken
-tanago: water | hooked | landed | box
-suppon: water | hooked | landed | tank
-drinksPacked: boolean
-drinkDetourSeen: boolean
+PHASES, PEOPLE, ITEMS, TASKS, SLOTS, ACTIONS, STORAGE_KEY
+freshState(), reduce(), derive(), simulatePlan()
+buildCampaignPlan(), campaignEvidence(), planFingerprint()
+saveCompletion(), loadCompletion()
 ```
 
-- Use a finite scene state machine and pure drop/action rules where practical.
-- Every scene owns and clears its timers.
-- Do not use `Math.random()` in the playable path.
-- Preserve a dedicated, versioned local completion key and never touch Ogasawara campaign state.
-- Reduced-motion mode preserves direct user dragging but replaces autonomous travel/carry/camera motion
-  with clear before/after states and crossfades.
+Lifecycle:
+
+```text
+arrival → plan → run → observe ──revise──> plan
+                          └──clean───────> drive → lake → home
+```
+
+Key contracts:
+
+- Run accepts incomplete plans. A pre-run validation wall must never hide the lesson.
+- `RUN_PLAN` freezes a deep copy and stable fingerprint. Later authoring cannot mutate the active
+  run or report.
+- Outcomes contain no `Math.random()` and do not change with display speed or reduced motion.
+- Unknown actions and illegal phase jumps fail closed and never mutate caller-owned state.
+- Reports preserve the authored plan. **Show in plan** navigates; it never auto-fixes.
+- Watanabe-san is visible but absent from the controllable `PEOPLE` array.
+- Completion is stored only under `prs.hikone-planning-tutorial.v3`, with matching envelope version 3.
+- No campaign, authoring, learning-history, or sound storage key may be read, written, or removed.
+
+## 6. Input and accessibility
+
+- Pointer/touch: drag a task block or deck task onto a visible lane/time slot.
+- Tap/keyboard: select a native task button, then activate a native lane/time slot.
+- Both paths dispatch the same `MOVE_TASK` reducer action.
+- Pointer cancel/lost capture cannot edit the plan.
+- The handoff, Run, report, language, sound, replay, and campaign actions are native controls.
+- Core task/slot controls are at least 44–48 px; primary actions are at least 52–64 px.
+- Focus is visible. **Show in plan** moves focus to and pulses the exact implicated edit.
+- Actor `working`, `waiting`, and `idle` states have text/live-region equivalents; color and motion
+  are never the only evidence.
+- EN/JA switching changes visible names and copy without resetting the plan.
+- Reduced motion shortens autonomous transitions but preserves the exact state/outcome.
+
+## 7. Full-screen and responsive presentation
+
+- `html, body`, `.hk-app`, and `.hk-stage` own the viewport with `overflow:hidden`.
+- Use `100vh` plus `100dvh`; honor all safe-area insets.
+- No document-level horizontal or vertical scrollbar.
+- The planner/report/run dock is a fixed internal overlay. Narrow timelines pan within an invisible
+  internal rail (`scrollbar-width:none` / WebKit scrollbar hidden), never by expanding the page.
+- Wide view: world above, planner roughly the bottom 46%.
+- Portrait: world roughly 51%, planner 49%; the task timeline pans horizontally inside the panel.
+- Short landscape: the planner may use up to 64% height so controls remain usable; the world remains
+  visible as execution context.
+
+Required viewport gates when a supported browser is available:
+
+- 1440×900
+- 1280×720
+- 390×844
+- 320×568
+- 640×360
+
+At each size: `scrollWidth <= innerWidth`, `scrollHeight <= innerHeight`, Plan/Run/Report controls are
+reachable, and resize/orientation changes do not reset state.
 
 ## 8. Acceptance gates
 
-### Product comprehension
+### Semantic parity
 
-- 9/10 cold players begin a useful interaction within 10 seconds of control.
-- 8/10 infer the tap after the empty-box refusal.
-- 8/10 infer worms after the bare-hook refusal.
-- 8/10 move the tanago into the water-filled box without explanatory prose.
-- 10/10 reroute the suppon after the wrong-container refusal.
-- A text-blanked build remains completable within 15% of normal completion time.
-- After play, most players can explain: prepare before leaving; both companions can work; the tanago
-  box needed water; the animals need separate containers; forgetting drinks caused the stop; the
-  animals are for aquariums.
+- Player uses deck → arrange → connect → Run → report → exact fix → rerun.
+- Run visibly follows authored owners and times.
+- An incomplete plan can run.
+- The active run reads only its frozen snapshot.
+- A report names the first cause rather than blaming a person.
+- **Show in plan** focuses the exact handoff or task.
+- No auto-fix is present.
+- No tutorial-only fishing interaction dominates or contradicts campaign play.
 
-### Technical and accessibility
+### Pure model
 
-- Complete by pointer drag, tap-only, keyboard-only, one-thumb portrait, English, and Japanese.
-- Every failed action exposes an actionable next cue within three seconds.
-- Reduced motion and muted sound preserve all information.
-- No page scrollbar at 1440×900, 1280×720, 390×844, 320×568, and 640×360.
-- No console/runtime errors, uncaught timers, random outcomes, dead-end states, or campaign-state writes.
-- Automated verification must specifically fail the rejected cards/effort/progress/Next architecture.
-- A real visual playthrough must cover: normal path, empty-box refusal, missing-drinks detour,
-  bare-hook refusal, wrong suppon container, portrait, short landscape, and reduced motion.
+- Initial Run reports `missing-handoff` first.
+- Adding the handoff reveals `bad-order`, plus `drinks-missing`.
+- Moving Fill/Rods to a valid non-overlapping 05:55 arrangement and placing Drinks at 06:10 clears
+  all roots and yields a 06:20 clean plan.
+- Same plan JSON yields byte-equal simulation output.
+- Moving a caller-owned plan after `RUN_PLAN` cannot change the frozen fingerprint/result.
+- One-person overlap becomes causal evidence; a balanced valid plan has no overlap.
+- Completion cannot persist after a failed run.
+
+### Names and purpose
+
+- Visible cast is exactly Watanabe-san/渡邊さん, Prakhar/プラカール, Nishinaga/西永.
+- No player-facing Cap, Towel, キャップ, タオル labels remain.
+- Watanabe-san is never assignable.
+- Tanago and suppon visibly have separate transport/home containers and are explicitly not food.
+
+### Technical
+
+- `node hikone-verify.js` passes all 212 tutorial contract checks (2026-07-21).
+- `node verify.js` passes all 622 Ogasawara regression checks and invokes the Hikone verifier
+  (2026-07-21).
+- JavaScript syntax checks and `git diff --check` are clean (2026-07-21).
+- No console/runtime errors, dead-end states, random outcomes, stale timers, or campaign-state writes.
 
 ## 9. Implementation surface
 
-- `hikone.html` — standalone semantic shell and controls.
-- `hikone.css` — full-screen world, objects, characters, responsive/reduced-motion presentation.
-- `hikone.js` — deterministic model, scene controller, direct manipulation, sound, bilingual copy.
-- `hikone-verify.js` — static and pure-state contract verifier for the playable loop.
-- `index.html` / `i18n.js` / `style.css` — existing standalone entry from the journeys menu.
+- `hikone.html` — full-screen world plus semantic Plan/Run/Report overlay mounts; loads `engine.js`
+  before `hikone.js`.
+- `hikone.css` — world, two-lane planner, task deck/blocks, handoff, run dock, causal report,
+  portrait/short-landscape/reduced-motion behavior.
+- `hikone.js` — pure tutorial reducer, campaign-day adapter, deterministic runner, bilingual renderer,
+  pointer/tap/keyboard input, dedicated completion storage.
+- `hikone-verify.js` — hostile source and pure-model contract for the shared grammar.
+- `verify.js` — single project gate that must also execute `hikone-verify.js`.
+- `i18n.js`, `README.md`, `CLAUDE.md` — journey entry and durable documentation.
 
-Vanilla HTML, CSS, and JavaScript are sufficient. The rejected version failed because of its interaction
-model, not its technology stack. Consider a more complex engine only after this embodied vertical slice
-proves fun and the team needs larger maps, physics, content tooling, or many additional campaigns.
+Vanilla HTML/CSS/JavaScript remains sufficient. The important complexity is causal simulation and
+interaction parity, not a framework or 3D engine.
+
+## 10. External design supervision status
+
+The owner invited a Claude Code/Fable review and allowed relevant project context. Authentication was
+available, but the managed approval reviewer classified the non-public design/workflow context as an
+external data export and blocked the call before anything was transmitted. The owner was informed of
+that specific risk and asked to reply **“approved for Fable”** if they want the external export. Until
+that informed approval is received, no Fable claim may be made and no workaround may be attempted.
+
+The local campaign audit independently produced the implementation above from `app.js`, `engine.js`,
+`style.css`, `WORLD.md`, and the existing tutorial.
