@@ -39,6 +39,15 @@
  *                          // scheduler is refreshed when day/night changes.
  *     scene(scene, dayK, seg) // scene-first alias for renderers that already
  *                          // have a physical scene profile at a transition.
+ *     describeCue(name),    // pure metadata: category, duration, and the
+ *                          // REQUIRED visible equivalent for every cue.
+ *     beat(kindOrFrame),    // play a causal presentation beat ('stall',
+ *                          // 'reveal', 'handoff', 'repair', 'recovery',
+ *                          // 'risk') or a PRS_STAGE.causalBeatFrame object.
+ *     transition(signatureOrFrom, to) // play a restrained route cue from a
+ *                          // PRS_STAGE.routeSignature or two scene ids.
+ *                          // Both helpers remain no-ops while muted and never
+ *                          // create/resume AudioContext outside toggle().
  *   }
  *
  * AUTOPLAY POLICY: `enabled` starts false and no AudioContext is constructed
@@ -283,6 +292,45 @@
   // =========================================================================
   var PENTA = [523.25, 587.33, 659.25, 783.99, 880.00];   // C D E G A — bright pentatonic blip set
 
+  // Every audio cue declares the visual/state cue that must already be on
+  // screen.  The metadata is available while sound is muted or unsupported;
+  // sound is therefore always an optional reinforcement, never information.
+  var CUE_META = {
+    freeze:   { category: 'causal', durationMs: 1150, visualEquivalent: 'named actor stops; station turns red; missing handoff is visible' },
+    place:    { category: 'commit', durationMs: 100,  visualEquivalent: 'token visibly seats on its authored target' },
+    gain:     { category: 'feedback', durationMs: 300, visualEquivalent: 'visible +N float and updated mastery rail' },
+    thock:    { category: 'report', durationMs: 620, visualEquivalent: 'visible hanko grade lands on the report stage' },
+    fanfare:  { category: 'outcome', durationMs: 1230, visualEquivalent: 'dinner outcome and settled downstream stations are visible' },
+    drawer:   { category: 'navigation', durationMs: 260, visualEquivalent: 'drawer visibly opens or closes and exposes its state' },
+    focus:    { category: 'causal', durationMs: 520, visualEquivalent: 'named actor receives a high-contrast focus ring' },
+    reveal:   { category: 'causal', durationMs: 620, visualEquivalent: 'missing information, item, or authority appears as text and symbol' },
+    handoff:  { category: 'causal', durationMs: 520, visualEquivalent: 'labelled token and route visibly connect sender to recipient' },
+    recover:  { category: 'causal', durationMs: 760, visualEquivalent: 'recipient reaction and settled downstream state are visible' },
+    risk:     { category: 'causal', durationMs: 720, visualEquivalent: 'remaining downstream risk stays visibly marked in amber' },
+    depart:   { category: 'route', durationMs: 850, visualEquivalent: 'framed route title, departure arrow, and location change are visible' },
+    arrive:   { category: 'route', durationMs: 850, visualEquivalent: 'framed route title, arrival marker, and location change are visible' },
+    transfer: { category: 'route', durationMs: 720, visualEquivalent: 'both locations and the transfer direction are visibly named' },
+    exchange: { category: 'relationship', durationMs: 760, visualEquivalent: 'departing and arriving guests are visibly named with a custody arrow' }
+  };
+  function describeCue(name) {
+    var m = CUE_META[name];
+    return m ? { name: name, category: m.category, durationMs: m.durationMs,
+      visualEquivalent: m.visualEquivalent, soundOptional: true } : null;
+  }
+
+  // Small deterministic tone primitive used by Phase-4 cues.  It schedules
+  // and self-cleans exactly like the legacy cue functions; no timer or sim
+  // state is retained.
+  function cueTone(freq, delay, dur, gain, type, endFreq) {
+    var t = now() + (delay || 0), o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = type || 'sine'; o.frequency.setValueAtTime(freq, t);
+    if (endFreq && endFreq > 0) o.frequency.exponentialRampToValueAtTime(endFreq, t + dur);
+    g.gain.value = 0; o.connect(g); g.connect(master);
+    g.gain.linearRampToValueAtTime(gain, t + Math.min(0.018, dur * 0.18));
+    g.gain.exponentialRampToValueAtTime(0.0008, t + dur);
+    o.start(t); o.stop(t + dur + 0.02);
+  }
+
   function cueFreeze() {
     var t = now();
     var o1 = ctx.createOscillator(); o1.type = 'sine'; o1.frequency.value = 220;
@@ -354,12 +402,82 @@
     g.gain.exponentialRampToValueAtTime(0.0008, t + 0.24);
     s.start(t); s.stop(t + 0.26);
   }
-  var CUES = { freeze: cueFreeze, place: cuePlace, gain: cueGain, thock: cueThock, fanfare: cueFanfare, drawer: cueDrawer };
+
+  // Causal sequence: focus is grounded and singular; reveal opens upward;
+  // handoff travels; recover resolves.  These reinforce the stage contract but
+  // are deliberately intelligible only in combination with its visible cue.
+  function cueFocus() {
+    cueTone(196, 0, 0.46, 0.11, 'sine', 220);
+    cueTone(392, 0.035, 0.34, 0.045, 'sine', 440);
+  }
+  function cueReveal() {
+    cueTone(392, 0, 0.42, 0.085, 'triangle', 523.25);
+    cueTone(659.25, 0.18, 0.38, 0.065, 'sine', 783.99);
+  }
+  function cueHandoff() {
+    cueTone(440, 0, 0.28, 0.075, 'sine', 587.33);
+    cueTone(659.25, 0.22, 0.28, 0.07, 'triangle', 783.99);
+  }
+  function cueRecover() {
+    cueTone(392, 0, 0.58, 0.08, 'triangle', 523.25);
+    cueTone(523.25, 0.16, 0.56, 0.075, 'sine', 783.99);
+  }
+  function cueRisk() {
+    cueTone(174.61, 0, 0.54, 0.085, 'sine', 164.81);
+    cueTone(174.61, 0.24, 0.46, 0.065, 'triangle', 155.56);
+  }
+  function cueDepart() {
+    cueTone(130.81, 0, 0.78, 0.075, 'sine', 196);
+    cueTone(261.63, 0.20, 0.62, 0.055, 'triangle', 392);
+  }
+  function cueArrive() {
+    cueTone(392, 0, 0.66, 0.065, 'triangle', 261.63);
+    cueTone(196, 0.20, 0.62, 0.075, 'sine', 130.81);
+  }
+  function cueTransfer() {
+    cueTone(329.63, 0, 0.23, 0.075, 'triangle', 392);
+    cueTone(392, 0.20, 0.23, 0.07, 'triangle', 493.88);
+    cueTone(493.88, 0.40, 0.29, 0.065, 'sine', 523.25);
+  }
+  function cueExchange() {
+    cueTone(293.66, 0, 0.54, 0.065, 'triangle', 392);
+    cueTone(493.88, 0.12, 0.58, 0.065, 'triangle', 369.99);
+  }
+  var CUES = { freeze: cueFreeze, place: cuePlace, gain: cueGain, thock: cueThock,
+    fanfare: cueFanfare, drawer: cueDrawer, focus: cueFocus, reveal: cueReveal,
+    handoff: cueHandoff, recover: cueRecover, risk: cueRisk, depart: cueDepart,
+    arrive: cueArrive, transfer: cueTransfer, exchange: cueExchange };
 
   function cue(name) {
-    if (!enabled || !ctx) return;         // never throws pre-init — a plain no-op
-    var fn = CUES[name]; if (!fn) return;
+    var meta = describeCue(name);
+    if (!meta) return null;
+    if (!enabled || !ctx) return meta;    // muted: no sound, same visual-equivalent contract
+    var fn = CUES[name]; if (!fn) return meta;
     try { fn(); } catch (e) { /* cosmetic only — a synthesis glitch must never reach the caller */ }
+    return meta;
+  }
+
+  var BEAT_CUES = { stall: 'focus', reveal: 'reveal', handoff: 'handoff',
+    repair: 'recover', recovery: 'recover', risk: 'risk' };
+  function beat(kindOrFrame) {
+    var name = typeof kindOrFrame === 'string' ? BEAT_CUES[kindOrFrame] || kindOrFrame :
+      kindOrFrame && (kindOrFrame.audioCue || BEAT_CUES[kindOrFrame.kind]);
+    return name ? cue(name) : null;
+  }
+  function isShipScene(id) { return /ogasawara[-_ ]?maru|inter[-_ ]?island|ship|ferry|vessel/.test(lower(id)); }
+  function transitionCue(from, to) {
+    var f = lower(typeof from === 'string' ? from : from && (from.id || from.fromId));
+    var t = lower(typeof to === 'string' ? to : to && (to.id || to.toId));
+    if (!f || !t) return null;
+    if (isShipScene(t) && !isShipScene(f)) return 'depart';
+    if (isShipScene(f) && !isShipScene(t)) return 'arrive';
+    if (/chichijima|transfer/.test(f + ' ' + t)) return 'transfer';
+    return 'depart';
+  }
+  function transition(signatureOrFrom, to) {
+    var name = signatureOrFrom && typeof signatureOrFrom === 'object' && signatureOrFrom.audioCue;
+    if (!name) name = transitionCue(signatureOrFrom, to);
+    return name ? cue(name) : null;
   }
 
   // =========================================================================
@@ -457,6 +575,11 @@
   }
 
   var API = { enabled: false, toggle: toggle, cue: cue, ambient: ambient, scene: sceneAmbient };
+  // Additive Phase-4 surface; the pinned legacy members above remain byte-for-
+  // byte compatible for existing callers and regression injection points.
+  API.describeCue = describeCue;
+  API.beat = beat;
+  API.transition = transition;
 
   // Live preference changes also update the transient scheduler. The steady
   // bed remains stable; switching to reduce stops chirps immediately.

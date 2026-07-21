@@ -6,6 +6,8 @@
 > **This file is the complete concept + build plan.** It is authoritative; when code and this doc
 > disagree during implementation, reconcile toward this doc or update it deliberately.
 
+> **Current next-level roadmap (2026-07-21):** [`Ogasawara Command Room — Immersive Campaign Roadmap`](docs/superpowers/plans/2026-07-21-immersive-command-room-roadmap.md). The three-run Normal → Communications Outage → Principal Unavailable vertical slice is implemented; future work on full-screen layout, campaign progression, replayable scenarios, carryover, or premium presentation must read its implementation checkpoint and playtest gates first.
+
 ## User
 - **Prakhar Saxena** (`prakhar.saxena@aibos.co.jp`) — primary user / product owner.
 

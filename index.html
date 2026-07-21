@@ -103,10 +103,39 @@
             <div class="vig-rail hidden" id="vig-rail"></div>
           </div>
         </div>
-        <div class="intro-cta">
-          <button class="btn primary lg" id="intro-start" data-i18n="introStart"></button>
-          <button class="btn ghost" id="intro-plan" data-i18n="introPlan"></button>
-        </div>
+        <section class="journey-entry" aria-labelledby="journey-heading">
+          <div class="journey-entry-head">
+            <div>
+              <div class="intro-kicker" data-i18n="journeyKicker"></div>
+              <h2 id="journey-heading" data-i18n="journeyHeading"></h2>
+              <p data-i18n="journeyLead"></p>
+            </div>
+            <div class="journey-progress hidden" id="journey-progress" role="status"></div>
+          </div>
+          <div class="journey-choices">
+            <button class="journey-card recommended" id="intro-start" type="button">
+              <span class="journey-tag" data-i18n="journeyRecommended"></span>
+              <strong data-i18n="journeyGuidedTitle"></strong>
+              <span class="journey-card-copy" data-i18n="journeyGuidedDesc"></span>
+              <span class="journey-card-meta" data-i18n="journeyGuidedMeta"></span>
+            </button>
+            <button class="journey-card" id="intro-campaign" type="button">
+              <span class="journey-tag" data-i18n="journeyCampaignTag"></span>
+              <strong data-i18n="journeyCampaignTitle"></strong>
+              <span class="journey-card-copy" data-i18n="journeyCampaignDesc"></span>
+              <span class="journey-card-meta" data-i18n="journeyCampaignMeta"></span>
+            </button>
+            <button class="journey-card" id="intro-resilience" type="button">
+              <span class="journey-tag" data-i18n="journeyResilienceTag"></span>
+              <strong data-i18n="journeyResilienceTitle"></strong>
+              <span class="journey-card-copy" data-i18n="journeyResilienceDesc"></span>
+              <span class="journey-card-meta" data-i18n="journeyResilienceMeta"></span>
+            </button>
+          </div>
+          <div class="journey-expert-row">
+            <button class="btn ghost" id="intro-plan" type="button" data-i18n="journeyExpert"></button>
+          </div>
+        </section>
       </div>
       <details class="intro-cast-details" id="intro-cast-wrap">
         <summary class="intro-meet" data-i18n="introMeet"></summary>
@@ -118,6 +147,38 @@
   <!-- ============ SETUP ============ -->
   <section id="setup" class="hidden">
     <div class="setup-main">
+
+    <!-- Campaign is a progression layer over the unchanged planner. It gives
+         first-time players one objective and one next action while the full
+         authoring surfaces remain reachable to experienced players. -->
+    <section class="campaign-board card hidden" id="campaign-board" aria-labelledby="campaign-title">
+      <div class="campaign-board-head">
+        <div>
+          <div class="learning-kicker" data-i18n="campaignKicker"></div>
+          <h2 id="campaign-title" data-i18n="campaignTitle"></h2>
+          <p id="campaign-objective"></p>
+        </div>
+        <div class="campaign-progress" id="campaign-progress"></div>
+      </div>
+      <div class="campaign-episodes" id="campaign-episodes" role="list"></div>
+      <div class="campaign-guidance">
+        <ol class="campaign-steps" id="campaign-steps"></ol>
+        <div class="campaign-guidance-copy">
+          <strong id="campaign-step-title"></strong>
+          <p id="campaign-step-copy"></p>
+        </div>
+      </div>
+      <fieldset class="campaign-strategies hidden" id="campaign-strategies">
+        <legend data-i18n="campaignStrategyLegend"></legend>
+        <div id="campaign-strategy-options"></div>
+      </fieldset>
+      <div class="campaign-carryover" id="campaign-carryover"></div>
+      <div class="campaign-actions">
+        <button class="btn primary campaign-next" type="button" id="campaign-next"></button>
+        <button class="btn sm ghost campaign-reset" type="button" id="campaign-reset" data-i18n="campaignReset"></button>
+      </div>
+      <div class="sr-only" id="campaign-status" role="status" aria-live="polite"></div>
+    </section>
 
     <!-- Cluster-first plan overview. The current outcome and its next authoring
          action precede the decorative canvas in source order. -->
@@ -290,53 +351,61 @@
         <div class="nowtag" id="nowtag"></div>
         <div class="dinnertag hidden" id="dinnertag"></div>
         <div class="fanfare" id="fanfare"></div>
+        <!-- LIVE MODE dock: cold-open briefing → freeze prompt → spotlight
+             one-question fix → result. It lives in the stage so it can layer
+             over the world instead of increasing the document height. -->
+        <div class="sr-only" id="live-status" role="status" aria-live="polite" aria-atomic="true"></div>
+        <div class="stage-presentation-status" id="stage-presentation-status" role="status" aria-live="polite" aria-atomic="true"></div>
+        <div class="stage-relationships" id="stage-relationships" aria-label=""></div>
+        <div class="live-dock hidden" id="live-dock">
+          <div class="ld-panel" id="ld-brief" tabindex="-1"></div>
+          <div class="ld-panel" id="ld-prompt" tabindex="-1"></div>
+          <div class="ld-panel" id="ld-spot" tabindex="-1"></div>
+          <div class="ld-panel" id="ld-result" tabindex="-1"></div>
+        </div>
+
+        <!-- Run controls are a compact, internally bounded HUD. Keeping them
+             inside the stage prevents options/log content from creating a page
+             scrollbar at short viewports or high browser zoom. -->
+        <div class="run-console">
+          <div class="legend" id="legend"></div>
+          <details class="run-options" id="run-options">
+            <summary data-i18n="runOptionsSummary"></summary>
+            <div class="run-options-body">
+              <span class="sr-only" id="pace-switch-label" data-i18n="paceLabel"></span>
+              <div class="pace-switch" role="group" aria-labelledby="pace-switch-label">
+                <button class="pace on" id="pace-events" type="button" data-pace="events" data-i18n="paceEvents"></button>
+                <button class="pace" id="pace-full" type="button" data-pace="full" data-i18n="paceFull"></button>
+              </div>
+              <p class="muted2" id="pace-description" data-i18n="paceEventsDesc"></p>
+              <div class="speedrow" role="group" aria-labelledby="speed-label"><span class="muted2" id="speed-label" data-i18n="speedLbl"></span>
+                <button class="spd" data-spd="0.5" aria-pressed="false">0.5×</button>
+                <button class="spd on" data-spd="1" aria-pressed="true">1×</button>
+                <button class="spd" data-spd="2" aria-pressed="false">2×</button>
+                <button class="spd" data-spd="4" aria-pressed="false">4×</button>
+                <button class="spd" data-spd="8" aria-pressed="false">8×</button>
+              </div>
+            </div>
+          </details>
+
+          <div class="controls">
+            <button class="btn" id="btn-pause" type="button"></button>
+            <button class="btn ghost" id="btn-guests" type="button" aria-controls="stage" aria-pressed="false"></button>
+            <button class="btn ghost" id="btn-drawer" type="button" aria-controls="dashboard" aria-expanded="true"></button>
+            <button class="btn ghost" id="btn-quit" type="button" data-i18n="quitBtn"></button>
+          </div>
+
+          <div class="logbox" id="logbox"></div>
+        </div>
       </div>
       <!-- Canvas pawns must not create an invisible 11-button tab run. app.js can
            remove inert when it supplies an equivalent visible keyboard roster. -->
       <div id="stage-roster" class="sr-only"></div>
-
-      <!-- LIVE MODE dock: cold-open briefing → freeze prompt → spotlight one-question fix → result -->
-      <div class="sr-only" id="live-status" role="status" aria-live="polite" aria-atomic="true"></div>
-      <div class="live-dock hidden" id="live-dock">
-        <div class="ld-panel" id="ld-brief" tabindex="-1"></div>
-        <div class="ld-panel" id="ld-prompt" tabindex="-1"></div>
-        <div class="ld-panel" id="ld-spot" tabindex="-1"></div>
-        <div class="ld-panel" id="ld-result" tabindex="-1"></div>
-      </div>
-
-      <div class="legend" id="legend"></div>
-      <details class="run-options" id="run-options">
-        <summary data-i18n="runOptionsSummary"></summary>
-        <div class="run-options-body">
-          <span class="sr-only" id="pace-switch-label" data-i18n="paceLabel"></span>
-          <div class="pace-switch" role="group" aria-labelledby="pace-switch-label">
-            <button class="pace on" id="pace-events" type="button" data-pace="events" data-i18n="paceEvents"></button>
-            <button class="pace" id="pace-full" type="button" data-pace="full" data-i18n="paceFull"></button>
-          </div>
-          <p class="muted2" id="pace-description" data-i18n="paceEventsDesc"></p>
-          <div class="speedrow" role="group" aria-labelledby="speed-label"><span class="muted2" id="speed-label" data-i18n="speedLbl"></span>
-            <button class="spd" data-spd="0.5" aria-pressed="false">0.5×</button>
-            <button class="spd on" data-spd="1" aria-pressed="true">1×</button>
-            <button class="spd" data-spd="2" aria-pressed="false">2×</button>
-            <button class="spd" data-spd="4" aria-pressed="false">4×</button>
-            <button class="spd" data-spd="8" aria-pressed="false">8×</button>
-          </div>
-        </div>
-      </details>
-
-      <div class="controls">
-        <button class="btn" id="btn-pause" type="button"></button>
-        <button class="btn ghost" id="btn-guests" type="button" aria-controls="stage" aria-pressed="false"></button>
-        <button class="btn ghost" id="btn-drawer" type="button" aria-controls="dashboard" aria-expanded="true"></button>
-        <button class="btn ghost" id="btn-quit" type="button" data-i18n="quitBtn"></button>
-      </div>
-
-      <div class="logbox" id="logbox"></div>
       </div><!-- /.run-main -->
 
       <!-- Keep the live prompt and run controls before this dashboard in source
-           order; the desktop grid still pins the dashboard beside the map. -->
-      <aside class="dashboard" id="dashboard">
+           order; presentation turns this into a non-resizing drawer/sheet. -->
+      <aside class="dashboard" id="dashboard" aria-labelledby="dash-day">
         <div class="dash-head"><span class="dash-day" id="dash-day"></span><span class="dash-phase" id="dash-phase"></span></div>
         <div class="dash-sec">
           <div class="dash-lbl" data-i18n="railLbl"></div>
@@ -369,6 +438,14 @@
 
   <!-- ============ REPORT ============ -->
   <section id="report" class="hidden" tabindex="-1">
+    <section class="card campaign-report-card hidden" id="campaign-report-card" aria-labelledby="campaign-report-title">
+      <div class="learning-kicker" id="campaign-report-kicker"></div>
+      <h2 id="campaign-report-title"></h2>
+      <p class="campaign-report-summary" id="campaign-report-summary"></p>
+      <div class="campaign-report-metrics" id="campaign-report-metrics"></div>
+      <div class="campaign-report-evidence" id="campaign-report-evidence"></div>
+      <button class="btn primary campaign-report-next" type="button" id="campaign-report-next"></button>
+    </section>
     <!-- §HarborComplete S3: report-on-stage — the same harbor at dusk. Stall markers glow where the
          day actually lost time (each is a click-through to the fixing surface); the grade lands as a
          hanko stamp. #report-stage's canvas + local rAF are created by bootReportStage() and
@@ -413,7 +490,7 @@
       <summary data-i18n="individualsTitle"></summary>
       <div class="report-disclosure-body"><div class="indivwrap"><table class="indiv" id="individuals"></table></div></div>
     </details>
-    <div style="display:flex;gap:8px;">
+    <div class="legacy-report-actions" style="display:flex;gap:8px;">
       <button class="btn" id="btn-tweak" style="flex:1;" data-i18n="editBtn"></button>
       <button class="btn primary" id="btn-again" style="flex:1;" data-i18n="againBtn"></button>
     </div>
@@ -499,6 +576,19 @@
       <button class="btn ghost" type="button" id="prediction-cancel" data-i18n="predictionCancel"></button>
       <button class="btn primary" type="button" id="prediction-run" data-i18n="predictionRun"></button>
     </div>
+  </div>
+</div>
+
+<!-- ============ CAMPAIGN INCIDENT REVEAL (after plan lock) ============ -->
+<div class="modal campaign-incident-modal" id="campaign-incident-modal">
+  <div class="sheet campaign-incident-sheet" role="dialog" aria-modal="true" aria-labelledby="campaign-incident-title" aria-describedby="campaign-incident-body">
+    <div class="sr-only" id="campaign-incident-status" role="status" aria-live="assertive" aria-atomic="true"></div>
+    <div class="campaign-incident-signal" aria-hidden="true">!</div>
+    <div class="learning-kicker" data-i18n="campaignIncidentKicker"></div>
+    <h2 id="campaign-incident-title"></h2>
+    <p id="campaign-incident-body"></p>
+    <div class="campaign-incident-rule" data-i18n="campaignIncidentRule"></div>
+    <div class="foot"><button class="btn primary" type="button" id="campaign-incident-run" data-i18n="campaignIncidentRun"></button></div>
   </div>
 </div>
 

@@ -2140,6 +2140,291 @@ console.log('\n=== TEACHING MVP — readiness, channel feasibility, and scenario
 })();
 
 // ============================================================================
+// IMMERSIVE CAMPAIGN ENGINE — composable incidents, stateful consequences,
+// deterministic replay, and a resilience track that never rewrites mastery.
+// ============================================================================
+console.log('\n=== IMMERSIVE CAMPAIGN ENGINE — scenarios, RunState, recovery, replay ===');
+(function () {
+  function sumMax(atoms) {
+    return atoms.reduce(function (total, atom) { return total + atom.maxPts; }, 0);
+  }
+  function numericVector(vector) {
+    var keys = ['coordinationWork', 'cashCost', 'fatigueLoad', 'guestWaitMin', 'redundancy'];
+    return keys.every(function (key) {
+      return typeof vector[key] === 'number' && isFinite(vector[key]) && vector[key] >= 0;
+    });
+  }
+
+  var canonCfg = trueCanonCfgV(), canonPlan = P.mergePlan(canonCfg);
+  var canonBefore = JSON.stringify(canonPlan), canonTrip = P.scoreTrip(canonPlan);
+  var initialState = P.createRunState();
+  var initialStateBefore = JSON.stringify(initialState);
+
+  // The original two scenario contracts stay valid through the richer campaign
+  // API: normal remains a no-op, while the established radio route survives the
+  // communications outage without changing the authored mastery ledger.
+  var normalResult = P.evaluateScenario(canonPlan, 'normal', 'standard-plan', initialState, 41);
+  var outageResult = P.evaluateScenario(canonPlan, 'comms-outage', 'radio-route', initialState, 41);
+  ok(normalResult.success && normalResult.replay.scenarioId === 'normal' &&
+     normalResult.appliedDelta && Object.keys(normalResult.appliedDelta).length === 0 &&
+     outageResult.success && outageResult.replay.scenarioId === 'comms-outage' &&
+     outageResult.evidence.indexOf('marine-radio-route') >= 0 &&
+     P.scenarioProfile('comms-outage').unavailableAtSea.join(',') === 'board,chat,phone',
+    'normal/no-op and communications-outage/radio compatibility survive the campaign API');
+
+  // Composition is a pure data fold: duplicate modifiers collapse, unknown ids
+  // remain explicit evidence, and neither caller-owned metadata object is touched.
+  var modifierIds = ['storm-weather', 'low-catch-yield', 'future-incident', 'storm-weather'];
+  var scenarioMeta = { id: 'compound-test', name: { en: 'Compound', jp: '複合' },
+    revealPhase: 'after-lock', badgeId: 'compound-resilient', strategyIds: ['one', 'two'] };
+  var modifierIdsBefore = JSON.stringify(modifierIds), scenarioMetaBefore = JSON.stringify(scenarioMeta);
+  var compoundA = P.composeScenario(modifierIds, scenarioMeta);
+  var compoundB = P.composeScenario(modifierIds, scenarioMeta);
+  ok(JSON.stringify(modifierIds) === modifierIdsBefore && JSON.stringify(scenarioMeta) === scenarioMetaBefore &&
+     JSON.stringify(compoundA) === JSON.stringify(compoundB) && compoundA !== compoundB &&
+     compoundA.name !== scenarioMeta.name && compoundA.strategyIds !== scenarioMeta.strategyIds,
+    'composeScenario is byte-deterministic, clones outputs, and never mutates caller data');
+  ok(compoundA.modifierIds.join(',') === 'low-catch-yield,storm-weather' &&
+     compoundA.unknownModifierIds.join(',') === 'future-incident' &&
+     compoundA.weatherState === 'storm' && compoundA.fishingAllowed === false &&
+     compoundA.catchYieldPct === 35 && compoundA.resourceDemand.fallbackFood === 1,
+    'scenario composition combines declarative constraints and retains unknown-modifier evidence');
+  compoundA.tags.push('caller-mutation'); compoundA.name.en = 'changed';
+  ok(P.scenarioProfile('storm-no-go').tags.indexOf('caller-mutation') < 0 &&
+     P.composeScenario(modifierIds, scenarioMeta).name.en === 'Compound',
+    'mutating a composed/profile result cannot alter the internal scenario catalog or caller metadata');
+
+  var storm = P.scenarioProfile('storm-no-go'), lowCatch = P.scenarioProfile('low-catch');
+  ok(storm.modifierIds.join(',') === 'storm-weather' && storm.weatherState === 'storm' &&
+     storm.fishingAllowed === false && storm.tags.indexOf('safety') >= 0 &&
+     storm.revealPhase === 'after-lock' && storm.badgeId === 'weather-resilient',
+    'storm incident exposes explicit weather, no-go, reveal, safety, and resilience hooks');
+  ok(lowCatch.modifierIds.join(',') === 'low-catch-yield' && lowCatch.catchYieldPct === 35 &&
+     lowCatch.resourceDemand.fallbackFood === 1 && lowCatch.tags.indexOf('supply') >= 0 &&
+     lowCatch.revealPhase === 'checkpoint' && lowCatch.badgeId === 'supply-resilient',
+    'low-catch incident exposes explicit yield, fallback-supply, reveal, and resilience hooks');
+
+  var allStrategyIds = [];
+  Object.keys(P.SCENARIO_STRATEGIES).forEach(function (scenarioId) {
+    Object.keys(P.SCENARIO_STRATEGIES[scenarioId]).forEach(function (strategyId) {
+      allStrategyIds.push(scenarioId + '/' + strategyId);
+    });
+  });
+  ok(allStrategyIds.length === 12 && allStrategyIds.every(function (key) {
+    var parts = key.split('/'), strategy = P.scenarioStrategy(parts[0], parts[1]);
+    return strategy && strategy.id === parts[1] && numericVector(strategy.vector) &&
+      strategy.runStateDelta && typeof strategy.runStateDelta === 'object';
+  }), 'all 12 public strategies carry complete non-negative trade-off vectors and state deltas');
+  var stormShore = P.scenarioStrategy('storm-no-go', 'shore-fallback');
+  var stormPostpone = P.scenarioStrategy('storm-no-go', 'postpone');
+  var principalDeputy = P.scenarioStrategy('principal-unavailable', 'deputy-command');
+  var principalDistributed = P.scenarioStrategy('principal-unavailable', 'distributed-command');
+  var lowSupply = P.scenarioStrategy('low-catch', 'fallback-supply');
+  var lowMenu = P.scenarioStrategy('low-catch', 'menu-substitution');
+  ok(stormPostpone.vector.cashCost > stormShore.vector.cashCost &&
+     stormPostpone.vector.guestWaitMin > stormShore.vector.guestWaitMin &&
+     principalDistributed.vector.coordinationWork > principalDeputy.vector.coordinationWork &&
+     principalDistributed.vector.redundancy > principalDeputy.vector.redundancy &&
+     lowSupply.vector.cashCost > lowMenu.vector.cashCost &&
+     lowMenu.runStateDelta.criticalInventory < 0,
+    'strategy vectors expose real cash/wait, coordination/redundancy, and inventory trade-offs');
+  stormPostpone.vector.cashCost = -1;
+  ok(P.scenarioStrategy('storm-no-go', 'postpone').vector.cashCost === 60000,
+    'scenarioStrategy returns a defensive clone of public strategy data');
+
+  // A mastered plan supports more than one deterministic answer to principal
+  // absence. The answers are both viable but carry visibly different team cost.
+  var deputyA = P.evaluateScenario(canonPlan, 'principal-unavailable', 'deputy-command', initialState, 424242);
+  var deputyB = P.evaluateScenario(canonPlan, 'principal-unavailable', 'deputy-command', initialState, 424242);
+  var distributedA = P.evaluateScenario(canonPlan, 'principal-unavailable', 'distributed-command', initialState, 424242);
+  var distributedB = P.evaluateScenario(canonPlan, 'principal-unavailable', 'distributed-command', initialState, 424242);
+  ok(deputyA.success && distributedA.success && JSON.stringify(deputyA) === JSON.stringify(deputyB) &&
+     JSON.stringify(distributedA) === JSON.stringify(distributedB),
+    'principal-unavailable has at least two viable byte-deterministic strategies');
+  ok(deputyA.runStateAfter.teamCapacity === 96 && distributedA.runStateAfter.teamCapacity === 92 &&
+     deputyA.status === 'resilient' && deputyA.resilienceEarned === true &&
+     deputyA.badgeAwarded === 'delegation-resilient' &&
+     deputyA.runStateAfter.resilienceBadges.join(',') === 'delegation-resilient' &&
+     distributedA.status === 'resilient' && distributedA.resilienceEarned === true &&
+     distributedA.badgeAwarded === 'delegation-resilient' &&
+     distributedA.runStateAfter.resilienceBadges.join(',') === 'delegation-resilient' &&
+     JSON.stringify(canonPlan) === canonBefore && JSON.stringify(initialState) === initialStateBefore,
+    'deputy and distributed strategies independently earn delegation resilience without mutation');
+
+  var missingDistributedRoutePlan = JSON.parse(JSON.stringify(canonPlan));
+  var missingWeatherRoute = missingDistributedRoutePlan.infoCards.filter(function (card) {
+    return card.id === 'ic_weather';
+  })[0];
+  missingWeatherRoute.recipientRoleIds = missingWeatherRoute.recipientRoleIds.filter(function (roleId) {
+    return roleId !== 'siteLead' && roleId !== 'safetyLead';
+  });
+  var missingDistributedRouteBefore = JSON.stringify(missingDistributedRoutePlan);
+  var blockedDistributed = P.evaluateScenario(missingDistributedRoutePlan, 'principal-unavailable',
+    'distributed-command', initialState, 424242);
+  var survivingDeputy = P.evaluateScenario(missingDistributedRoutePlan, 'principal-unavailable',
+    'deputy-command', initialState, 424242);
+  ok(!blockedDistributed.success && blockedDistributed.status === 'blocked' &&
+     blockedDistributed.badgeAwarded === null && blockedDistributed.resilienceEarned === false &&
+     blockedDistributed.evidence.indexOf('distributed-route-ic_weather-missing') >= 0 &&
+     blockedDistributed.evidence.indexOf('distributed-information-route-gap') >= 0 &&
+     survivingDeputy.success && survivingDeputy.status === 'resilient' &&
+     survivingDeputy.badgeAwarded === 'delegation-resilient' && survivingDeputy.resilienceEarned === true &&
+     JSON.stringify(missingDistributedRoutePlan) === missingDistributedRouteBefore &&
+     JSON.stringify(canonPlan) === canonBefore,
+    'deleting one required distributed information route blocks only distributed-command');
+
+  // The mastery constitution is frozen even when incidents and consequences are
+  // evaluated: 99 derived atoms price exactly 100 points, with a clean total 100.
+  var canonAfterScenarios = P.scoreTrip(canonPlan);
+  ok(canonTrip.atoms.length === 99 && canonAfterScenarios.atoms.length === 99 &&
+     sumMax(canonTrip.atoms) === 100 && sumMax(canonAfterScenarios.atoms) === 100 &&
+     canonTrip.total === 100 && canonAfterScenarios.total === 100 && canonAfterScenarios.gate.clean,
+    'scenario evaluation preserves the canonical 99-atom/100-point mastery constitution');
+
+  // RunState constructors are forgiving at creation/import boundaries, while
+  // validateRunState is deliberately strict for already-versioned persisted data.
+  var defaultState = P.createRunState(), validDefault = P.validateRunState(defaultState);
+  ok(validDefault.ok && validDefault.errors.length === 0 &&
+     JSON.stringify(validDefault.state) === JSON.stringify(defaultState) &&
+     defaultState.version === P.RUN_STATE_VERSION && defaultState.cashReserve === 300000 &&
+     defaultState.teamCapacity === 100 && defaultState.criticalInventory === 2 &&
+     defaultState.interventionTokens === 1,
+    'RunState defaults validate as a complete current-version state');
+  var boundedState = P.createRunState({ cashReserve: -1, teamCapacity: 999,
+    criticalInventory: -2, guestWait: 99999, interventionTokens: 99,
+    operationalDebt: -10, resilienceBadges: ['one', 'one', '', 7, 'two'] });
+  ok(boundedState.cashReserve === 0 && boundedState.teamCapacity === 100 &&
+     boundedState.criticalInventory === 0 && boundedState.guestWait === 10080 &&
+     boundedState.interventionTokens === 20 && boundedState.operationalDebt === 0 &&
+     boundedState.resilienceBadges.join(',') === 'one,two',
+    'createRunState clamps every numeric bound and sanitizes badge ids deterministically');
+  var invalidPersisted = JSON.parse(JSON.stringify(defaultState));
+  invalidPersisted.cashReserve = -1; invalidPersisted.resilienceBadges = ['dup', 'dup'];
+  var invalidPersistedBefore = JSON.stringify(invalidPersisted);
+  var invalidValidation = P.validateRunState(invalidPersisted);
+  ok(!invalidValidation.ok && invalidValidation.state === null &&
+     invalidValidation.errors.indexOf('invalid-cashReserve') >= 0 &&
+     invalidValidation.errors.indexOf('invalid-resilienceBadges') >= 0 &&
+     JSON.stringify(invalidPersisted) === invalidPersistedBefore,
+    'validateRunState rejects out-of-range/duplicate persisted data without mutating it');
+  var migrated = P.migrateRunState({ version: 0, reserve: 123456, capacity: 77,
+    inventory: 4, wait: 25, tokens: 3, debt: 8, badges: ['legacy-resilient'] });
+  ok(migrated && migrated.version === P.RUN_STATE_VERSION && migrated.cashReserve === 123456 &&
+     migrated.teamCapacity === 77 && migrated.criticalInventory === 4 && migrated.guestWait === 25 &&
+     migrated.interventionTokens === 3 && migrated.operationalDebt === 8 &&
+     migrated.resilienceBadges.join(',') === 'legacy-resilient' &&
+     P.migrateRunState({ version: P.RUN_STATE_VERSION + 1 }) === null,
+    'RunState migration maps the v0 vocabulary and fails closed on unknown future versions');
+
+  var deltaSource = P.createRunState({ cashReserve: 60000, teamCapacity: 10,
+    criticalInventory: 1, guestWait: 10070, interventionTokens: 1, operationalDebt: 998 });
+  var deltaSourceBefore = JSON.stringify(deltaSource);
+  var validDelta = P.applyRunStateDelta(deltaSource, { cashReserve: -10000, operationalDebt: 1 }, 'delta-badge');
+  var underflow = P.applyRunStateDelta(deltaSource, { teamCapacity: -11 });
+  var overflow = P.applyRunStateDelta(deltaSource, { guestWait: 11 });
+  ok(validDelta.ok && validDelta.state.cashReserve === 50000 && validDelta.state.operationalDebt === 999 &&
+     validDelta.state.resilienceBadges.join(',') === 'delta-badge' &&
+     !underflow.ok && underflow.reason === 'insufficient-teamCapacity' &&
+     !overflow.ok && overflow.reason === 'run-state-limit-guestWait' &&
+     JSON.stringify(deltaSource) === deltaSourceBefore,
+    'RunState deltas apply immutably and reject lower/upper-bound crossings atomically');
+
+  // Recovery is costly carryover, never a hidden plan edit or a score repair.
+  var recoveryPlanBefore = JSON.stringify(canonPlan), recoveryScoreBefore = JSON.stringify(P.scoreTrip(canonPlan));
+  var recoveryState = P.createRunState({ cashReserve: 120000, interventionTokens: 1 });
+  var recoveryStateBefore = JSON.stringify(recoveryState);
+  var purchase = P.applyRecovery(recoveryState, 'reserve-purchase');
+  var intervention = P.applyRecovery(recoveryState, 'use-intervention');
+  var exhausted = P.applyRecovery(P.createRunState({ cashReserve: 50000 }), 'reserve-purchase');
+  var unknownRecovery = P.applyRecovery(recoveryState, 'telepathy');
+  ok(purchase.ok && purchase.planChanged === false && purchase.state.cashReserve === 60000 &&
+     purchase.state.operationalDebt === 1 && purchase.appliedDelta.cashReserve === -60000 &&
+     intervention.ok && intervention.planChanged === false && intervention.state.interventionTokens === 0 &&
+     intervention.state.operationalDebt === 1,
+    'costly recoveries consume reserve/tokens and add explicit operational debt');
+  ok(!exhausted.ok && exhausted.reason === 'insufficient-cashReserve' && exhausted.planChanged === false &&
+     !unknownRecovery.ok && unknownRecovery.reason === 'unknown-recovery' && unknownRecovery.planChanged === false &&
+     JSON.stringify(recoveryState) === recoveryStateBefore && JSON.stringify(canonPlan) === recoveryPlanBefore &&
+     JSON.stringify(P.scoreTrip(canonPlan)) === recoveryScoreBefore,
+    'failed or successful recovery never mutates RunState, the authored plan, or mastery score');
+
+  // createSim.cfg is the replay envelope. It must preserve scenario, seed,
+  // strategy, and versioned state through any number of fresh simulation builds.
+  var replayCfg = P.applyScenario(canonCfg, 'principal-unavailable', 'distributed-command');
+  replayCfg.seed = 8675309;
+  replayCfg.runState = P.createRunState({ cashReserve: 222222, teamCapacity: 83,
+    criticalInventory: 5, guestWait: 45, interventionTokens: 4,
+    operationalDebt: 7, resilienceBadges: ['communications-resilient'] });
+  var replayCfgBefore = JSON.stringify(replayCfg);
+  var replaySimA = P.createSim(replayCfg, 'fishday');
+  var replaySimB = P.createSim(replaySimA.cfg, 'fishday');
+  ok(JSON.stringify(replayCfg) === replayCfgBefore &&
+     JSON.stringify(replaySimA.cfg) === JSON.stringify(replaySimB.cfg) &&
+     replaySimB.cfg.scenarioId === 'principal-unavailable' && replaySimB.cfg.seed === 8675309 &&
+     replaySimB.cfg.scenarioStrategyId === 'distributed-command' &&
+     JSON.stringify(replaySimB.cfg.runState) === JSON.stringify(replayCfg.runState) &&
+     JSON.stringify(replaySimB.runState) === JSON.stringify(replayCfg.runState) &&
+     replaySimB.plan.scenarioId === 'principal-unavailable' &&
+     replaySimB.plan.scenarioStrategyId === 'distributed-command',
+    'replay round-trips scenario, seed, strategy, and RunState without caller mutation');
+  var replayResultA = P.evaluateScenario(replaySimA.plan, replaySimA.cfg.scenarioId,
+    replaySimA.cfg.scenarioStrategyId, replaySimA.runState, replaySimA.cfg.seed);
+  var replayResultB = P.evaluateScenario(replaySimB.plan, replaySimB.cfg.scenarioId,
+    replaySimB.cfg.scenarioStrategyId, replaySimB.runState, replaySimB.cfg.seed);
+  ok(JSON.stringify(replayResultA) === JSON.stringify(replayResultB) &&
+     replayResultA.replay.scenarioId === 'principal-unavailable' &&
+     replayResultA.replay.seed === 8675309 && replayResultA.replay.strategyId === 'distributed-command' &&
+     JSON.stringify(replayResultA.runStateBefore) === JSON.stringify(replayCfg.runState),
+    'replayed scenario evaluation reproduces the same incident, strategy, seed, and starting state');
+
+  // Principal absence must be enacted by the animated run, not introduced only
+  // in the debrief.  The runtime marks the current owner holder unavailable and
+  // keeps that pawn out of work across ticks, while the authored plan and mastery
+  // constitution remain byte-identical.
+  var principalRunCfg = P.applyScenario(canonCfg, 'principal-unavailable', 'deputy-command');
+  var principalRunCfgBefore = JSON.stringify(principalRunCfg);
+  var principalRun = P.createSim(principalRunCfg, 'return', { animate: true });
+  var ownerPid = principalRun.plan.roles.owner.holder;
+  var offlineOwner = principalRun.participants.filter(function (p) { return p.id === ownerPid; })[0];
+  for (var principalTick = 0; principalTick < 8; principalTick++) P.tick(principalRun);
+  var offlineOwnerAfter = principalRun.participants.filter(function (p) { return p.id === ownerPid; })[0];
+  var normalReturnRun = P.createSim(canonCfg, 'return', { animate: true });
+  var normalOwner = normalReturnRun.participants.filter(function (p) { return p.id === ownerPid; })[0];
+  ok(offlineOwner && offlineOwner.scenarioUnavailable === true && offlineOwner.unavailableRoleId === 'owner' &&
+     offlineOwner.state === 'unavailable' && offlineOwner.taskId === null &&
+     offlineOwnerAfter.state === 'unavailable' && offlineOwnerAfter.taskId === null &&
+     principalRun.scenarioState.id === 'principal-unavailable' &&
+     principalRun.scenarioState.unavailableRoleIds.join(',') === 'owner' &&
+     principalRun.scenarioState.unavailableParticipantIds.join(',') === ownerPid &&
+     normalOwner && normalOwner.scenarioUnavailable === false && normalOwner.state !== 'unavailable' &&
+     JSON.stringify(principalRunCfg) === principalRunCfgBefore && JSON.stringify(canonPlan) === canonBefore &&
+     P.scoreTrip(canonPlan).total === 100 && P.scoreTrip(canonPlan).atoms.length === 99,
+    'principal-unavailable visibly removes the owner at runtime without mutating plan mastery');
+
+  // A live intervention may rescue execution at a visible cost, but it is not
+  // evidence of planned resilience and can never rewrite the mastery ledger.
+  var gappyPlan = P.mergePlan(base), gappyMasteryBefore = P.scoreTrip(gappyPlan);
+  var gappyPlanBefore = JSON.stringify(gappyPlan);
+  var gappyIntervention = P.evaluateScenario(gappyPlan, 'principal-unavailable',
+    'intervention-token', P.createRunState(), 73);
+  var gappyMasteryAfter = P.scoreTrip(gappyPlan);
+  ok(gappyIntervention.success && gappyIntervention.status === 'recovered-with-debt' &&
+     gappyIntervention.reason === 'live-recovery-with-operational-debt' &&
+     gappyIntervention.recoveredWithDebt === true &&
+     gappyIntervention.appliedDelta.interventionTokens === -1 &&
+     gappyIntervention.appliedDelta.operationalDebt === 2 &&
+     gappyIntervention.runStateAfter.interventionTokens === 0 &&
+     gappyIntervention.runStateAfter.operationalDebt === 2 &&
+     gappyIntervention.badgeAwarded === null && gappyIntervention.resilienceEarned === false &&
+     gappyIntervention.runStateAfter.resilienceBadges.length === 0 &&
+     gappyIntervention.planMastery.score === gappyMasteryBefore.total &&
+     gappyIntervention.planMastery.atomCount === 99 && gappyMasteryBefore.total < 100 &&
+     JSON.stringify(gappyMasteryAfter) === JSON.stringify(gappyMasteryBefore) &&
+     JSON.stringify(gappyPlan) === gappyPlanBefore,
+    'intervention recovers with token/debt cost but earns no badge and leaves the plan unchanged');
+})();
+
+// ============================================================================
 // CLUSTER-FIRST PLAN — deterministic causal roots + 100 means mastery.
 // ============================================================================
 console.log('\n=== CLUSTER-FIRST PLAN — score rollup, causal roots, stable editor targets ===');

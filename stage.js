@@ -151,7 +151,7 @@
 
   // participant state → speech-bubble emoji (app.js:93); '' = no bubble
   var BUB = { confused: '❓', meeting: '💬', waiting: '⏳', tired: '😣', onFire: '🔥',
-              resolved: '✅', working: '', idle: '', waitInfo: '⏳', rework: '🔁' };
+              resolved: '✅', working: '', idle: '', waitInfo: '⏳', rework: '🔁', unavailable: '⊘' };
 
   // day-phase sky table (app.js:1176-1187): [clockMin, topRGB, horizonRGB, alpha]
   var SKY = [
@@ -181,10 +181,11 @@
     waitInfo: { rgb: AURA_AMBER, a: 0.6, op: 1,   pulse: false },
     meeting:  { rgb: AURA_BLUE,  a: 0.6, op: 1,   pulse: false },
     rework:   { rgb: AURA_BLUE,  a: 0.6, op: 1,   pulse: true  },
-    resolved: { rgb: AURA_GREEN, a: 0.6, op: 0.8, pulse: false }
+    resolved: { rgb: AURA_GREEN, a: 0.6, op: 0.8, pulse: false },
+    unavailable: { rgb: '107,113,120', a: 0.5, op: 0.7, pulse: false }
   };
   // whole-figure opacity by state (style.css:316-318); default 1
-  var STATE_DIM = { tired: 0.8, waitInfo: 0.92, idle: 0.55 };
+  var STATE_DIM = { tired: 0.8, waitInfo: 0.92, idle: 0.55, unavailable: 0.42 };
 
   // station territory tint (style.css:370-377). rgb/a = halo radial centre, op = halo
   // opacity, border = the icon-disc border colour that replaces the default gold.
@@ -620,6 +621,222 @@
   function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
   function clockOfDay(v) { var m = v % 1440; return m < 0 ? m + 1440 : m; }
   function smoothstep(k) { k = clamp(k, 0, 1); return k * k * (3 - 2 * k); }   // the app's e = k*k*(3-2*k)
+
+  // =========================================================================
+  // PHASE-4 PRESENTATION CONTRACTS — pure descriptions, never sim mutations.
+  //
+  // These helpers deliberately accept plain data and return fresh plain data.
+  // They may be called by app.js, tests, a future campaign controller, or the
+  // optional render hooks below.  No helper reads/writes score, plan mastery,
+  // RunState, task state, or the live clock.  `nowMs` is always supplied by the
+  // caller, which keeps replays deterministic and makes the 1–2 second beats
+  // presentation-only.  Reduced motion keeps the same facts as a held static
+  // cue; it does not merely remove the only explanation.
+  // =========================================================================
+
+  var PRIORITY_GUEST_IDENTITIES = {
+    gd_watanabe: { slot: 0, color: '#d66a55', rgb: '214,106,85',  glyph: '◆', shape: 'diamond' },
+    gd_nagatani: { slot: 1, color: '#5f8ca3', rgb: '95,140,163',  glyph: '●', shape: 'circle' },
+    gd_kadou:    { slot: 2, color: '#d0a34f', rgb: '208,163,79',  glyph: '▲', shape: 'triangle' },
+    gd_maeda:    { slot: 3, color: '#7f9a62', rgb: '127,154,98',  glyph: '■', shape: 'square' },
+    gd_yamate:   { slot: 4, color: '#9c78ad', rgb: '156,120,173', glyph: '★', shape: 'star' },
+    gd_saito:    { slot: 5, color: '#d9853e', rgb: '217,133,62',  glyph: '✚', shape: 'cross' }
+  };
+  var FALLBACK_PRIORITY_IDENTITIES = [
+    PRIORITY_GUEST_IDENTITIES.gd_watanabe, PRIORITY_GUEST_IDENTITIES.gd_nagatani,
+    PRIORITY_GUEST_IDENTITIES.gd_kadou, PRIORITY_GUEST_IDENTITIES.gd_maeda,
+    PRIORITY_GUEST_IDENTITIES.gd_yamate, PRIORITY_GUEST_IDENTITIES.gd_saito
+  ];
+
+  function presentationName(o, lang) {
+    if (!o) return '';
+    if (typeof o === 'string') return o;
+    return (lang === 'ja' ? o.jp : o.en) || o.en || o.jp || '';
+  }
+  function guestIdOf(guest) { return typeof guest === 'string' ? guest : (guest && guest.id) || null; }
+  function cloneIdentity(src, guest, fallbackIndex) {
+    if (!src) return null;
+    var gid = guestIdOf(guest);
+    return { guestId: gid, slot: src.slot, color: src.color, rgb: src.rgb,
+      glyph: src.glyph, shape: src.shape,
+      name: guest && typeof guest === 'object' ? guest.name || null : null,
+      fallback: !gid || !PRIORITY_GUEST_IDENTITIES[gid],
+      visualEquivalent: 'colour + ' + src.shape + ' marker + visible name' };
+  }
+
+  // Stable identity for the six people who appear across the two four-person
+  // priority waves.  An unknown active-wave guest may request a deterministic
+  // fallback by passing its roster index; colour is never the sole distinction.
+  function priorityGuestIdentity(guest, fallbackIndex) {
+    var gid = guestIdOf(guest), src = gid && PRIORITY_GUEST_IDENTITIES[gid];
+    if (!src && typeof fallbackIndex === 'number' && isFinite(fallbackIndex)) {
+      src = FALLBACK_PRIORITY_IDENTITIES[Math.abs(Math.floor(fallbackIndex)) % FALLBACK_PRIORITY_IDENTITIES.length];
+    }
+    return cloneIdentity(src, guest, fallbackIndex);
+  }
+
+  function guestById(plan, id) {
+    var gs = plan && plan.guests || [], i;
+    for (i = 0; i < gs.length; i++) if (gs[i] && gs[i].id === id) return { guest: gs[i], index: i };
+    return null;
+  }
+  function rosterIdsForDay(plan, tripDay) {
+    var waves = plan && plan.guestRotations || [], i, w;
+    if (typeof tripDay === 'number' && isFinite(tripDay) && Math.floor(tripDay) === tripDay) {
+      for (i = 0; i < waves.length; i++) {
+        w = waves[i];
+        if (tripDay >= w.startDay && tripDay <= w.endDay) return (w.guestIds || []).slice();
+      }
+      return [];
+    }
+    // No day may be inferred from a broad segment.  The compatibility fallback
+    // is explicitly the already-authored outbound-care cohort, not a guessed day.
+    var out = [], gs = plan && plan.guests || [];
+    for (i = 0; i < gs.length; i++) if (gs[i] && (gs[i].voyageCare === true || gs[i].vip === true)) out.push(gs[i].id);
+    return out;
+  }
+  function diffIds(a, b) {
+    var seen = {}, out = [], i;
+    for (i = 0; i < b.length; i++) seen[b[i]] = 1;
+    for (i = 0; i < a.length; i++) if (!seen[a[i]]) out.push(a[i]);
+    return out;
+  }
+
+  // Read-only relationship view: the four active named guests, their organizer
+  // buddies, and the explicit Day-6 exchange.  Consumers decide when to reveal
+  // it (boarding/meals/exchange); this function never edits missing buddies.
+  function relationshipCues(plan, tripDay) {
+    plan = plan || {};
+    var ids = rosterIdsForDay(plan, tripDay), buddies = plan.buddies || {};
+    var priorityGuests = [], buddyPairs = [], i, hit, identity, buddyId;
+    for (i = 0; i < ids.length; i++) {
+      hit = guestById(plan, ids[i]); if (!hit) continue;
+      identity = priorityGuestIdentity(hit.guest, i);
+      priorityGuests.push({ guestId: hit.guest.id, guestIndex: hit.index, name: hit.guest.name || null,
+        identity: identity, active: true });
+      buddyId = buddies[hit.guest.id] || null;
+      buddyPairs.push({ id: 'buddy:' + hit.guest.id + ':' + (buddyId || 'unassigned'), kind: 'buddy',
+        guestId: hit.guest.id, guestIndex: hit.index, personId: buddyId, assigned: !!buddyId,
+        identity: identity, label: hit.guest.name || null,
+        visualEquivalent: buddyId ? 'braided line, paired markers, and both visible names' :
+          'open ring and visible unassigned label' });
+    }
+    var exchange = null;
+    if (tripDay === 6) {
+      var before = rosterIdsForDay(plan, 5), after = rosterIdsForDay(plan, 6);
+      exchange = { kind: 'guest-exchange', day: 6, departingGuestIds: diffIds(before, after),
+        arrivingGuestIds: diffIds(after, before),
+        attested: !!(plan.project && plan.project.guestRotationExchange &&
+          plan.project.guestRotationExchange.logisticsAttested === true),
+        visualEquivalent: 'named departing and arriving groups joined by a custody arrow' };
+    }
+    return { presentationVersion: 1, type: 'relationships', tripDay: tripDay,
+      priorityGuests: priorityGuests, buddyPairs: buddyPairs, exchange: exchange,
+      visualEquivalent: 'guest shape/name badges plus visible relationship lines' };
+  }
+
+  var CAUSAL_KIND_META = {
+    stall:    { cue: 'focus',  glyph: '!', color: 'hanko', en: 'A handoff stopped', jp: '受け渡しが停止' },
+    reveal:   { cue: 'reveal', glyph: '?', color: 'amber', en: 'Missing requirement revealed', jp: '不足条件が判明' },
+    handoff:  { cue: 'handoff',glyph: '→', color: 'gold', en: 'Handoff in motion', jp: '引き継ぎ中' },
+    repair:   { cue: 'recover',glyph: '✓', color: 'moss', en: 'Repair delivered', jp: '修正が到着' },
+    recovery: { cue: 'recover',glyph: '✓', color: 'moss', en: 'Recovery delivered', jp: '復旧が到着' },
+    risk:     { cue: 'risk',   glyph: '△', color: 'amber', en: 'Downstream risk remains', jp: '下流リスクが残存' }
+  };
+  function causalMeta(kind) { return CAUSAL_KIND_META[kind] || CAUSAL_KIND_META.handoff; }
+
+  // Resolve one important engine event into a non-blocking 1–2 second frame.
+  // `spec` is caller-owned and is never modified.  Recommended fields:
+  // {id, kind, atMs, actorPid|actorGuestId|fromStationId,
+  //  recipientPid|recipientGuestId|toStationId, itemLabel, label}.
+  function causalBeatFrame(spec, nowMs, opts) {
+    spec = spec || {}; opts = opts || {};
+    var kind = CAUSAL_KIND_META[spec.kind] ? spec.kind : 'handoff', meta = causalMeta(kind);
+    var duration = typeof spec.durationMs === 'number' && isFinite(spec.durationMs) ? spec.durationMs : 1600;
+    duration = clamp(duration, 1000, 2000);
+    var at = typeof spec.atMs === 'number' && isFinite(spec.atMs) ? spec.atMs :
+      (typeof spec.at === 'number' && isFinite(spec.at) ? spec.at : 0);
+    var elapsed = Number(nowMs) - at, active = isFinite(elapsed) && elapsed >= 0 && elapsed <= duration;
+    var p = clamp(isFinite(elapsed) ? elapsed / duration : 1, 0, 1), rm = !!(opts.reducedMotion || opts.rm);
+    var phase = p < 0.22 ? 'focus' : (p < 0.42 ? 'reveal' : (p < 0.76 ? 'travel' : 'settle'));
+    var travel = clamp((p - 0.42) / 0.34, 0, 1), settle = smoothstep(clamp((p - 0.76) / 0.24, 0, 1));
+    if (rm) { phase = 'static'; travel = null; settle = kind === 'stall' || kind === 'risk' ? 0 : 1; }
+    return { presentationVersion: 1, type: 'causal-beat', id: spec.id || (kind + ':' + at),
+      kind: kind, active: active, atMs: at, durationMs: duration, elapsedMs: elapsed,
+      progress: p, phase: phase, reducedMotion: rm, controlBlocking: false,
+      actorPid: spec.actorPid || spec.fromPid || null,
+      actorGuestId: spec.actorGuestId || spec.fromGuestId || null,
+      recipientPid: spec.recipientPid || spec.toPid || null,
+      recipientGuestId: spec.recipientGuestId || spec.toGuestId || null,
+      fromStationId: spec.fromStationId || spec.stationId || null,
+      toStationId: spec.toStationId || spec.stationId || null,
+      itemLabel: spec.itemLabel || null, label: spec.label || { en: meta.en, jp: meta.jp },
+      glyph: spec.glyph || meta.glyph, color: spec.color || meta.color, audioCue: meta.cue,
+      focusStrength: rm ? 1 : (1 - smoothstep(clamp((p - 0.52) / 0.48, 0, 1))),
+      revealStrength: rm ? 1 : smoothstep(clamp(p / 0.28, 0, 1)),
+      travelProgress: travel, settleStrength: settle,
+      visualEquivalent: { required: true, focus: 'named actor halo',
+        cause: 'visible item/authority label', route: rm ? 'held solid route' : 'travelling token',
+        outcome: 'recipient and downstream state remain visibly marked' } };
+  }
+
+  function sceneLabelPair(profile0) {
+    return { en: profile0 && profile0.en || '', jp: profile0 && profile0.jp || '' };
+  }
+  function routeKind(from, to) {
+    if (to.family === 'ship' && from.family !== 'ship') return 'departure';
+    if (from.family === 'ship' && to.family !== 'ship') return 'arrival';
+    if (from.id === 'tokyo-hotel' || to.id === 'takeshiba-terminal') return 'departure';
+    if (from.id === 'chichijima-transfer' || to.id === 'chichijima-transfer') return 'transfer';
+    return 'passage';
+  }
+
+  // Location transition metadata shared by visual and audio layers.  It names
+  // a visible equivalent up front, so a transition cue can never become
+  // sound-only information.  No module transition state is retained here.
+  function routeSignature(fromScene, toScene, opts) {
+    opts = opts || {};
+    var fromId = sceneIdValue(fromScene), toId = sceneIdValue(toScene);
+    if (!fromId || !toId || fromId === toId) return null;
+    var from = SCENE_PROFILES[fromId], to = SCENE_PROFILES[toId];
+    if (!from || !to) return null;
+    var order = ['tokyo-hotel','takeshiba-terminal','ogasawara-maru','chichijima-transfer','interisland-ferry','hahajima-hinata'];
+    var fi = order.indexOf(fromId), ti = order.indexOf(toId), direction = opts.direction || (ti < fi ? 'return' : 'outbound');
+    var kind = routeKind(from, to), mark = direction === 'return' ? '←' : '→';
+    var duration = typeof opts.durationMs === 'number' && isFinite(opts.durationMs) ? opts.durationMs : 1300;
+    duration = clamp(duration, 900, 1800);
+    var fromLabel = sceneLabelPair(from), toLabel = sceneLabelPair(to);
+    return { presentationVersion: 1, type: 'route-transition', id: fromId + '>' + toId,
+      fromId: fromId, toId: toId, from: fromLabel, to: toLabel, kind: kind,
+      direction: direction, mark: mark, durationMs: duration,
+      atMs: typeof opts.atMs === 'number' && isFinite(opts.atMs) ? opts.atMs : 0,
+      audioCue: kind === 'arrival' ? 'arrive' : (kind === 'transfer' ? 'transfer' : 'depart'),
+      ambient: { fromFamily: from.family, toFamily: to.family },
+      motion: { optional: true, pullback: 0.965, crossfade: true, titleBeat: true },
+      visualEquivalent: { required: true, cue: 'framed route title + direction mark',
+        en: fromLabel.en + ' ' + mark + ' ' + toLabel.en,
+        jp: fromLabel.jp + ' ' + mark + ' ' + toLabel.jp,
+        reducedMotion: 'held title, direction mark, and border with no zoom/crossfade' } };
+  }
+
+  function routeTransitionFrame(signature, nowMs, opts) {
+    opts = opts || {};
+    if (!signature || signature.type !== 'route-transition') return null;
+    var duration = clamp(Number(signature.durationMs) || 1300, 900, 1800);
+    var at = typeof signature.atMs === 'number' && isFinite(signature.atMs) ? signature.atMs : 0;
+    var elapsed = Number(nowMs) - at, active = isFinite(elapsed) && elapsed >= 0 && elapsed <= duration;
+    var p = clamp(isFinite(elapsed) ? elapsed / duration : 1, 0, 1), rm = !!(opts.reducedMotion || opts.rm);
+    var crest = Math.sin(p * Math.PI);
+    return { presentationVersion: 1, type: 'route-transition-frame', signature: signature,
+      active: active, progress: p, reducedMotion: rm,
+      phase: rm ? 'static' : (p < 0.34 ? 'depart' : (p < 0.68 ? 'crossfade' : 'arrive')),
+      pullback: rm ? 1 : 1 - crest * (1 - signature.motion.pullback),
+      veilAlpha: rm ? 0.16 : crest * 0.54,
+      titleAlpha: rm ? 1 : smoothstep(clamp(p / 0.2, 0, 1)) * smoothstep(clamp((1 - p) / 0.18, 0, 1)),
+      crossfade: rm ? 1 : smoothstep(clamp((p - 0.24) / 0.52, 0, 1)),
+      visualEquivalent: signature.visualEquivalent };
+  }
+
   function rgba(rgb, a) { return 'rgba(' + rgb + ',' + a + ')'; }              // rgb = 'r,g,b' string
   function mixRGB(a, b, k) {                                                   // a,b = [r,g,b] arrays → 'r,g,b'
     return Math.round(a[0] + (b[0] - a[0]) * k) + ',' +
@@ -1036,6 +1253,7 @@
     if (SPR && !sprWas) _sprSince = (typeof performance !== 'undefined' ? performance.now() : 0);
     lightFrame(sim, view);             // resolve the per-frame light rig (night/sun/shadows/dusk)
     var cam = camFrame(t, view);       // resolve the auto-cinematic camera (null = identity)
+    var routeFrame = routeFrameForView(view, t * 1000); // optional, pure scene-change presentation
 
     ctx.clearRect(0, 0, view.w, view.h);
     // letterbox base under any pull-back (zoom < 1): the world shrinks but the
@@ -1044,6 +1262,11 @@
     ctx.fillRect(0, 0, view.w, view.h);
 
     ctx.save();                        // ---- WORLD (inside the one camera transform, spec §3) ----
+    if (routeFrame && routeFrame.active && routeFrame.pullback < 0.9999) {
+      ctx.translate(view.w / 2, view.h / 2);
+      ctx.scale(routeFrame.pullback, routeFrame.pullback);
+      ctx.translate(-view.w / 2, -view.h / 2);
+    }
     if (cam) {
       ctx.translate(cam.x, cam.y);
       ctx.scale(cam.zoom, cam.zoom);
@@ -1056,12 +1279,14 @@
     drawCloudShadows(ctx, sim, t, view); // 4b drifting cloud shade over land+sea (day only)
     drawSky(ctx, sim, t, view);          // 5  day-phase light grade UNDER actors
     drawDeck(ctx, sim, t, view);         // 6  route vessel under passengers/crew
+    drawRelationshipCues(ctx, sim, t, view); // 6b named guest↔buddy relationships (contextual)
     drawGuests(ctx, sim, t, view);       // 7  travelling party / island ambience
     drawBoat(ctx, sim, t, view);         // 7b Hahajima-only local fishing skiff
     drawStations(ctx, sim, t, view);     // 8  landmarks: halo tint, bevel disc, name, rings, lanterns
     drawStallMarkers(ctx, sim, t, view); // 8b report-on-stage: glow pulses where idle/rework accrued
     drawParticles(ctx, sim, t, view);    // 8c seasoning: chimney smoke, cook-steam, dusk fireflies
     drawFigures(ctx, sim, t, view);      // 9  11 duty-holders: shadow, pawn/sprite, aura, bubbles, chips
+    drawCausalBeatWorld(ctx, sim, t, view); // 9b focus→visible cause→handoff→settle (presentation only)
     drawMotes(ctx, sim, t, view);        // 10 handoff dots A→B + arrival pings
     drawCascade(ctx, sim, t, view);      // 11 red comet + ghosts + strikes (RM: static chain)
     ctx.restore();                       // ---- end WORLD / camera ----
@@ -1069,6 +1294,9 @@
     drawDusk(ctx, view);               // HUD 1: full-canvas evening unifier (view.dusk, outside cam)
     drawStamp(ctx, t, view);           // HUD 2: hanko grade stamp in the stage corner (view.stamp)
     drawSceneLabel(ctx, view);         // HUD 3: short, explicit location/status chip
+    drawCausalBeatHud(ctx, t, view);   // HUD 4: named/static-equivalent explanation
+    drawRelationshipHud(ctx, sim, view); // HUD 5: explicit Day-6 named exchange
+    drawRouteTransition(ctx, routeFrame, view); // HUD 6: visual equivalent for route audio
   }
 
   
@@ -2537,6 +2765,117 @@ function drawGuests_rod(ctx, px0, py0, gscale, rm) {
   if (!rm) sparkle(ctx, lineEndX, lineEndY, 2.6 * gscale, 0.55);   // a glint off the lure, restrained
 }
 
+// Shared, read-only guest geometry.  Relationship lines, causal beats and the
+// guest bodies all call this exact helper, so presentation overlays cannot
+// drift away from the people they describe when a physical scene changes.
+function guestScenePoint(index, raw, view, profile0) {
+  profile0 = profile0 || _scene;
+  raw = raw || {};
+  var w = view.w, h = view.h;
+  var cx = typeof raw.cx === 'number' ? raw.cx : w * 0.25;
+  var cy = typeof raw.cy === 'number' ? raw.cy : h * 0.6;
+  if (profile0.family === 'ship') {
+    cx = w * (0.61 + (index % 5) * 0.062);
+    cy = h * (0.40 + Math.floor(index / 5) * 0.145);
+  } else if (profile0.id === 'tokyo-hotel') {
+    cx = w * (0.13 + (index % 5) * 0.073);
+    cy = h * (0.50 + Math.floor(index / 5) * 0.12);
+  } else if (profile0.id === 'takeshiba-terminal') {
+    cx = w * (0.24 + (index % 5) * 0.066);
+    cy = h * (0.43 + Math.floor(index / 5) * 0.13);
+  } else if (profile0.id === 'chichijima-transfer') {
+    cx = w * (0.16 + (index % 5) * 0.074);
+    cy = h * (0.42 + Math.floor(index / 5) * 0.14);
+  } else {
+    var shoreMax = (0.47 + (index % 5) * 0.006) * w;
+    if (cx > shoreMax) cx = shoreMax;
+  }
+  return { x: cx, y: cy };
+}
+
+function guestRecordAt(sim, index) {
+  var plan = sim && sim.plan, gs = plan && plan.guests || sim && sim.guests || [];
+  return gs[index] || null;
+}
+function guestIndexForId(sim, guestId) {
+  var plan = sim && sim.plan, gs = plan && plan.guests || sim && sim.guests || [], i;
+  for (i = 0; i < gs.length; i++) if (gs[i] && gs[i].id === guestId) return i;
+  return -1;
+}
+function relationshipModel(sim, view) {
+  if (view && view.relationships && view.relationships.type === 'relationships') return view.relationships;
+  if (!sim || !sim.plan) return null;
+  if (view && typeof view.tripDay === 'number') return relationshipCues(sim.plan, view.tripDay);
+  if (sim.segment === 'load' || sim.segment === 'voyage') return relationshipCues(sim.plan, null);
+  return null;
+}
+function priorityEntryAt(rel, index) {
+  var ps = rel && rel.priorityGuests || [], i;
+  for (i = 0; i < ps.length; i++) if (ps[i].guestIndex === index) return ps[i];
+  return null;
+}
+function drawPriorityGuestMark(ctx, guest, identity, cx, headCy, active, view, index) {
+  if (!identity) return;
+  var rgb = identity.rgb, r = 7.5 * scale;
+  ctx.save();
+  radialGlow(ctx, cx, headCy, 16 * scale, rgb, active ? 0.25 : 0.10);
+  ctx.beginPath(); ctx.arc(cx, headCy, r, 0, 6.2832);
+  ctx.strokeStyle = rgba(rgb, active ? 0.95 : 0.54); ctx.lineWidth = (active ? 2 : 1.2) * scale; ctx.stroke();
+  ctx.font = localizedFont('900', 7.5 * scale, 'system-ui,sans-serif');
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = rgba(PAL.rimWhite, 0.98);
+  ctx.fillText(identity.glyph, cx, headCy - 0.2 * scale);
+  // Names are part of the identity when the relationship is contextually on;
+  // stagger rows keep the four outbound labels readable on compact stages.
+  if (active && guest && guest.name) {
+    var labelY = headCy - (23 + (index % 2) * 13) * scale;
+    chip(ctx, cx, labelY, presentationName(guest.name, _lang), {
+      font: localizedFont('800', 8 * scale, 'system-ui,sans-serif'),
+      pad: 4 * scale, h: 13 * scale, r: 6.5 * scale,
+      bg: rgba(PAL.indigoDeep, 0.90), border: rgba(rgb, 0.92), ink: rgba(PAL.rimWhite, 0.98),
+      prefix: identity.glyph + ' ', prefixFont: localizedFont('900', 7 * scale, 'system-ui,sans-serif'),
+      maxW: Math.min(92 * scale, Math.max(54 * scale, view.w * 0.24))
+    });
+  }
+  ctx.restore();
+}
+
+function drawRelationshipCues(ctx, sim, t, view) {
+  var rel = relationshipModel(sim, view);
+  if (!rel || !rel.buddyPairs || !rel.buddyPairs.length) return;
+  var show = !!view.relationships || !!view.showRelationships || (sim && (sim.segment === 'load' || sim.segment === 'voyage'));
+  if (!show) return;
+  var vg = view.guest || {}, pairs = rel.buddyPairs, i, pair, gp, fp, col, rgb, mx, my;
+  for (i = 0; i < pairs.length; i++) {
+    pair = pairs[i];
+    gp = guestScenePoint(pair.guestIndex, vg['g' + pair.guestIndex], view, _scene);
+    col = pair.identity || priorityGuestIdentity(pair.guestId, i); rgb = col ? col.rgb : PAL.gold;
+    fp = pair.personId && view.fig && view.fig[pair.personId];
+    if (!pair.assigned || !fp) {
+      // The unassigned state is visible without text or colour: an open broken ring.
+      ctx.save(); ctx.beginPath(); ctx.arc(gp.x, gp.y - 11 * scale, 14 * scale, 0.25, 5.35);
+      ctx.strokeStyle = rgba(PAL.hanko, 0.82); ctx.lineWidth = 2 * scale; ctx.setLineDash([4 * scale, 4 * scale]); ctx.stroke();
+      ctx.setLineDash([]); ctx.restore();
+      continue;
+    }
+    ctx.save();
+    ctx.beginPath(); ctx.moveTo(fp.cx, fp.cy - 8 * scale); ctx.lineTo(gp.x, gp.y - 8 * scale);
+    ctx.strokeStyle = rgba(PAL.indigoDeep, 0.66); ctx.lineWidth = 5 * scale; ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(fp.cx, fp.cy - 8 * scale); ctx.lineTo(gp.x, gp.y - 8 * scale);
+    ctx.strokeStyle = rgba(rgb, 0.84); ctx.lineWidth = 2 * scale;
+    ctx.setLineDash([5 * scale, 4 * scale]);
+    if (!view.rm) ctx.lineDashOffset = -(t * 10 + i * 3) * scale;
+    ctx.stroke(); ctx.setLineDash([]);
+    mx = (fp.cx + gp.x) / 2; my = (fp.cy + gp.y) / 2 - 8 * scale;
+    ctx.beginPath(); ctx.arc(mx, my, 7 * scale, 0, 6.2832);
+    ctx.fillStyle = rgba(PAL.indigoDeep, 0.94); ctx.fill();
+    ctx.strokeStyle = rgba(rgb, 0.94); ctx.lineWidth = 1.5 * scale; ctx.stroke();
+    ctx.font = localizedFont('900', 7 * scale, 'system-ui,sans-serif');
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = rgba(PAL.rimWhite, 1);
+    ctx.fillText(col ? col.glyph : '↔', mx, my);
+    ctx.restore();
+  }
+}
+
 function drawGuests(ctx, sim, t, view) {
   if (!view) return;
   var sceneFlags = domFlagsForScene(sim, view);
@@ -2545,6 +2884,7 @@ function drawGuests(ctx, sim, t, view) {
   var w = view.w, h = view.h;
   var hot = view.hotPts || [];
   var n = (typeof P !== 'undefined' && P.GUESTS) ? P.GUESTS : 13;
+  var relationships = relationshipModel(sim, view);
   // §2 pawn scale rides along for the guests so the world keeps one proportion
   // system. DELIBERATELY procedural (no sprite consumption here): the atelier's
   // single generic guest body would flatten the 13 seeded yukata colours + the
@@ -2555,27 +2895,10 @@ function drawGuests(ctx, sim, t, view) {
   for (var i = 0; i < n; i++) {
     var id = 'g' + i;
     var gs = vg[id] || { cx: w * 0.25, cy: h * 0.6, act: 'chat', cast: false, hushed: false };
-    var cx = typeof gs.cx === 'number' ? gs.cx : w * 0.25;
-    var cy = typeof gs.cy === 'number' ? gs.cy : h * 0.6;
-    if (_scene.family === 'ship') {
-      // Passenger positions are fixtures on the vessel, not reused island
-      // wander coordinates. Both directions therefore keep the same interior.
-      cx = w * (0.61 + (i % 5) * 0.062);
-      cy = h * (0.40 + Math.floor(i / 5) * 0.145);
-    } else if (_scene.id === 'tokyo-hotel') {
-      cx = w * (0.13 + (i % 5) * 0.073);
-      cy = h * (0.50 + Math.floor(i / 5) * 0.12);
-    } else if (_scene.id === 'takeshiba-terminal') {
-      cx = w * (0.24 + (i % 5) * 0.066);
-      cy = h * (0.43 + Math.floor(i / 5) * 0.13);
-    } else if (_scene.id === 'chichijima-transfer') {
-      cx = w * (0.16 + (i % 5) * 0.074);
-      cy = h * (0.42 + Math.floor(i / 5) * 0.14);
-    } else {
-      // Hahajima ambient wander stays on land.
-      var shoreMax = (0.47 + (i % 5) * 0.006) * w;
-      if (cx > shoreMax) cx = shoreMax;
-    }
+    var guestPoint = guestScenePoint(i, gs, view, _scene);
+    var cx = guestPoint.x, cy = guestPoint.y;
+    var guestRecord = guestRecordAt(sim, i), priorityEntry = priorityEntryAt(relationships, i);
+    var guestIdentity = priorityEntry ? priorityEntry.identity : null;
 
     // hush: prefer frame()'s precomputed flag, else derive it the same way (HUSH_R2 around a stalled holder)
     var hushed = gs.hushed;
@@ -2594,7 +2917,7 @@ function drawGuests(ctx, sim, t, view) {
       bobY = -2.5 * figs * (1 - Math.cos(phase * 2 * Math.PI)) / 2;
     }
     var fy = cy + bobY;                       // this frame's feet/body-anchor line
-    var col = YUKATA[i % YUKATA.length];
+    var col = guestIdentity ? guestIdentity.color : YUKATA[i % YUKATA.length];
     var colRGB = hexRGB(col);
 
     ctx.save();
@@ -2682,8 +3005,144 @@ function drawGuests(ctx, sim, t, view) {
 
     if (islandCaster) ctx.restore();  // end lean rotation
 
+    drawPriorityGuestMark(ctx, guestRecord, guestIdentity, cx, headCy, !!priorityEntry, view, i);
+
     ctx.restore();               // end hush alpha
   }
+}
+
+function causalRGB(key) {
+  if (key === 'moss' || key === 'green') return PAL.mossLight;
+  if (key === 'amber') return PAL.amber;
+  if (key === 'gold') return PAL.gold;
+  if (key === 'blue') return PAL.seaGlint;
+  return PAL.hanko;
+}
+function causalEndpoint(frame, side, sim, view) {
+  var first = side === 'from';
+  var pid = first ? frame.actorPid : frame.recipientPid;
+  var guestId = first ? frame.actorGuestId : frame.recipientGuestId;
+  var stationId = first ? frame.fromStationId : frame.toStationId;
+  var f = pid && view.fig && view.fig[pid];
+  if (f && typeof f.cx === 'number' && typeof f.cy === 'number') return { x: f.cx, y: f.cy - 8 * scale, kind: 'person', id: pid };
+  if (guestId) {
+    var gi = guestIndexForId(sim, guestId);
+    if (gi >= 0) {
+      var gp = guestScenePoint(gi, view.guest && view.guest['g' + gi], view, _scene);
+      return { x: gp.x, y: gp.y - 9 * scale, kind: 'guest', id: guestId };
+    }
+  }
+  if (stationId) {
+    var st = stationForScene(stationId, sim, view);
+    if (st) { var sp = stationPx(st, view); return { x: sp.x, y: sp.y - 11 * scale, kind: 'station', id: stationId }; }
+  }
+  return null;
+}
+function causalFramesForView(view, nowMs) {
+  if (!view) return [];
+  var src = view.causalBeats || (view.causalBeat ? [view.causalBeat] : []), out = [], i, x, f;
+  for (i = 0; i < src.length && out.length < 3; i++) {
+    x = src[i]; if (!x) continue;
+    f = x.type === 'causal-beat' && typeof x.progress === 'number'
+      ? x : causalBeatFrame(x, nowMs, { reducedMotion: !!view.rm });
+    if (f && f.active) out.push(f);
+  }
+  return out;
+}
+function drawCausalBeatWorld(ctx, sim, t, view) {
+  var frames = causalFramesForView(view, t * 1000), i, f, a, b, rgb, k, x, y;
+  for (i = 0; i < frames.length; i++) {
+    f = frames[i]; a = causalEndpoint(f, 'from', sim, view); b = causalEndpoint(f, 'to', sim, view);
+    if (!a && !b) continue;
+    if (!a) a = b; if (!b) b = a;
+    rgb = causalRGB(f.color);
+    ctx.save();
+    radialGlow(ctx, a.x, a.y, 30 * scale, rgb, 0.18 + 0.20 * f.focusStrength);
+    ctx.beginPath(); ctx.arc(a.x, a.y, (13 + 3 * f.focusStrength) * scale, 0, 6.2832);
+    ctx.strokeStyle = rgba(rgb, 0.55 + 0.35 * f.focusStrength); ctx.lineWidth = 2.2 * scale; ctx.stroke();
+    if (a.x !== b.x || a.y !== b.y) {
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+      ctx.strokeStyle = rgba(PAL.indigoDeep, 0.72); ctx.lineWidth = 6 * scale; ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+      ctx.strokeStyle = rgba(rgb, 0.86); ctx.lineWidth = 2 * scale;
+      if (f.travelProgress !== null) ctx.setLineDash([6 * scale, 5 * scale]);
+      ctx.stroke(); ctx.setLineDash([]);
+      k = f.travelProgress === null ? 0.5 : smoothstep(f.travelProgress);
+      x = lerp(a.x, b.x, k); y = lerp(a.y, b.y, k);
+      radialGlow(ctx, x, y, 17 * scale, rgb, 0.36);
+      ctx.beginPath(); ctx.arc(x, y, 7 * scale, 0, 6.2832);
+      ctx.fillStyle = rgba(PAL.indigoDeep, 0.96); ctx.fill();
+      ctx.strokeStyle = rgba(rgb, 0.98); ctx.lineWidth = 2 * scale; ctx.stroke();
+      ctx.font = localizedFont('900', 8 * scale, 'system-ui,sans-serif');
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = rgba(PAL.rimWhite, 1);
+      ctx.fillText(f.glyph, x, y);
+    }
+    if (f.settleStrength > 0 || f.reducedMotion) {
+      radialGlow(ctx, b.x, b.y, 28 * scale, rgb, 0.16 + 0.22 * f.settleStrength);
+      ctx.beginPath(); ctx.arc(b.x, b.y, (14 + 4 * f.settleStrength) * scale, 0, 6.2832);
+      ctx.strokeStyle = rgba(rgb, 0.55 + 0.38 * f.settleStrength); ctx.lineWidth = 2.4 * scale; ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+function drawCausalBeatHud(ctx, t, view) {
+  var frames = causalFramesForView(view, t * 1000);
+  if (!frames.length) return;
+  var f = frames[frames.length - 1], label = presentationName(f.label, _lang);
+  if (f.itemLabel) label += ' · ' + presentationName(f.itemLabel, _lang);
+  var rgb = causalRGB(f.color), hs = Math.max(1, scale);
+  chip(ctx, view.w / 2, Math.min(view.h - 30 * hs, 38 * hs), label, {
+    font: localizedFont('800', 10 * hs, 'system-ui,sans-serif'),
+    prefix: f.glyph + ' ', prefixFont: localizedFont('900', 11 * hs, 'system-ui,sans-serif'),
+    pad: 8 * hs, h: 21 * hs, r: 10.5 * hs,
+    bg: rgba(PAL.indigoDeep, 0.94), border: rgba(rgb, 0.96), ink: rgba(PAL.rimWhite, 0.98),
+    alpha: f.reducedMotion ? 1 : Math.max(0.56, f.revealStrength),
+    maxW: Math.max(120 * hs, view.w - 24 * hs)
+  });
+}
+function drawRelationshipHud(ctx, sim, view) {
+  // Day-6 exchange is intentionally opt-in via an explicit relationship view;
+  // a broad `ops` segment is never treated as proof of the owner-facing day.
+  var rel = view && view.relationships;
+  if (!rel || !rel.exchange) return;
+  var ex = rel.exchange, plan = sim && sim.plan || {}, left = [], right = [], i, hit;
+  for (i = 0; i < ex.departingGuestIds.length; i++) { hit = guestById(plan, ex.departingGuestIds[i]); if (hit) left.push(presentationName(hit.guest.name, _lang)); }
+  for (i = 0; i < ex.arrivingGuestIds.length; i++) { hit = guestById(plan, ex.arrivingGuestIds[i]); if (hit) right.push(presentationName(hit.guest.name, _lang)); }
+  var text = left.join(' + ') + ' → ' + right.join(' + ');
+  if (!text.replace(/[ +→]/g, '')) return;
+  var hs = Math.max(1, scale);
+  chip(ctx, view.w / 2, 64 * hs, text, {
+    font: localizedFont('800', 9 * hs, 'system-ui,sans-serif'), pad: 7 * hs, h: 19 * hs, r: 9.5 * hs,
+    bg: rgba(PAL.indigoDeep, 0.92), border: rgba(PAL.gold, ex.attested ? 0.90 : 0.58), ink: rgba(PAL.washi, 0.98),
+    prefix: '⇄ ', prefixFont: localizedFont('900', 10 * hs, 'system-ui,sans-serif'),
+    maxW: Math.max(120 * hs, view.w - 24 * hs)
+  });
+}
+function routeFrameForView(view, nowMs) {
+  var x = view && view.routeTransition, sig;
+  if (!x) return null;
+  if (x.type === 'route-transition-frame') return x;
+  if (x.type === 'route-transition') return routeTransitionFrame(x, nowMs, { reducedMotion: !!view.rm });
+  sig = routeSignature(x.fromScene || x.from || x.fromId, x.toScene || x.to || x.toId, {
+    atMs: x.atMs, durationMs: x.durationMs, direction: x.direction
+  });
+  return routeTransitionFrame(sig, nowMs, { reducedMotion: !!view.rm });
+}
+function drawRouteTransition(ctx, frame, view) {
+  if (!frame || !frame.active) return;
+  var sig = frame.signature, hs = Math.max(1, scale), label = _lang === 'ja' ? sig.visualEquivalent.jp : sig.visualEquivalent.en;
+  ctx.save();
+  ctx.fillStyle = rgba(PAL.indigoDeep, frame.veilAlpha); ctx.fillRect(0, 0, view.w, view.h);
+  ctx.strokeStyle = rgba(PAL.gold, 0.44 + 0.40 * frame.titleAlpha); ctx.lineWidth = 3 * hs;
+  ctx.strokeRect(8 * hs, 8 * hs, Math.max(1, view.w - 16 * hs), Math.max(1, view.h - 16 * hs));
+  chip(ctx, view.w / 2, Math.max(18 * hs, view.h * 0.46), label, {
+    font: localizedFont('900', 12 * hs, 'system-ui,sans-serif'),
+    prefix: sig.mark + ' ', prefixFont: localizedFont('900', 14 * hs, 'system-ui,sans-serif'),
+    pad: 10 * hs, h: 27 * hs, r: 13.5 * hs,
+    bg: rgba(PAL.indigoDeep, 0.94), border: rgba(PAL.gold, 0.96), ink: rgba(PAL.goldPale, 1),
+    alpha: frame.titleAlpha, maxW: Math.max(140 * hs, view.w - 32 * hs)
+  });
+  ctx.restore();
 }
 
 
@@ -3949,7 +4408,7 @@ function drawFigures(ctx, sim, t, view) {
   var rm = !!view.rm;
   figs = scale * FIG_SCALE;   // §2 pawn scale +30% — every pawn-body size below
   // state -> bubble/border tint (mirrors style.css .astro.s-* .bub border-color groups; resolved/idle/tired/working keep the chip default)
-  var BTINT = { confused: '217,83,79', onFire: '217,83,79', waiting: '193,122,31', waitInfo: '193,122,31', meeting: '92,127,146', rework: '92,127,146' };
+  var BTINT = { confused: '217,83,79', onFire: '217,83,79', waiting: '193,122,31', waitInfo: '193,122,31', meeting: '92,127,146', rework: '92,127,146', unavailable: '107,113,120' };
   // scaled chip geometry, shared by the speech bubble + name chip (chip() never
   // auto-scales). Text stays at HUD scale — chips are labels, not body parts.
   var chipFont = '600 ' + Math.round(10 * scale) + 'px system-ui,sans-serif';
@@ -4015,7 +4474,7 @@ function drawFigures(ctx, sim, t, view) {
     // ---- W2 bounded idle wander: a slow (20-40s), <=6px-radius seeded drift
     // on the fanned station position — only when settled (never walking,
     // never mid-stall: a frozen pawn must read as STOPPED) and never under RM.
-    if (!rm && !f.walking && !STALL_STATES[state]) {
+    if (!rm && !f.walking && !STALL_STATES[state] && state !== 'unavailable') {
       var wPeriod = 20 + workFrac(p.id + '#wp') * 20;
       var wPhase = workFrac(p.id + '#wa') * Math.PI * 2;
       var wRadK = 0.35 + workFrac(p.id + '#wr') * 0.65;
@@ -4267,7 +4726,7 @@ function drawFigures(ctx, sim, t, view) {
     }
 
     // ---- name chip: role icon + localized name — stall state, spotlight, or hover ----
-    if (STALL_STATES[state] || p.id === view.spotlightPid || p.id === view.hoverPid) {
+    if (STALL_STATES[state] || state === 'unavailable' || p.id === view.spotlightPid || p.id === view.hoverPid) {
       var label;
       if (_lang === 'ja') {
         label = nm(p.name);
@@ -4578,11 +5037,16 @@ function drawCascade(ctx, sim, t, view) {
   // DOM hotspot overlays while the camera is away from identity. FIG_SCALE is
   // exported so the app layer plumbs the SAME +30% factor into its fan spacing
   // and pawn hit radius (app.js pawnAt: 26px → 26×FIG_SCALE ≈ 34px).
+  // Phase-4 additions are pure/read-only presentation contracts.  Existing
+  // members and their signatures remain unchanged.
   window.PRS_STAGE = { initStage: initStage, resizeStage: resizeStage, scene: scene, hubSections: hubSections,
                        sceneProfile: sceneProfile, stationsForScene: stationsForScene, stationForScene: stationForScene,
                        stationStateForScene: stationStateForScene, linksForScene: linksForScene,
                        topologyForScene: topologyForScene, domFlagsForScene: domFlagsForScene,
                        sceneFlags: domFlagsForScene, routePoint: routePoint, routePoints: routePoints,
                        groundCacheKey: groundCacheKey, localizedFont: localizedFont,
+                       causalBeat: causalBeatFrame, causalBeatFrame: causalBeatFrame,
+                       priorityGuestIdentity: priorityGuestIdentity, relationshipCues: relationshipCues,
+                       routeSignature: routeSignature, routeTransitionFrame: routeTransitionFrame,
                        camTo: camTo, camReset: camReset, camState: camState, FIG_SCALE: FIG_SCALE };
 })();

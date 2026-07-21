@@ -15,6 +15,155 @@
   function byId(arr, id) { for (var i = 0; i < arr.length; i++) if (arr[i].id === id) return arr[i]; return null; }
   function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
 
+  // Campaign progress is intentionally separate from both authored-plan
+  // persistence and the frozen 100-point mastery ledger. The store is a small,
+  // versioned learner record; every nested collection is allow-listed and
+  // bounded before use. Full immutable launch snapshots stay in the result
+  // object for the active session, while their compact fingerprint/attempt
+  // summary is the only part persisted here.
+  var CAMPAIGN_STORAGE_KEY = 'prs_campaign_state_v1', CAMPAIGN_RUN_STATE_KEY = 'prs_campaign_run_state_v1';
+  var CAMPAIGN_KIND = 'ogasawara-campaign', CAMPAIGN_VERSION = 1;
+  var CAMPAIGN_CHAPTERS = ['load', 'voyage', 'arrival', 'ops', 'fishday', 'return', 'all'];
+  var CAMPAIGN_STEPS = ['observe', 'diagnose', 'edit', 'rehearse'];
+  var CAMPAIGN_EPISODES = [
+    { id: 'normal', segment: 'load', titleKey: 'campaignEpisodeNormal', descKey: 'campaignEpisodeNormalDesc', objectiveKey: 'campaignObjectiveNormal', defaultStrategy: 'standard-plan' },
+    { id: 'comms-outage', segment: 'fishday', titleKey: 'campaignEpisodeComms', descKey: 'campaignEpisodeCommsDesc', objectiveKey: 'campaignObjectiveComms', defaultStrategy: 'radio-route' },
+    { id: 'principal-unavailable', segment: 'return', titleKey: 'campaignEpisodePrincipal', descKey: 'campaignEpisodePrincipalDesc', objectiveKey: 'campaignObjectivePrincipal', defaultStrategy: 'deputy-command' }
+  ];
+  var CAMPAIGN_BADGES = ['communications-resilient', 'delegation-resilient'];
+  var CAMPAIGN_STRATEGIES = ['standard-plan', 'radio-route', 'redundant-paths', 'deputy-command', 'distributed-command', 'intervention-token'];
+  var CAMPAIGN_EPISODE_STRATEGIES = { normal: ['standard-plan'], 'comms-outage': ['radio-route', 'redundant-paths'],
+    'principal-unavailable': ['deputy-command', 'distributed-command', 'intervention-token'] };
+  function campaignObj(v) { return !!v && typeof v === 'object' && !Array.isArray(v); }
+  function campaignCopy(v) { return JSON.parse(JSON.stringify(v)); }
+  function freshCampaignChapter(index) { return { status: index === 0 ? 'available' : 'locked', bestResult: null }; }
+  function freshCampaignState() {
+    var chapters = {}, results = {}, attempts = {}, strategies = {};
+    CAMPAIGN_CHAPTERS.forEach(function (id, i) { chapters[id] = freshCampaignChapter(i); });
+    CAMPAIGN_EPISODES.forEach(function (ep) { results[ep.id] = null; attempts[ep.id] = 0; strategies[ep.id] = ep.defaultStrategy; });
+    return { journey: 'guided', currentEpisode: 0, guidanceStep: 'observe', guidedComplete: false,
+      chapterProgress: chapters, bestResults: results, attempts: attempts, discoveredStrategies: [], badges: [],
+      selectedStrategies: strategies, revealedEpisodes: [], provenance: [] };
+  }
+  function boundedInt(v, lo, hi, fallback) {
+    v = Number(v); return isFinite(v) ? Math.max(lo, Math.min(hi, Math.round(v))) : fallback;
+  }
+  function boundedMaybeInt(v, lo, hi) { return v == null ? null : boundedInt(v, lo, hi, null); }
+  function sanitizeCampaignResult(v) {
+    if (!campaignObj(v)) return null;
+    var strategy = CAMPAIGN_STRATEGIES.indexOf(v.strategyId) >= 0 ? v.strategyId : null;
+    var status = ['chapter-mastered', 'resilient', 'recovered-with-debt', 'blocked'].indexOf(v.status) >= 0 ? v.status : null;
+    var badge = CAMPAIGN_BADGES.indexOf(v.badgeAwarded) >= 0 ? v.badgeAwarded : null;
+    return { score: boundedInt(v.score, 0, 100, 0), success: v.success === true,
+      at: boundedInt(v.at, 0, 9007199254740991, 0), strategyId: strategy,
+      chapterEarned: boundedInt(v.chapterEarned, 0, 100, 0), chapterMax: boundedInt(v.chapterMax, 0, 100, 0),
+      planFingerprint: typeof v.planFingerprint === 'string' ? v.planFingerprint.slice(0, 32) : '',
+      status: status, recoveredWithDebt: v.recoveredWithDebt === true, badgeAwarded: badge,
+      executionComplete: v.executionComplete == null ? null : v.executionComplete === true,
+      efficiency: boundedMaybeInt(v.efficiency, 0, 100), debtBefore: boundedMaybeInt(v.debtBefore, 0, 999),
+      debtAfter: boundedMaybeInt(v.debtAfter, 0, 999), debtDelta: boundedMaybeInt(v.debtDelta, -999, 999) };
+  }
+  function sanitizeCampaignState(raw) {
+    var out = freshCampaignState(); if (!campaignObj(raw)) return out;
+    if (['guided', 'campaign', 'resilience', 'expert'].indexOf(raw.journey) >= 0) out.journey = raw.journey;
+    out.currentEpisode = boundedInt(raw.currentEpisode, 0, CAMPAIGN_EPISODES.length - 1, 0);
+    if (CAMPAIGN_STEPS.indexOf(raw.guidanceStep) >= 0) out.guidanceStep = raw.guidanceStep;
+    out.guidedComplete = raw.guidedComplete === true;
+    CAMPAIGN_CHAPTERS.forEach(function (id, index) {
+      var value = campaignObj(raw.chapterProgress) && campaignObj(raw.chapterProgress[id]) ? raw.chapterProgress[id] : {};
+      var status = ['locked', 'available', 'mastered'].indexOf(value.status) >= 0 ? value.status : (index === 0 ? 'available' : 'locked');
+      out.chapterProgress[id] = { status: status, bestResult: value.bestResult == null ? null : boundedInt(value.bestResult, 0, 100, 0) };
+    });
+    CAMPAIGN_EPISODES.forEach(function (ep) {
+      out.bestResults[ep.id] = campaignObj(raw.bestResults) ? sanitizeCampaignResult(raw.bestResults[ep.id]) : null;
+      out.attempts[ep.id] = campaignObj(raw.attempts) ? boundedInt(raw.attempts[ep.id], 0, 9999, 0) : 0;
+      var strategy = campaignObj(raw.selectedStrategies) ? raw.selectedStrategies[ep.id] : null;
+      out.selectedStrategies[ep.id] = CAMPAIGN_EPISODE_STRATEGIES[ep.id].indexOf(strategy) >= 0 ? strategy : ep.defaultStrategy;
+    });
+    function boundedIds(value, allowed, max) {
+      var list = Array.isArray(value) ? value : [], clean = [];
+      for (var i = 0; i < list.length && clean.length < max; i++) if (allowed.indexOf(list[i]) >= 0 && clean.indexOf(list[i]) < 0) clean.push(list[i]);
+      return clean;
+    }
+    out.discoveredStrategies = boundedIds(raw.discoveredStrategies, CAMPAIGN_STRATEGIES, 12);
+    out.badges = boundedIds(raw.badges, CAMPAIGN_BADGES, 8);
+    out.revealedEpisodes = boundedIds(raw.revealedEpisodes, CAMPAIGN_EPISODES.map(function (ep) { return ep.id; }), 3);
+    if (Array.isArray(raw.provenance)) out.provenance = raw.provenance.slice(0, 10).map(function (h) {
+      h = campaignObj(h) ? h : {};
+      var status = ['chapter-mastered', 'resilient', 'recovered-with-debt', 'blocked'].indexOf(h.status) >= 0 ? h.status : null;
+      return { episodeId: CAMPAIGN_EPISODES.some(function (ep) { return ep.id === h.episodeId; }) ? h.episodeId : 'normal',
+        at: boundedInt(h.at, 0, 9007199254740991, 0), attempt: boundedInt(h.attempt, 1, 9999, 1),
+        seed: boundedInt(h.seed, 1, 4294967295, 1), success: h.success === true,
+        transitionId: typeof h.transitionId === 'string' ? h.transitionId.slice(0, 100) : '',
+        planFingerprint: typeof h.planFingerprint === 'string' ? h.planFingerprint.slice(0, 32) : '',
+        status: status, reason: typeof h.reason === 'string' ? h.reason.slice(0, 100) : '',
+        recoveredWithDebt: h.recoveredWithDebt === true,
+        badgeAwarded: CAMPAIGN_BADGES.indexOf(h.badgeAwarded) >= 0 ? h.badgeAwarded : null,
+        executionComplete: h.executionComplete == null ? null : h.executionComplete === true,
+        efficiency: boundedMaybeInt(h.efficiency, 0, 100), debtBefore: boundedMaybeInt(h.debtBefore, 0, 999),
+        debtAfter: boundedMaybeInt(h.debtAfter, 0, 999), interventionsBefore: boundedMaybeInt(h.interventionsBefore, 0, 20),
+        interventionsAfter: boundedMaybeInt(h.interventionsAfter, 0, 20), guestWaitBefore: boundedMaybeInt(h.guestWaitBefore, 0, 10080),
+        guestWaitAfter: boundedMaybeInt(h.guestWaitAfter, 0, 10080) };
+    });
+    return out;
+  }
+  function migrateCampaignEnvelope(raw) {
+    if (!campaignObj(raw)) return null;
+    if (raw.kind === CAMPAIGN_KIND && raw.version === CAMPAIGN_VERSION && campaignObj(raw.state)) return raw;
+    // Explicit v0 migration: the prototype stored its state directly (or under
+    // `state`) and used episode numbers. Unknown future versions fail closed.
+    if (raw.version == null || raw.version === 0) {
+      var legacy = campaignObj(raw.state) ? raw.state : raw;
+      return { kind: CAMPAIGN_KIND, version: CAMPAIGN_VERSION, updatedAt: Date.now(), state: legacy };
+    }
+    return null;
+  }
+  function loadCampaignState() {
+    try {
+      var parsed = JSON.parse(localStorage.getItem(CAMPAIGN_STORAGE_KEY) || 'null');
+      var migrated = migrateCampaignEnvelope(parsed); return migrated ? sanitizeCampaignState(migrated.state) : freshCampaignState();
+    } catch (e) { return freshCampaignState(); }
+  }
+  function persistCampaignState() {
+    campaignState = sanitizeCampaignState(campaignState);
+    try { localStorage.setItem(CAMPAIGN_STORAGE_KEY, JSON.stringify({ kind: CAMPAIGN_KIND, version: CAMPAIGN_VERSION, updatedAt: Date.now(), state: campaignState })); }
+    catch (e) { }
+  }
+  function loadCampaignRunState() {
+    try {
+      var raw = JSON.parse(localStorage.getItem(CAMPAIGN_RUN_STATE_KEY) || 'null');
+      if (typeof P.migrateRunState === 'function') return P.migrateRunState(raw);
+    } catch (e) { }
+    return typeof P.createRunState === 'function' ? P.createRunState() : { version: 1, cashReserve: 300000, teamCapacity: 100,
+      criticalInventory: 2, guestWait: 0, interventionTokens: 1, operationalDebt: 0, resilienceBadges: [] };
+  }
+  function persistCampaignRunState() {
+    try { if (campaignRunState) localStorage.setItem(CAMPAIGN_RUN_STATE_KEY, JSON.stringify(campaignRunState)); } catch (e) { }
+  }
+  var campaignState = loadCampaignState(), campaignRunState = loadCampaignRunState(), campaignPlanCfg = null;
+  var campaignPendingLaunch = null, campaignActiveRun = null, campaignIncidentAcknowledged = false;
+  // Failed rehearsals are free, deterministic retries. The bounded provenance
+  // record persists their seed; this session-only map preserves the exact
+  // pre-episode RunState object as well. A reload can safely fall back to the
+  // persisted campaignRunState because failed transitions never mutate it.
+  var campaignRetrySnapshots = {};
+  function campaignEpisode(index) { return CAMPAIGN_EPISODES[boundedInt(index == null ? campaignState.currentEpisode : index, 0, CAMPAIGN_EPISODES.length - 1, 0)]; }
+  function campaignIsActive() { return campaignState.journey === 'campaign' || campaignState.journey === 'resilience'; }
+  function activeScenarioId() { return campaignIsActive() ? campaignEpisode().id : (learningLevel === 'challenge' ? 'comms-outage' : 'normal'); }
+  function activeScenarioStrategy() { var ep = campaignEpisode(); return campaignIsActive() ? (campaignState.selectedStrategies[ep.id] || ep.defaultStrategy) : null; }
+  function planFingerprint(cfg) {
+    var s = JSON.stringify(cfg || {}), h = 2166136261;
+    for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return ('00000000' + (h >>> 0).toString(16)).slice(-8);
+  }
+  function campaignRetryProvenance(episodeId) {
+    for (var i = 0; i < campaignState.provenance.length; i++) {
+      var item = campaignState.provenance[i];
+      if (item.episodeId === episodeId) return item.success ? null : item;
+    }
+    return null;
+  }
+
   // Learning level is deliberately orthogonal to Live/Plan-first mode. Learn may use either
   // existing surface; Practice and Challenge always enter Plan-first and require a committed
   // prediction before launch. Only compact learner records are stored—never the full plan.
@@ -509,18 +658,20 @@
     // The outage challenge must contain a decision to diagnose. Its catch relay is layered as
     // phone-only for this scenario, without writing dayOv; once the learner explicitly edits that
     // handoff (radio is the resilient recovery), their authored choice wins.
-    if (learningLevel === 'challenge' && !fixed.fixHandoffs && !Object.prototype.hasOwnProperty.call(dayOv.fishday.handoffs, 'h_catch_chef')) {
+    if (learningLevel === 'challenge' && !campaignIsActive() && !fixed.fixHandoffs && !Object.prototype.hasOwnProperty.call(dayOv.fishday.handoffs, 'h_catch_chef')) {
       var canonical = typeof P.canonHandoffs === 'function' ? byId(P.canonHandoffs(), 'h_catch_chef') : null;
       if (canonical) { o.handoffs = o.handoffs || {}; o.handoffs.h_catch_chef = Object.assign({}, canonical, { channel: 'phone' }); }
     }
-    // Challenge adds a deterministic communications outage. Keep this defensive so the UI still
-    // boots against an older engine during a staggered deployment.
-    if (learningLevel === 'challenge' && typeof P.applyScenario === 'function') {
-      try { cfg = P.applyScenario(cfg, 'comms-outage') || cfg; } catch (e) { }
+    return cfg;
+  }
+  function transientScenarioCfg(authoredCfg, scenarioId, strategyId, seed) {
+    var cfg = campaignCopy(authoredCfg || buildCfg()); cfg.seed = seed || 1;
+    if (scenarioId !== 'normal' && typeof P.applyScenario === 'function') {
+      try { cfg = P.applyScenario(cfg, scenarioId, strategyId) || cfg; } catch (e) { }
     }
     return cfg;
   }
-  function seededCfg(seed) { var cfg = buildCfg(); cfg.seed = seed || 1; return cfg; }
+  function seededCfg(seed) { return transientScenarioCfg(buildCfg(), activeScenarioId(), activeScenarioStrategy(), seed); }
   function currentPlan() { return P.mergePlan(buildCfg()); }
   function activeProblemIds() { return P.detect(currentPlan()).map(function (p) { return p.id; }); }
   function hhmm(min) {
@@ -633,13 +784,121 @@
     finishTimer = setTimeout(attempt, delay);
   }
 
-  var BUB = { confused: '❓', meeting: '💬', waiting: '⏳', tired: '😣', onFire: '🔥', resolved: '✅', working: '', idle: '', waitInfo: '⏳', rework: '🔁' };
-  var STATE_KEY = { working: 'stWorking', confused: 'stConfused', meeting: 'stMeeting', waiting: 'stWaiting', tired: 'stTired', onFire: 'stOnFire', resolved: 'stResolved', idle: 'stIdle', waitInfo: 'stWaitInfo', rework: 'stRework' };
+  var BUB = { confused: '❓', meeting: '💬', waiting: '⏳', tired: '😣', onFire: '🔥', resolved: '✅', unavailable: '⊘', working: '', idle: '', waitInfo: '⏳', rework: '🔁' };
+  var STATE_KEY = { working: 'stWorking', confused: 'stConfused', meeting: 'stMeeting', waiting: 'stWaiting', tired: 'stTired', onFire: 'stOnFire', resolved: 'stResolved', unavailable: 'stUnavailable', idle: 'stIdle', waitInfo: 'stWaitInfo', rework: 'stRework' };
 
   function learningLevelLabel(level) { return T()['level' + level.charAt(0).toUpperCase() + level.slice(1)] || level; }
   function causeLabel(cause) {
     var key = { 'missing-info': 'causeMissingInfo', 'late-info': 'causeLateInfo', information: 'causeInformation', authority: 'causeAuthority', dependency: 'causeDependency', capacity: 'causeCapacity', resource: 'causeResource', assumption: 'causeAssumption', none: 'causeNone' }[cause];
     return key ? T()[key] : (cause || T().causeNone);
+  }
+  function campaignMasteredCount() {
+    var n = 0; CAMPAIGN_CHAPTERS.forEach(function (id) { if (campaignState.chapterProgress[id].status === 'mastered') n++; }); return n;
+  }
+  function campaignEpisodeLabel(ep) { return T()[ep.titleKey] || ep.id; }
+  function campaignBadgeLabel(id) {
+    return id === 'communications-resilient' ? T().campaignBadgeCommunications :
+      (id === 'delegation-resilient' ? T().campaignBadgeDelegation : id);
+  }
+  function campaignStrategyLabel(ep, id) {
+    if (typeof P.scenarioStrategy === 'function') {
+      try { var strategy = P.scenarioStrategy(ep.id, id); if (strategy && strategy.label) return nm(strategy.label); } catch (e) { }
+    }
+    return id.replace(/-/g, ' ');
+  }
+  function renderJourneyEntry() {
+    var el = $('journey-progress'); if (!el) return;
+    var done = campaignMasteredCount(), badges = campaignState.badges.length;
+    el.textContent = T().journeySavedProgress(done, CAMPAIGN_CHAPTERS.length, badges);
+    el.classList.toggle('hidden', !done && !badges && !campaignState.guidedComplete);
+  }
+  function renderCampaignCarryover() {
+    var box = $('campaign-carryover'); if (!box) return;
+    var rs = campaignRunState || {};
+    box.innerHTML = '<strong>' + esc(T().campaignCarryoverTitle) + '</strong><div>' +
+      '<span><small>' + esc(T().campaignCapacity) + '</small><b>' + boundedInt(rs.teamCapacity, 0, 100, 100) + '%</b></span>' +
+      '<span><small>' + esc(T().campaignInterventions) + '</small><b>' + boundedInt(rs.interventionTokens, 0, 20, 0) + '</b></span>' +
+      '<span><small>' + esc(T().campaignDebt) + '</small><b>' + boundedInt(rs.operationalDebt, 0, 999, 0) + '</b></span>' +
+      '<span><small>' + esc(T().campaignCarryBadges) + '</small><b>' + (Array.isArray(rs.resilienceBadges) ? rs.resilienceBadges.length : campaignState.badges.length) + '</b></span></div>';
+  }
+  function renderCampaignBoard() {
+    var board = $('campaign-board'); if (!board) return;
+    var active = campaignIsActive(); board.classList.toggle('hidden', !active); if (!active) return;
+    var ep = campaignEpisode(), epIndex = campaignState.currentEpisode, t = T();
+    $('campaign-objective').textContent = t[ep.objectiveKey] || '';
+    var score = 0;
+    try { score = P.scoreTrip(currentPlan()).total; } catch (e) { }
+    $('campaign-progress').innerHTML = '<span>' + esc(t.campaignProgress(epIndex + 1, CAMPAIGN_EPISODES.length)) + '</span>' +
+      '<span>' + esc(t.campaignChapters(campaignMasteredCount(), CAMPAIGN_CHAPTERS.length)) + '</span>' +
+      '<span><b>' + esc(t.campaignMasteryLabel) + '</b> ' + score + ' / 100</span>' +
+      '<span><b>' + esc(t.campaignResilienceLabel) + '</b> ' + esc(t.campaignBadgeCount(campaignState.badges.length)) + '</span>';
+    $('campaign-episodes').innerHTML = CAMPAIGN_EPISODES.map(function (item, index) {
+      var result = campaignState.bestResults[item.id], complete = !!(result && result.success), current = index === epIndex;
+      var status = complete ? t.campaignEpisodeComplete : (current ? t.campaignEpisodeCurrent : t.campaignEpisodeLocked);
+      var attempts = boundedInt(campaignState.attempts[item.id], 0, 9999, 0);
+      return '<article role="listitem" class="campaign-episode' + (complete ? ' complete' : '') + (current ? ' current' : '') + (index > epIndex && !complete ? ' locked' : '') + '"' +
+        (current ? ' aria-current="step"' : '') + '><span class="campaign-episode-no">' + (index + 1) + '</span><div><strong>' + esc(campaignEpisodeLabel(item)) + '</strong>' +
+        '<small>' + esc(t[item.descKey]) + '</small></div><span class="campaign-episode-status">' + esc(status) + (attempts ? '<small>' + esc(t.campaignAttemptCount(attempts)) + '</small>' : '') + '</span></article>';
+    }).join('');
+    var stepIndex = CAMPAIGN_STEPS.indexOf(campaignState.guidanceStep); if (stepIndex < 0) stepIndex = 0;
+    $('campaign-steps').setAttribute('aria-label', t.campaignStepsLabel);
+    $('campaign-steps').innerHTML = CAMPAIGN_STEPS.map(function (step, index) {
+      var key = 'campaignStep' + step.charAt(0).toUpperCase() + step.slice(1);
+      return '<li class="' + (index < stepIndex ? 'done' : (index === stepIndex ? 'current' : '')) + '"' + (index === stepIndex ? ' aria-current="step"' : '') +
+        '><span>' + (index < stepIndex ? '✓' : (index + 1)) + '</span>' + esc(t[key]) + '</li>';
+    }).join('');
+    var stepKey = campaignState.guidanceStep.charAt(0).toUpperCase() + campaignState.guidanceStep.slice(1);
+    $('campaign-step-title').textContent = t['campaignStep' + stepKey];
+    $('campaign-step-copy').textContent = t['campaignStep' + stepKey + 'Copy'];
+    $('campaign-next').textContent = t['campaignNext' + stepKey];
+    var ids = CAMPAIGN_EPISODE_STRATEGIES[ep.id] || [], fieldset = $('campaign-strategies');
+    fieldset.classList.toggle('hidden', ids.length <= 1);
+    $('campaign-strategy-options').innerHTML = ids.length <= 1 ? '' : ids.map(function (id) {
+      var checked = campaignState.selectedStrategies[ep.id] === id;
+      return '<label><input type="radio" name="campaign-strategy" value="' + esc(id) + '"' + (checked ? ' checked' : '') + '><span>' + esc(campaignStrategyLabel(ep, id)) + '</span></label>';
+    }).join('');
+    renderCampaignCarryover();
+  }
+  function renderCampaignChrome() {
+    ['guided', 'campaign', 'resilience', 'expert'].forEach(function (journey) {
+      document.body.classList.toggle('journey-' + journey, campaignState.journey === journey);
+    });
+    CAMPAIGN_STEPS.forEach(function (step) { document.body.classList.toggle('campaign-step-' + step, campaignIsActive() && campaignState.guidanceStep === step); });
+    document.body.classList.toggle('campaign-active', campaignIsActive());
+    renderJourneyEntry(); renderCampaignBoard();
+  }
+  function setCampaignGuidance(step, announce) {
+    if (CAMPAIGN_STEPS.indexOf(step) < 0) return;
+    campaignState.guidanceStep = step; persistCampaignState(); renderCampaignChrome();
+    if (announce && $('campaign-status')) $('campaign-status').textContent = $('campaign-step-title') ? $('campaign-step-title').textContent : '';
+  }
+  function advanceCampaignGuidance() {
+    if (!campaignIsActive()) return;
+    var step = campaignState.guidanceStep;
+    if (step === 'observe') {
+      setCampaignGuidance('diagnose', true);
+      var next = $('campaign-next'); if (next) next.focus();
+    } else if (step === 'diagnose') {
+      setCampaignGuidance('edit', true); takeMeToNextIssue();
+    } else if (step === 'edit') {
+      setCampaignGuidance('rehearse', true);
+      var run = $('launch'); if (run) { try { run.focus({ preventScroll: true }); } catch (e) { run.focus(); } }
+    } else launch();
+  }
+  function resetCampaignProgress() {
+    if (!window.confirm(T().campaignResetConfirm)) return;
+    var journey = campaignState.journey === 'resilience' ? 'resilience' : 'campaign';
+    campaignState = freshCampaignState(); campaignState.journey = journey; campaignPlanCfg = null;
+    campaignRunState = typeof P.createRunState === 'function' ? P.createRunState() : loadCampaignRunState();
+    campaignPendingLaunch = null; campaignActiveRun = null; campaignIncidentAcknowledged = false;
+    try { localStorage.removeItem(CAMPAIGN_RUN_STATE_KEY); } catch (e) { }
+    persistCampaignState(); persistCampaignRunState();
+    learningLevel = journey === 'resilience' ? 'challenge' : 'practice'; daySel = journey === 'resilience' ? 'fishday' : 'load';
+    if (journey === 'resilience') campaignState.currentEpisode = 1;
+    try { localStorage.setItem(LEARNING_LEVEL_KEY, learningLevel); } catch (e2) { }
+    persistCampaignState(); paintSetup(); renderLearningChrome();
+    if ($('campaign-status')) $('campaign-status').textContent = T().campaignResetDone;
+    var action = $('campaign-next'); if (action) action.focus();
   }
   function renderAttemptHistory() {
     var box = $('attempt-history'); if (!box) return;
@@ -675,13 +934,16 @@
     });
     var chip = $('scenario-chip');
     if (chip) {
-      chip.classList.toggle('hidden', learningLevel !== 'challenge');
-      chip.textContent = typeof P.applyScenario === 'function' ? T().scenarioChallengeActive : T().scenarioChallengeUnavailable;
+      var scenario = activeScenarioId(), showScenario = scenario !== 'normal';
+      chip.classList.toggle('hidden', !showScenario);
+      chip.textContent = typeof P.applyScenario === 'function'
+        ? '⚡ ' + (campaignIsActive() ? campaignEpisodeLabel(campaignEpisode()) : T().scenarioChallengeActive.replace(/^⚡\s*/, ''))
+        : T().scenarioChallengeUnavailable;
     }
     var liveBtn = $('mode-live');
     if (liveBtn) { liveBtn.disabled = learningLevel !== 'learn'; liveBtn.setAttribute('aria-disabled', liveBtn.disabled ? 'true' : 'false'); }
     var outcomes = document.querySelector('.mission-outcomes'); if (outcomes) outcomes.setAttribute('aria-label', T().missionTitle);
-    renderAttemptHistory();
+    renderAttemptHistory(); renderCampaignChrome();
   }
   function setLearningLevel(level) {
     if (['learn', 'practice', 'challenge'].indexOf(level) < 0 || level === learningLevel) return;
@@ -778,6 +1040,7 @@
     }
     // open modals re-render in the new language (their content is built, not data-i18n)
     if ($('inspect-modal').classList.contains('show')) openInspector();
+    if ($('campaign-incident-modal').classList.contains('show')) renderCampaignIncident();
     if ($('arrow-modal').classList.contains('show') && arrowEdit) openArrowPanel(arrowEdit);
     if ($('detail-modal').classList.contains('show')) {
       if (lastDetailSection) openSectionPanel(lastDetailSection);
@@ -808,13 +1071,14 @@
     if (name !== 'run') $('live-dock').classList.add('hidden');      // the live dock only ever shows INSIDE run (callers show it)
     if (name !== 'run' && window.PRS_SOUND) window.PRS_SOUND.ambient(null);   // ambient bed stop, run-exit (sound.js §W3)
     document.body.classList.toggle('running', name === 'run');
+    if (name !== 'run') setCampaignAuthoringInert(false);
     if (name === 'setup') bootPlanStage();                           // (re)mount the pre-dawn plan stage + its local rAF
   }
 
   // =========================================================================
   // SETUP
   // =========================================================================
-  function paintSetup() { buildPlanClusters(); buildDaySelect(); buildCanvas(); buildOrg(); buildBuddyCard(); buildTimeline(); buildMissionControl(); buildEditors(); buildDayGrid(); updatePlanUI(); }
+  function paintSetup() { buildPlanClusters(); buildDaySelect(); buildCanvas(); buildOrg(); buildBuddyCard(); buildTimeline(); buildMissionControl(); buildEditors(); buildDayGrid(); updatePlanUI(); renderCampaignBoard(); }
 
   function buildDaySelect() {
     var box = $('day-select'); if (!box) return;
@@ -2175,6 +2439,67 @@
   // =========================================================================
   // RUN
   // =========================================================================
+  function campaignPlanFrozen() {
+    if (!campaignIsActive()) return false;
+    var incidentVisible = $('campaign-incident-modal') && $('campaign-incident-modal').classList.contains('show');
+    var runVisible = $('run') && !$('run').classList.contains('hidden');
+    return !!((campaignPendingLaunch && incidentVisible) || (campaignActiveRun && runVisible));
+  }
+  function setCampaignAuthoringInert(frozen) {
+    var setup = $('setup'); if (!setup) return;
+    if (frozen) setup.setAttribute('inert', ''); else setup.removeAttribute('inert');
+    document.body.classList.toggle('campaign-plan-frozen', !!frozen);
+  }
+  function prepareCampaignLaunch() {
+    if (!campaignIsActive()) return null;
+    var ep = campaignEpisode(), failed = campaignRetryProvenance(ep.id), retry = campaignRetrySnapshots[ep.id];
+    var seed = failed ? failed.seed : ((Math.floor(Math.random() * 1e9) >>> 0) || 1);
+    // Only deliberate Setup edits update campaignPlanCfg. Scenario metadata is
+    // layered onto a second deep clone and can never flow back into this plan.
+    campaignPlanCfg = campaignCopy(buildCfg());
+    var planCfg = campaignCopy(campaignPlanCfg);
+    // A failed episode always replays the same incident from the same starting
+    // capacity/debt/tokens. Plan edits and strategy changes remain deliberate,
+    // but luck and carry state cannot silently improve between attempts.
+    var retryMatches = failed && retry && retry.seed === seed;
+    var runState = campaignCopy(retryMatches ? retry.runState : campaignRunState), strategyId = activeScenarioStrategy();
+    var runCfg = transientScenarioCfg(planCfg, ep.id, strategyId, seed), fingerprint = planFingerprint(planCfg);
+    var attempt = boundedInt(campaignState.attempts[ep.id] + 1, 1, 9999, 1);
+    return { episodeIndex: campaignState.currentEpisode, episodeId: ep.id, segment: ep.segment, strategyId: strategyId,
+      planCfg: planCfg, runCfg: campaignCopy(runCfg), planSnapshot: P.mergePlan(campaignCopy(runCfg)),
+      masterySnapshot: P.scoreTrip(P.mergePlan(campaignCopy(planCfg))), runState: runState, seed: seed, attempt: attempt,
+      planFingerprint: fingerprint, transitionId: [ep.id, attempt, seed, fingerprint].join(':') };
+  }
+  function campaignShouldRevealIncident(run) {
+    if (!run || campaignIncidentAcknowledged || run.episodeId !== 'principal-unavailable') return false;
+    if (typeof P.scenarioProfile === 'function') {
+      try { return P.scenarioProfile(run.episodeId).revealPhase === 'after-lock'; } catch (e) { }
+    }
+    return true;
+  }
+  function renderCampaignIncident() {
+    if (!campaignPendingLaunch) return;
+    $('campaign-incident-title').textContent = T().campaignIncidentTitle;
+    $('campaign-incident-body').textContent = T().campaignIncidentBody;
+  }
+  function openCampaignIncident() {
+    var modal = $('campaign-incident-modal'); if (!modal || !campaignPendingLaunch) return;
+    renderCampaignIncident(); modalOpening('campaign-incident-modal'); modal.classList.add('show');
+    if (campaignState.revealedEpisodes.indexOf(campaignPendingLaunch.episodeId) < 0) {
+      campaignState.revealedEpisodes.push(campaignPendingLaunch.episodeId); persistCampaignState();
+    }
+    if ($('campaign-status')) $('campaign-status').textContent = [T().campaignIncidentTitle, T().campaignIncidentBody].join(' ');
+    if ($('campaign-incident-status')) $('campaign-incident-status').textContent = [T().campaignIncidentTitle, T().campaignIncidentBody].join(' ');
+    setCampaignAuthoringInert(true);
+    var action = $('campaign-incident-run'); if (action) { try { action.focus({ preventScroll: true }); } catch (e) { action.focus(); } }
+  }
+  function acceptCampaignIncident() {
+    if (!campaignPendingLaunch) return;
+    campaignIncidentAcknowledged = true;
+    $('campaign-incident-modal').classList.remove('show'); setCampaignAuthoringInert(false);
+    lastFocus = null; lastFocusResolver = null;
+    launch();
+  }
   function closePrediction(restoreFocus) {
     var m = $('prediction-modal'); if (!m || !m.classList.contains('show')) return;
     m.classList.remove('show');
@@ -2199,7 +2524,7 @@
   }
   function newLearningRun(seed, segment) {
     return { id: 'a' + Date.now().toString(36) + '-' + String(seed || 1), at: Date.now(), level: learningLevel,
-      segment: segment, seed: seed || 1, scenario: learningLevel === 'challenge' ? 'comms-outage' : 'normal',
+      segment: segment, seed: seed || 1, scenario: activeScenarioId(),
       prediction: pendingPrediction ? { cause: pendingPrediction.cause, rationale: pendingPrediction.rationale, createdAt: pendingPrediction.createdAt } : null };
   }
   var ADJ = [['mess', 'port'], ['mess', 'clinic'], ['mess', 'lodging'], ['port', 'vessel']];   // §map v2: Hinata(mess) is the hub; port->iso is the boat route
@@ -2302,7 +2627,14 @@
   // Tier 2: the Canvas 2D stage is now the DEFAULT (§21). Add ?dom to the URL to fall back to the old DOM stage.
   var USE_CANVAS = !/[?&#]dom(&|=|$)/i.test(location.search + location.hash);
   var guestsVisible = false;             // §21.1: the 13 guests are hidden by default (toggle is P4)
-  var dashboardOpen = true;              // dashboard drawer: open by default; closing widens the stage to full width
+  function defaultDashboardOpenForViewport() {
+    // A phone-sized bottom sheet covers more than half of the map. Start it
+    // closed there so the world remains the primary surface; the explicit
+    // dashboard button keeps every metric one tap away. Desktop retains the
+    // at-a-glance command-room panel.
+    return !(window.matchMedia && window.matchMedia('(max-width:760px)').matches);
+  }
+  var dashboardOpen = defaultDashboardOpenForViewport();
   var stageCtx = null;                   // #stage 2D context (captured in buildSitemap)
   var stageTrail = [], stageGhost = [{}, {}, {}], stageChain = [];  // canvas-owned cascade scratch (separate from anim.*)
   var stageSpotPid = null, stageTint = null, stageGapState = null;  // §21.4 Live draw-state bridge -> the scene() view
@@ -2479,14 +2811,138 @@
   }
   function camPunchGap(gap) { var p = stallCenterPx(gap && gap.taskId, currentPlan()); camMoveTo(p.x, p.y, 1.35, 600); }
 
+  function presentationNow() { return window.performance && typeof performance.now === 'function' ? performance.now() : Date.now(); }
+  function presentationPersonName(plan, pid, fallback) {
+    var person = plan && Array.isArray(plan.participants) ? byId(plan.participants, pid) : null;
+    return person ? nm(person.name) : (fallback || (L === 'ja' ? '担当者' : 'team member'));
+  }
+  function presentationItemName(plan, cardId, fallback) {
+    var card = plan && Array.isArray(plan.infoCards) ? byId(plan.infoCards, cardId) : null;
+    return card ? nm(card.name) : (fallback || (L === 'ja' ? '必要情報' : 'required information'));
+  }
+  function setStagePresentationStatus(edgeId, message) {
+    var status = $('stage-presentation-status'); if (!status || !message || status.getAttribute('data-edge') === edgeId) return;
+    status.setAttribute('data-edge', edgeId); status.textContent = message;
+  }
+  // Presentation-only edge bridge. The raw beat is retained for stage.js to
+  // resolve against its own frame clock; sound fires once here, never in rAF.
+  function presentCausalBeat(spec) {
+    if (!anim || !spec) return null;
+    var edgeId = String(spec.edgeId || spec.id || ''); if (!edgeId) return null;
+    anim.presentationEdges = anim.presentationEdges || {};
+    if (anim.presentationEdges[edgeId]) return null;
+    var atMs = presentationNow(), raw = Object.assign({}, spec, { id: edgeId, atMs: atMs });
+    delete raw.edgeId; delete raw.announcement;
+    var frame = window.PRS_STAGE && typeof PRS_STAGE.causalBeatFrame === 'function'
+      ? PRS_STAGE.causalBeatFrame(raw, atMs, { reducedMotion: RM.matches }) : raw;
+    anim.presentationEdges[edgeId] = 1;
+    anim.causalBeats = (anim.causalBeats || []).concat([raw]).slice(-3);
+    anim.lastPresentationKind = raw.kind; anim.lastPresentationAt = atMs;
+    setStagePresentationStatus(edgeId, spec.announcement || nm(raw.label));
+    if (window.PRS_SOUND && typeof PRS_SOUND.beat === 'function') PRS_SOUND.beat(frame);
+    else if (window.PRS_SOUND && typeof PRS_SOUND.cue === 'function' && raw.kind === 'stall') PRS_SOUND.cue('freeze');
+    return raw;
+  }
+  function presentRouteTransition(fromScene, toScene, edgeId) {
+    if (!anim || !window.PRS_STAGE || typeof PRS_STAGE.routeSignature !== 'function') return null;
+    edgeId = String(edgeId || ('route:' + fromScene + '>' + toScene));
+    anim.presentationEdges = anim.presentationEdges || {};
+    if (anim.presentationEdges[edgeId]) return null;
+    var atMs = presentationNow(), signature = PRS_STAGE.routeSignature(fromScene, toScene, { atMs: atMs });
+    if (!signature || !signature.visualEquivalent || signature.visualEquivalent.required !== true) return null;
+    signature.id = edgeId; anim.presentationEdges[edgeId] = 1; anim.routeTransition = signature;
+    setStagePresentationStatus(edgeId, T().stageRouteTransition(nm(signature.from), nm(signature.to)));
+    if (window.PRS_SOUND && typeof PRS_SOUND.transition === 'function') PRS_SOUND.transition(signature);
+    return signature;
+  }
+  function relationshipTripDay(s, explicitDay) {
+    if (typeof explicitDay === 'number' && isFinite(explicitDay) && Math.floor(explicitDay) === explicitDay) return explicitDay;
+    if (!s) return null;
+    if (s.segment === 'load' || s.segment === 'voyage') return 0;
+    if (s.segment === 'arrival') return 1;
+    if (s.segment === 'fishday') return 3;
+    if (s.segment === 'return') return 10;
+    return null; // never infer the Day-6 exchange from a broad Operations segment
+  }
+  function stageRelationshipsFor(plan, tripDay) {
+    if (tripDay == null || !plan || !window.PRS_STAGE || typeof PRS_STAGE.relationshipCues !== 'function') return null;
+    try { return PRS_STAGE.relationshipCues(plan, tripDay); } catch (e) { return null; }
+  }
+  function relationshipGuestName(plan, guestId) {
+    var guest = plan && Array.isArray(plan.guests) ? byId(plan.guests, guestId) : null;
+    return guest ? nm(guest.name) : guestId;
+  }
+  function stageRelationshipMirrorHTML(rel, plan) {
+    if (!rel) return '';
+    var t = T(), pairs = rel.buddyPairs || [], lines = pairs.map(function (pair) {
+      var guest = relationshipGuestName(plan, pair.guestId);
+      return '<li>' + esc(pair.assigned ? t.stageRelationshipBuddy(guest, presentationPersonName(plan, pair.personId)) : t.stageRelationshipUnassigned(guest)) + '</li>';
+    });
+    if (rel.exchange) {
+      var departing = (rel.exchange.departingGuestIds || []).map(function (id) { return relationshipGuestName(plan, id); }).join(', ');
+      var arriving = (rel.exchange.arrivingGuestIds || []).map(function (id) { return relationshipGuestName(plan, id); }).join(', ');
+      lines.push('<li class="stage-relationship-exchange">' + esc(t.stageRelationshipExchange(departing, arriving)) + '</li>');
+    }
+    return lines.length ? '<h2>' + esc(t.stageRelationshipsHeading) + '</h2><ul>' + lines.join('') + '</ul>' : '';
+  }
+  function updateStageRelationships(s, explicitDay) {
+    if (!anim || !s) return;
+    var day = relationshipTripDay(s, explicitDay), rel = stageRelationshipsFor(s.plan, day), box = $('stage-relationships');
+    anim.relationships = rel;
+    if (!box) return;
+    var html = stageRelationshipMirrorHTML(rel, s.plan), sig = L + '|' + day + '|' + html;
+    if (box._sig === sig) return;
+    box._sig = sig; box.setAttribute('aria-label', rel ? T().stageRelationshipsHeading : ''); box.innerHTML = html;
+  }
+  function participantPresentationItem(s, participant) {
+    var task = participant && participant.taskId ? byId(s.tasks || [], participant.taskId) : null;
+    var cardId = task && task.problem && task.problem.cardId, entry = task && s.sched && s.sched.byTask && s.sched.byTask[task.id];
+    if (!cardId && entry && entry.waits && entry.waits.length) cardId = entry.waits[0].cardId;
+    return { cardId: cardId || null, label: presentationItemName(s.plan, cardId, task ? nm(task.name) : null) };
+  }
+  function participantPresentationSpec(s, participant, priorState) {
+    var nextState = participant.state, person = presentationPersonName(s.plan, participant.id), item;
+    if (nextState === 'unavailable' && priorState !== 'unavailable') {
+      return { edgeId: 'unavailable:' + s.segment + ':' + participant.id, kind: 'reveal', actorPid: participant.id,
+        fromStationId: participant.station, toStationId: participant.station, itemLabel: T().stUnavailable,
+        announcement: T().stageBeatUnavailable(person) };
+    }
+    if (!priorState || priorState === nextState) return null;
+    if (!STALL_STATES[priorState] && STALL_STATES[nextState]) {
+      item = participantPresentationItem(s, participant); anim.stallItems[participant.id] = item;
+      return { edgeId: 'stall:' + s.segment + ':' + participant.id + ':' + (participant.taskId || nextState), kind: 'stall',
+        actorPid: participant.id, fromStationId: participant.station, toStationId: participant.station, itemLabel: item.label,
+        announcement: T().stageBeatStall(person, item.label) };
+    }
+    if (STALL_STATES[priorState] && !STALL_STATES[nextState]) {
+      if (anim.suppressRecovery[participant.id]) { delete anim.suppressRecovery[participant.id]; return null; }
+      item = anim.stallItems[participant.id] || participantPresentationItem(s, participant); delete anim.stallItems[participant.id];
+      return { edgeId: 'recovery:' + s.segment + ':' + participant.id + ':' + Math.floor(s.clockMin || 0), kind: 'recovery',
+        actorPid: participant.id, recipientPid: participant.id, fromStationId: participant.station, toStationId: participant.station,
+        itemLabel: item.label, announcement: T().stageBeatRecovery(person, item.label) };
+    }
+    return null;
+  }
+  function presentMoteHandoff(mote, s, kind, edgeId) {
+    if (!mote || !s) return null;
+    var from = presentationPersonName(s.plan, mote.fromPid), to = presentationPersonName(s.plan, mote.toPid);
+    var item = presentationItemName(s.plan, mote.card);
+    return presentCausalBeat({ edgeId: edgeId || ('mote:' + (kind || 'handoff') + ':' + s.segment + ':' + mote.card + ':' + mote.role + ':' + mote.send),
+      kind: kind || 'handoff', actorPid: mote.fromPid, recipientPid: mote.toPid, fromStationId: mote.fromSt, toStationId: mote.toSt,
+      itemLabel: item, announcement: kind === 'repair' ? T().stageBeatRepair(from, to, item) : T().stageBeatHandoff(from, to, item) });
+  }
+
   function animReset() {
     anim = { running: false, raf: null, last: 0, w: 0, h: 0, fig: {}, guest: {}, boat: null, wakes: [], hotPts: [],
       cascade: { hops: [], has: false }, ghost: [], trail: [], strikeSeg: -1, chain: [], chainOn: false,
-      motes: [], acts: null, actsAt: -1, tweens: {}, fanfared: false, skyKey: '', sceneKey: '' };
+      motes: [], acts: null, actsAt: -1, tweens: {}, fanfared: false, skyKey: '', sceneKey: '',
+      causalBeats: [], routeTransition: null, relationships: null, presentationEdges: {}, stallItems: {}, suppressRecovery: {} };
     // §21.4 bridge state is module-scoped: clear it per run so a frozen gap's tint/spotlight can't leak into the next cold-open
     stageTint = null; stageSpotPid = null; stageGapState = null;
     camReleaseSafe(0);   // §3 safety: no camera offset survives a (re-)run start
     if ($('sitemap')) $('sitemap').classList.remove('cam-hold');
+    var presentationStatus = $('stage-presentation-status'); if (presentationStatus) { presentationStatus.textContent = ''; presentationStatus.removeAttribute('data-edge'); }
+    var relationships = $('stage-relationships'); if (relationships) { relationships.innerHTML = ''; relationships._sig = ''; relationships.setAttribute('aria-label', ''); }
     stageTrail.length = 0; stageChain = []; stageGhost = [{}, {}, {}];
     // dashboard readouts carry tween state on the DOM node — a fresh run must not
     // tween from (or float a delta against) the previous run's final value
@@ -2741,9 +3197,11 @@
       var el = document.createElement('span'); el.className = 'mote ' + (late ? 'red' : 'gold');
       box.appendChild(el);
       setXY(el, A.x * anim.w, A.y * anim.h);
+      var fromPid = (b.from.assignedIds || [])[0] || (plan.roles[b.h.fromRoleId] && plan.roles[b.h.fromRoleId].holder) || null;
+      var toPid = (b.to.assignedIds || [])[0] || (plan.roles[b.h.toRoleId] && plan.roles[b.h.toRoleId].holder) || null;
       anim.motes.push({ el: el, role: b.h.toRoleId, card: b.h.cardId, send: b.send,
         ax: A.x, ay: A.y, bx: B.x, by: B.y, late: late,
-        same: A.id === B.id, fromSt: b.from.station, toSt: b.to.station, state: 0, t0: 0,
+        same: A.id === B.id, fromSt: b.from.station, toSt: b.to.station, fromPid: fromPid, toPid: toPid, state: 0, t0: 0,
         dur: 650 + Math.min(900, Math.max(0, b.arr - b.send) * 55) });
     });
   }
@@ -2762,9 +3220,9 @@
     setTimeout(function () { n.classList.remove(cls); }, 560);
   }
   // called once per engine tick: launch motes whose send-minute the clock just crossed
-  function scheduleMotes(s) {
+  function scheduleMotes(s, suppressPresentation) {
     if (s.mode !== 'minute') return;
-    var now = s.clockMin;
+    var now = s.clockMin, presented = !!suppressPresentation;
     for (var i = 0; i < anim.motes.length; i++) {
       var m = anim.motes[i];
       if (m.state !== 0 || now < m.send) continue;
@@ -2772,6 +3230,7 @@
       m.state = 1; m.t0 = 0;
       if (m.same || RM.matches) { m.state = 2; pingStation(m.toSt, m.late); }
       else m.el.classList.add('on');
+      if (!presented) { presentMoteHandoff(m, s, 'handoff'); presented = true; }
     }
   }
   function updateMotes(ts) {
@@ -2808,12 +3267,13 @@
   // module scope; defining it inside bind() makes transition callbacks unable to
   // see it after the first segment completes.
   function topModal() {
-    var order = ['prediction-modal', 'rules-modal', 'pick-modal', 'inspect-modal', 'arrow-modal', 'detail-modal'];
+    var order = ['campaign-incident-modal', 'prediction-modal', 'rules-modal', 'pick-modal', 'inspect-modal', 'arrow-modal', 'detail-modal'];
     for (var i = 0; i < order.length; i++) if ($(order[i]).classList.contains('show')) return order[i];
     return null;
   }
-  function makeMinuteSim(seg, seed) {
-    return P.createSim(seededCfg(seed), seg, { animate: true });
+  function makeMinuteSim(seg, seed, frozenCfg) {
+    var cfg = frozenCfg ? campaignCopy(frozenCfg) : seededCfg(seed); cfg.seed = seed || cfg.seed || 1;
+    return P.createSim(cfg, seg, { animate: true });
   }
   function wholeSegmentResult(s) {
     var plan = s.plan, seg = s.segment, readiness = P.dayReadiness(plan, seg), sched = P.daySchedule(plan, seg);
@@ -2829,7 +3289,7 @@
     if (!wholeRun || index < 0 || index >= wholeRun.segments.length) return false;
     wholeRun.index = index;
     var seg = wholeRun.segments[index];
-    sim = makeMinuteSim(seg, wholeRun.seed + index);
+    sim = makeMinuteSim(seg, wholeRun.seed + index, wholeRun.runCfg);
     stopAnim(); closePawnCard();
     if (topModal() && $('btn-pause')) { try { $('btn-pause').focus({ preventScroll: true }); } catch (e) { $('btn-pause').focus(); } }
     closeModals();
@@ -2854,18 +3314,30 @@
 
   function launch() {
     if (learningNeedsPrediction() && !predictionBypass) { openPrediction(); return; }
+    if (campaignIsActive() && !campaignPendingLaunch) campaignPendingLaunch = prepareCampaignLaunch();
+    if (campaignShouldRevealIncident(campaignPendingLaunch)) { openCampaignIncident(); return; }
+    var preparedCampaignRun = campaignPendingLaunch;
     predictionBypass = false;
     stopAnim(); clearFinishTimer();                       // never stack a second rAF loop or a stale report reveal
     // §21.8b: every authored day now ANIMATES on the minute clock — the coarse days (arrival/ops/return)
     // opt into the minute-sim via {animate:true} so people walk + comment + PAUSE-on-stall like the fishday.
     // The run ends in the whole-trip ledger report (finish()→renderDayReport); the plan gaps that caused
     // the pauses are exactly what mark the day slice down. Whole-trip ('all') is not authorable → classic clock.
-    var seed = (Math.floor(Math.random() * 1e9) >>> 0) || 1;
-    activeLearningRun = newLearningRun(seed, daySel); pendingPrediction = null;
-    wholeRun = daySel === 'all' ? { segments: WHOLE_SEGMENTS.slice(), index: 0, seed: seed, results: [], sims: {}, clean: true } : null;
-    sim = wholeRun ? makeMinuteSim(wholeRun.segments[0], seed) : makeMinuteSim(daySel, seed);
+    var seed = preparedCampaignRun ? preparedCampaignRun.seed : ((Math.floor(Math.random() * 1e9) >>> 0) || 1);
+    var launchSegment = preparedCampaignRun ? preparedCampaignRun.segment : daySel;
+    var frozenRunCfg = preparedCampaignRun ? campaignCopy(preparedCampaignRun.runCfg) : null;
+    if (preparedCampaignRun) {
+      campaignState.attempts[preparedCampaignRun.episodeId] = preparedCampaignRun.attempt;
+      campaignState.guidanceStep = 'rehearse'; persistCampaignState();
+      campaignActiveRun = preparedCampaignRun; campaignPendingLaunch = null; campaignIncidentAcknowledged = false;
+    }
+    activeLearningRun = newLearningRun(seed, launchSegment); pendingPrediction = null;
+    if (campaignActiveRun) campaignActiveRun.learningRun = campaignCopy(activeLearningRun);
+    wholeRun = launchSegment === 'all' ? { segments: WHOLE_SEGMENTS.slice(), index: 0, seed: seed, results: [], sims: {}, clean: true, runCfg: frozenRunCfg } : null;
+    sim = wholeRun ? makeMinuteSim(wholeRun.segments[0], seed, frozenRunCfg) : makeMinuteSim(launchSegment, seed, frozenRunCfg);
     if (window.PRS_SOUND) window.PRS_SOUND.ambient(sim.segment, sim.clockMin, mapProfileFor(sim).id);   // ambient bed start, run-enter
     paused = false; livePausedForFix = false; document.body.classList.add('running');
+    setDashboardOpen(defaultDashboardOpenForViewport(), false);
     closeModals();
     $('live-dock').classList.add('hidden');               // a morning run never shows the live dock
     // Authored runs default to event beats: engine ticks remain deterministic,
@@ -2876,6 +3348,7 @@
     updatePacingControls();
     updateSpeedControls();
     enterScreen('run');
+    if (preparedCampaignRun) setCampaignAuthoringInert(true);
     $('figs').innerHTML = ''; $('banner').classList.remove('show');
     var ff = $('fanfare'); if (ff) ff.classList.remove('show');
     animReset(); updateRunButtons(); buildSitemap();
@@ -2895,7 +3368,9 @@
     if (sim.paused) return;                       // checkpoint: wait for Resume
     advanceAuthoredClock(sim); renderSim(sim); if (RM.matches) drawRunOnce();
     if (sim.paused && sim.checkpoint) {
-      if (window.PRS_SOUND) window.PRS_SOUND.cue('freeze');   // coarse/fishday-morning freeze point (sound.js §W3)
+      // Causal stall sound is emitted by presentCausalBeat at the state edge.
+      // Retain the legacy cue only when the structured beat API is absent.
+      if (window.PRS_SOUND && typeof PRS_SOUND.beat !== 'function') window.PRS_SOUND.cue('freeze');
       if (sim.checkpoint.id === 'cp_stall') camPunchStall(sim);   // §3: punch in on the coarse-day stall
       openInspector();
     }
@@ -3067,6 +3542,7 @@
           return hp ? (T()[STATE_KEY[hp.state]] || hp.state) : ''; })(),
         fig: anim.fig, guest: anim.guest, boat: anim.boat, wakes: anim.wakes,
         motes: anim.motes, cascade: anim.cascade,
+        causalBeats: anim.causalBeats, relationships: anim.relationships, routeTransition: anim.routeTransition,
         ghost: stageGhost, trail: stageTrail, chain: stageChain, hotPts: anim.hotPts,
         frozen: !!(paused || livePausedForFix || (sim && sim.paused))
       };
@@ -3188,16 +3664,18 @@
     // Return changes world twice (island -> homebound deck -> Tokyo). Rebuild
     // only the art-less hotspot shadow when the profile id changes; actors keep
     // their interpolated coordinates through buildSitemap(true).
-    var nextScene = mapProfileFor(s);
-    var sceneChanged = !!(anim.sceneKey && anim.sceneKey !== nextScene.id);
+    var nextScene = mapProfileFor(s), priorSceneId = anim.sceneKey;
+    var sceneChanged = !!(priorSceneId && priorSceneId !== nextScene.id);
     if (sceneChanged) { buildSitemap(true); remapMotes(s); }
     anim.sceneKey = nextScene.id;
     if (sceneChanged) {
       updateRunButtons();
+      presentRouteTransition(priorSceneId, nextScene.id, 'route:' + s.segment + ':' + priorSceneId + '>' + nextScene.id + ':' + Math.floor(s.clockMin || 0));
     }
     if (window.PRS_SOUND) window.PRS_SOUND.ambient(s.segment, s.clockMin, nextScene.id);
     var pos = figTargets(s);
     anim.hotPts = [];
+    var participantBeat = null;
     s.participants.forEach(function (p) {
       var f = anim.fig[p.id], target = pos[p.id];
       if (!f) {
@@ -3225,12 +3703,15 @@
                  (f.el.className.indexOf('spot') >= 0 ? ' spot' : '');
       f.el.className = 'astro s-' + p.state + keep;
       f.bub.textContent = BUB[p.state] || '';
+      var priorState = f.st;
       if (f.st !== p.state) {                    // state change: pop the bubble chip once
         f.st = p.state; f.el._st = p.state; f.bubT0 = anim.last || 0;
         if (!RM.matches && f.bub.textContent) { f.bub.classList.remove('pop'); void f.bub.offsetWidth; f.bub.classList.add('pop'); }
       }
+      if (!participantBeat) participantBeat = participantPresentationSpec(s, p, priorState);
       if (STALL_STATES[p.state]) { var st = mapStationFor(p.station, s); anim.hotPts.push({ x: st.x, y: st.y }); }
     });
+    if (participantBeat) presentCausalBeat(participantBeat);
     // stations: aggregate colocated logical stations into each visible scene
     // anchor (command/finance/clinic are intentionally hidden at the same x/y).
     var terr = P.stationReadiness(s);
@@ -3258,7 +3739,8 @@
       ? (s.segment === 'fishday' ? T().fdDayLine(hhmm(s.clockMin)) : dayLabel(s.segment) + ' · ' + simClockText(s))
       : T().dayLine(Math.min(P.DAYS, Math.ceil(s.day)), P.DAYS) + (s.phaseLabel ? ' · ' + nm(s.phaseLabel) : '');
     updateSky(s);
-    scheduleMotes(s);
+    scheduleMotes(s, !!participantBeat);
+    updateStageRelationships(s);
     updatePressure(s);
     renderDashboard(s);
     if (USE_CANVAS) updateStageRoster(s);
@@ -3381,6 +3863,21 @@
       '<span class="lg">🔁 ' + t.legRework + '</span>' +
       '<span class="lg"><span class="lg-dot done">✓</span>' + t.legResolved + '</span>';
   }
+  function setDashboardOpen(open, shouldRefit) {
+    dashboardOpen = !!open;
+    var wrap = $('runwrap'), panel = $('dashboard'), button = $('btn-drawer');
+    if (wrap) wrap.classList.toggle('drawer-closed', !dashboardOpen);
+    if (button) {
+      button.textContent = dashboardOpen ? T().drawerHide : T().drawerShow;
+      button.setAttribute('aria-label', T().drawerAria); button.setAttribute('aria-controls', 'dashboard');
+      button.setAttribute('aria-expanded', dashboardOpen ? 'true' : 'false');
+    }
+    if (panel) {
+      panel.setAttribute('aria-hidden', dashboardOpen ? 'false' : 'true');
+      if (dashboardOpen) panel.removeAttribute('inert'); else panel.setAttribute('inert', '');
+    }
+    if (shouldRefit && typeof refitStage === 'function') refitStage();
+  }
   function updateRunButtons() {
     $('btn-pause').textContent = paused ? T().resumeBtn : T().pauseBtn;
     var gb = $('btn-guests');
@@ -3393,11 +3890,7 @@
       gb.setAttribute('aria-controls', 'stage ambient');
       gb.disabled = !canShowGuests || !!guestFlags.guestsRequired;
     }
-    var db = $('btn-drawer');
-    if (db) {
-      db.textContent = dashboardOpen ? T().drawerHide : T().drawerShow; db.setAttribute('aria-label', T().drawerAria);
-      db.setAttribute('aria-expanded', dashboardOpen ? 'true' : 'false'); db.setAttribute('aria-controls', 'dashboard');
-    }
+    setDashboardOpen(dashboardOpen, false);
     updateSoundButton();
   }
   // header 🔊 toggle label — lives outside #run (works on every screen), so it gets its own
@@ -3714,6 +4207,7 @@
       lastResult = { trip: P.score(sim), day: (sim.segment !== 'all' ? P.daySummary(sim) : null), segment: sim.segment,
         executionIncomplete: executionIncomplete, execution: execution };
     }
+    if (campaignActiveRun) lastResult._campaignRun = campaignActiveRun;
     var simAt = sim, wholeAt = wholeRun;
     scheduleUncoveredTransition(function () {
       closePawnCard();
@@ -4043,7 +4537,231 @@
     return rows[0] + '<details class="fix-more"><summary>' + T().fdMoreIssues(rows.length - 1) + '</summary><div class="fix-more-body">' + rows.slice(1).join('') + '</div></details>';
   }
 
+  function ensureCampaignLearningSnapshot(res) {
+    var run = res && res._campaignRun; if (!run || res._learningSnapshot) return;
+    var normalPlan = P.mergePlan(campaignCopy(run.planCfg));
+    res._learningSnapshot = { plan: campaignCopy(run.planSnapshot), trip: campaignCopy(run.masterySnapshot),
+      readiness: executionReadiness(normalPlan), run: run.learningRun || newLearningRun(run.seed, run.segment) };
+  }
+  function campaignChapterEvidence(plan, trip, segment, res) {
+    var bucket = trip.byBucket[segment] || { earned: 0, maxPts: 0 }, readiness = [], unresolved = 0;
+    try { readiness = P.dayReadiness(plan, segment) || []; unresolved = P.daySchedule(plan, segment).unresolved || 0; } catch (e) { readiness = [{ type: 'UNAVAILABLE' }]; }
+    var executed = campaignExecutionComplete(res);
+    return { earned: bucket.earned, maxPts: bucket.maxPts, score: bucket.maxPts ? Math.round(bucket.earned * 100 / bucket.maxPts) : 0,
+      mastered: executed && readiness.length === 0 && unresolved === 0 && bucket.earned === bucket.maxPts,
+      evidence: readiness.slice(0, 4).map(function (h) { return String(h.type || 'planning-gap').toLowerCase().replace(/_/g, '-'); }) };
+  }
+  function campaignExecutionComplete(res) {
+    var execution = res && res.execution;
+    if (!execution || res.executionIncomplete) return false;
+    var done = Number(execution.tasksDone), total = Number(execution.tasksTotal);
+    return isFinite(done) && isFinite(total) && done >= 0 && total >= 0 && (total === 0 || done === total);
+  }
+  function campaignRunEfficiency(run, res) {
+    if (!run || !campaignExecutionComplete(res)) return null;
+    try {
+      var plan = P.mergePlan(campaignCopy(run.planCfg));
+      var day = P.daySchedule(plan, run.segment);
+      return day && typeof day.efficiency === 'number' && isFinite(day.efficiency) ? clamp(Math.round(day.efficiency), 0, 100) : null;
+    } catch (e) { return null; }
+  }
+  function commitCampaignTransition(res) {
+    if (!res || !res._campaignRun) return null;
+    if (res._campaignTransition) return res._campaignTransition;
+    var run = res._campaignRun, already = campaignState.provenance.filter(function (p) { return p.transitionId === run.transitionId; })[0];
+    if (already) {
+      var stored = campaignState.bestResults[run.episodeId] || {}, restoredSuccess = already.success === true;
+      var restoredBefore = campaignCopy(run.runState || {});
+      var restoredAfter = restoredSuccess ? campaignCopy(campaignRunState || restoredBefore) : campaignCopy(restoredBefore);
+      if (already.debtBefore != null) restoredBefore.operationalDebt = already.debtBefore;
+      if (already.debtAfter != null) restoredAfter.operationalDebt = already.debtAfter;
+      if (already.interventionsBefore != null) restoredBefore.interventionTokens = already.interventionsBefore;
+      if (already.interventionsAfter != null) restoredAfter.interventionTokens = already.interventionsAfter;
+      if (already.guestWaitBefore != null) restoredBefore.guestWait = already.guestWaitBefore;
+      if (already.guestWaitAfter != null) restoredAfter.guestWait = already.guestWaitAfter;
+      var restoredDebtBefore = Number(restoredBefore.operationalDebt) || 0, restoredDebtAfter = Number(restoredAfter.operationalDebt) || 0;
+      var restoredWithDebt = already.recoveredWithDebt === true || (restoredSuccess && run.strategyId === 'intervention-token');
+      var restoredBadge = restoredSuccess ? (already.badgeAwarded || stored.badgeAwarded || null) : null;
+      if (!restoredBadge && restoredSuccess && !restoredWithDebt) {
+        if (run.episodeId === 'comms-outage') restoredBadge = 'communications-resilient';
+        if (run.episodeId === 'principal-unavailable') restoredBadge = 'delegation-resilient';
+      }
+      res._campaignTransition = Object.assign({ transitionId: run.transitionId, episodeId: run.episodeId, attempt: run.attempt,
+        episodeIndex: run.episodeIndex, at: already.at, score: run.masterySnapshot && run.masterySnapshot.total || 0,
+        strategyId: run.strategyId, evidence: [], success: restoredSuccess }, stored);
+      res._campaignTransition.success = restoredSuccess; res._campaignTransition.badgeAwarded = restoredBadge;
+      res._campaignTransition.score = run.masterySnapshot && run.masterySnapshot.total || res._campaignTransition.score || 0;
+      res._campaignTransition.strategyId = run.strategyId;
+      res._campaignTransition.executionComplete = already.executionComplete == null ? campaignExecutionComplete(res) : already.executionComplete;
+      res._campaignTransition.efficiency = already.efficiency == null ? campaignRunEfficiency(run, res) : already.efficiency;
+      res._campaignTransition.recoveredWithDebt = restoredWithDebt;
+      res._campaignTransition.status = already.status || stored.status || (restoredSuccess ? (restoredWithDebt ? 'recovered-with-debt' : (run.episodeId === 'normal' ? 'chapter-mastered' : 'resilient')) : 'blocked');
+      res._campaignTransition.reason = already.reason || '';
+      res._campaignTransition.runStateBefore = restoredBefore; res._campaignTransition.runStateAfter = restoredAfter;
+      res._campaignTransition.debtBefore = restoredDebtBefore; res._campaignTransition.debtAfter = restoredDebtAfter;
+      res._campaignTransition.debtDelta = restoredDebtAfter - restoredDebtBefore;
+      res._campaignTransition.appliedDelta = { operationalDebt: restoredDebtAfter - restoredDebtBefore,
+        interventionTokens: (Number(restoredAfter.interventionTokens) || 0) - (Number(restoredBefore.interventionTokens) || 0),
+        guestWait: (Number(restoredAfter.guestWait) || 0) - (Number(restoredBefore.guestWait) || 0) };
+      return res._campaignTransition;
+    }
+    var normalPlan = P.mergePlan(campaignCopy(run.planCfg)), mastery = campaignCopy(run.masterySnapshot);
+    var chapter = campaignChapterEvidence(normalPlan, mastery, run.segment, res), success = false, evidence = chapter.evidence.slice();
+    var badge = null, scenarioResult = null, executionComplete = campaignExecutionComplete(res);
+    // Run 1 is a chapter lesson, not a whole-plan exam. `evaluateScenario(normal)`
+    // requires 100/100 and would incorrectly block a mastered Load & Board run.
+    if (run.episodeId === 'normal') success = chapter.mastered;
+    else if (executionComplete && typeof P.evaluateScenario === 'function') {
+      try { scenarioResult = P.evaluateScenario(normalPlan, run.episodeId, run.strategyId, campaignCopy(run.runState), run.seed); } catch (e) { scenarioResult = null; }
+      success = !!(scenarioResult && scenarioResult.success);
+      if (scenarioResult && Array.isArray(scenarioResult.evidence)) evidence = scenarioResult.evidence.slice(0, 5);
+      if (success) badge = scenarioResult.badgeAwarded || null;
+    }
+    if (!executionComplete) evidence = ['execution-incomplete'].concat(evidence).slice(0, 5);
+    var beforeState = campaignCopy((scenarioResult && scenarioResult.runStateBefore) || run.runState || {});
+    var afterState = campaignCopy((scenarioResult && scenarioResult.runStateAfter) || beforeState);
+    var appliedDelta = campaignCopy((scenarioResult && scenarioResult.appliedDelta) || {});
+    var debtBefore = Number(beforeState.operationalDebt) || 0, debtAfter = Number(afterState.operationalDebt) || 0;
+    var resultReason = scenarioResult ? scenarioResult.reason : (!executionComplete ? 'execution-incomplete' : (success ? 'chapter-mastered' : 'planning-conditions-not-met'));
+    var result = { transitionId: run.transitionId, episodeId: run.episodeId, episodeIndex: run.episodeIndex,
+      at: Date.now(), attempt: run.attempt, score: mastery.total, success: success, strategyId: run.strategyId,
+      chapterEarned: chapter.earned, chapterMax: chapter.maxPts, planFingerprint: run.planFingerprint,
+      evidence: evidence, badgeAwarded: badge, executionComplete: executionComplete, efficiency: campaignRunEfficiency(run, res),
+      status: scenarioResult ? scenarioResult.status : (success ? 'chapter-mastered' : 'blocked'),
+      recoveredWithDebt: !!(scenarioResult && scenarioResult.recoveredWithDebt), runStateBefore: beforeState, runStateAfter: afterState,
+      appliedDelta: appliedDelta, debtBefore: debtBefore, debtAfter: debtAfter, debtDelta: debtAfter - debtBefore, reason: resultReason };
+    var priorChapter = campaignState.chapterProgress[run.segment];
+    if (priorChapter) {
+      priorChapter.bestResult = priorChapter.bestResult == null ? chapter.score : Math.max(priorChapter.bestResult, chapter.score);
+      if (chapter.mastered) {
+        priorChapter.status = 'mastered';
+        var ci = CAMPAIGN_CHAPTERS.indexOf(run.segment); if (ci >= 0 && ci + 1 < CAMPAIGN_CHAPTERS.length && campaignState.chapterProgress[CAMPAIGN_CHAPTERS[ci + 1]].status === 'locked') {
+          campaignState.chapterProgress[CAMPAIGN_CHAPTERS[ci + 1]].status = 'available';
+        }
+      }
+    }
+    var prior = campaignState.bestResults[run.episodeId];
+    if (!prior || (success && !prior.success) || (success === prior.success && result.score >= prior.score)) {
+      campaignState.bestResults[run.episodeId] = sanitizeCampaignResult(result);
+    }
+    if (campaignState.discoveredStrategies.indexOf(run.strategyId) < 0) campaignState.discoveredStrategies.push(run.strategyId);
+    // A failed strategy carries no cost, badge or episode advance. Engine
+    // recovery/scenario reducers only update the separate RunState after a
+    // successful, evidence-backed response; planCfg is never assigned here.
+    if (success && scenarioResult && scenarioResult.runStateAfter) {
+      var migrated = typeof P.migrateRunState === 'function' ? P.migrateRunState(scenarioResult.runStateAfter) : scenarioResult.runStateAfter;
+      if (migrated) campaignRunState = campaignCopy(migrated);
+    }
+    if (success) delete campaignRetrySnapshots[run.episodeId];
+    else campaignRetrySnapshots[run.episodeId] = { seed: run.seed, runState: campaignCopy(run.runState) };
+    if (success && badge && campaignState.badges.indexOf(badge) < 0) campaignState.badges.push(badge);
+    if (success && run.episodeIndex < CAMPAIGN_EPISODES.length - 1) {
+      campaignState.currentEpisode = run.episodeIndex + 1; campaignState.guidanceStep = 'observe';
+    } else campaignState.guidanceStep = success ? 'rehearse' : 'edit';
+    campaignState.provenance.unshift({ transitionId: run.transitionId, episodeId: run.episodeId, at: result.at,
+      attempt: run.attempt, seed: run.seed, success: success, planFingerprint: run.planFingerprint,
+      status: result.status, reason: result.reason, recoveredWithDebt: result.recoveredWithDebt, badgeAwarded: result.badgeAwarded,
+      executionComplete: result.executionComplete, efficiency: result.efficiency,
+      debtBefore: debtBefore, debtAfter: debtAfter,
+      interventionsBefore: Number(beforeState.interventionTokens) || 0, interventionsAfter: Number(afterState.interventionTokens) || 0,
+      guestWaitBefore: Number(beforeState.guestWait) || 0, guestWaitAfter: Number(afterState.guestWait) || 0 });
+    campaignState.provenance = campaignState.provenance.slice(0, 10);
+    // The transition id is the idempotency key. Persist the new RunState first;
+    // replaying this commit cannot apply its delta again once provenance lands.
+    persistCampaignRunState(); persistCampaignState();
+    res._campaignTransition = result;
+    return result;
+  }
+  function campaignEvidenceText(items) {
+    return (items || []).slice(0, 5).map(function (item) { return String(item).replace(/-/g, ' '); }).join(' · ');
+  }
+  function campaignNamedPerson(plan, pid, fallback) {
+    var person = plan && Array.isArray(plan.participants) ? byId(plan.participants, pid) : null;
+    return person ? nm(person.name) : fallback;
+  }
+  function campaignRolePerson(plan, roleId, fallback) {
+    var role = plan && plan.roles && plan.roles[roleId];
+    return campaignNamedPerson(plan, role && role.holder, fallback);
+  }
+  // Pure report view-model: it names the human who experienced the plan and
+  // reads only the frozen outcome/run/plan supplied by the completed rehearsal.
+  function campaignHumanNarrative(outcome, run, plan, strings) {
+    strings = strings || T(); plan = plan || {}; run = run || {};
+    var blockedByExecution = outcome && outcome.executionComplete === false;
+    if (outcome.episodeId === 'normal') {
+      var andrew = campaignNamedPerson(plan, 'p07', 'Andrew');
+      if (blockedByExecution) return { title: strings.campaignExecutionBlockedTitle(andrew),
+        summary: strings.campaignExecutionBlockedBody(andrew), evidence: strings.campaignExecutionBlockedEvidence };
+      return { title: outcome.success ? strings.campaignNormalSuccessTitle(andrew) : strings.campaignNormalBlockedTitle(andrew),
+        summary: outcome.success ? strings.campaignNormalSuccessBody(andrew) : strings.campaignNormalBlockedBody(andrew),
+        evidence: outcome.success ? strings.campaignNormalSuccessEvidence : strings.campaignNormalBlockedEvidence };
+    }
+    if (outcome.episodeId === 'comms-outage') {
+      var akiyama = campaignNamedPerson(plan, 'p09', L === 'ja' ? '秋山' : 'Akiyama');
+      if (blockedByExecution) return { title: strings.campaignExecutionBlockedTitle(akiyama),
+        summary: strings.campaignExecutionBlockedBody(akiyama), evidence: strings.campaignExecutionBlockedEvidence };
+      return { title: outcome.success ? strings.campaignCommsSuccessTitle(akiyama) : strings.campaignCommsBlockedTitle(akiyama),
+        summary: outcome.success ? strings.campaignCommsSuccessBody(akiyama) : strings.campaignCommsBlockedBody(akiyama),
+        evidence: outcome.success ? strings.campaignCommsSuccessEvidence : strings.campaignCommsBlockedEvidence };
+    }
+    var owner = plan.roles && plan.roles.owner, principal = campaignNamedPerson(plan, owner && owner.holder, L === 'ja' ? '松本' : 'Matsumoto');
+    var actorId = run.strategyId === 'distributed-command' ? (plan.roles && plan.roles.siteLead && plan.roles.siteLead.holder) :
+      (run.strategyId === 'intervention-token' ? (plan.roles && plan.roles.pm && plan.roles.pm.holder) : (owner && owner.deputyId));
+    var actor = campaignNamedPerson(plan, actorId, campaignRolePerson(plan, 'pm', L === 'ja' ? '稲葉' : 'Inaba'));
+    if (blockedByExecution) return { title: strings.campaignPrincipalExecutionTitle(actor, principal),
+      summary: strings.campaignPrincipalExecutionBody(actor, principal), evidence: strings.campaignExecutionBlockedEvidence };
+    if (outcome.recoveredWithDebt) return { title: strings.campaignPrincipalDebtTitle(actor, principal),
+      summary: strings.campaignPrincipalDebtBody(actor), evidence: strings.campaignPrincipalDebtEvidence };
+    return { title: outcome.success ? strings.campaignPrincipalSuccessTitle(actor, principal) : strings.campaignPrincipalBlockedTitle(actor, principal),
+      summary: outcome.success ? strings.campaignPrincipalSuccessBody(actor, principal) : strings.campaignPrincipalBlockedBody(actor, principal),
+      evidence: outcome.success ? strings.campaignPrincipalSuccessEvidence : strings.campaignPrincipalBlockedEvidence };
+  }
+  function campaignResilienceText(outcome, strings) {
+    if (outcome.recoveredWithDebt || outcome.status === 'recovered-with-debt') return strings.campaignResilienceRecoveredWithDebt;
+    if (outcome.badgeAwarded) return strings.campaignBadgeEarned(campaignBadgeLabel(outcome.badgeAwarded));
+    if (!outcome.success) return strings.campaignResilienceBlocked;
+    return outcome.episodeId === 'normal' ? strings.campaignResilienceChapter : strings.campaignBadgePending;
+  }
+  function renderCampaignReport(res) {
+    var card = $('campaign-report-card'); if (!card) return;
+    var outcome = commitCampaignTransition(res); card.classList.toggle('hidden', !outcome); if (!outcome) return;
+    var t = T(), ep = CAMPAIGN_EPISODES[outcome.episodeIndex] || campaignEpisode(), run = res._campaignRun || {};
+    var reportPlan = run.planCfg ? P.mergePlan(campaignCopy(run.planCfg)) : currentPlan();
+    var narrative = campaignHumanNarrative(outcome, run, reportPlan, t);
+    $('campaign-report-kicker').textContent = t.campaignReportKicker(outcome.episodeIndex + 1, CAMPAIGN_EPISODES.length) + ' · ' + campaignEpisodeLabel(ep) + ' · ' + t.campaignAttemptCount(outcome.attempt);
+    $('campaign-report-title').textContent = narrative.title;
+    $('campaign-report-summary').textContent = narrative.summary;
+    var efficiencyText = outcome.efficiency == null ? t.campaignEfficiencyUnavailable : outcome.efficiency + '%';
+    var resilienceText = campaignResilienceText(outcome, t);
+    var debtText = t.campaignDebtMetric(outcome.debtAfter || 0, outcome.debtDelta || 0);
+    $('campaign-report-metrics').innerHTML = '<div><span>' + esc(t.campaignMasteryLabel) + '</span><strong>' + outcome.score + ' / 100</strong></div>' +
+      '<div><span>' + esc(t.campaignEfficiencyLabel) + '</span><strong>' + esc(efficiencyText) + '</strong></div>' +
+      '<div><span>' + esc(t.campaignResilienceLabel) + '</span><strong>' + esc(resilienceText) + '</strong></div>' +
+      '<div><span>' + esc(t.campaignOperationalDebtLabel) + '</span><strong>' + esc(debtText) + '</strong></div>';
+    $('campaign-report-evidence').innerHTML = narrative.evidence ? '<strong>' + esc(t.campaignEvidenceLabel) + ':</strong> ' + esc(narrative.evidence) : '';
+    var action = $('campaign-report-next'), finalEpisode = outcome.episodeIndex === CAMPAIGN_EPISODES.length - 1;
+    action.disabled = false; action.removeAttribute('aria-disabled');
+    action.dataset.campaignAction = outcome.success ? (finalEpisode ? 'replay' : 'next') : 'repair';
+    action.textContent = outcome.success ? (finalEpisode ? t.campaignReplay : t.campaignNextEpisode) : t.campaignRepairEpisode;
+  }
+  function campaignReportContinue() {
+    var button = $('campaign-report-next'), action = button && button.dataset.campaignAction; if (!action) return;
+    button.disabled = true; button.setAttribute('aria-disabled', 'true');
+    campaignPendingLaunch = null; campaignActiveRun = null; campaignIncidentAcknowledged = false;
+    if (action === 'replay') {
+      campaignState = freshCampaignState(); campaignState.journey = 'campaign'; campaignRunState = typeof P.createRunState === 'function' ? P.createRunState() : loadCampaignRunState();
+      campaignPlanCfg = null; persistCampaignRunState(); persistCampaignState(); learningLevel = 'practice'; daySel = 'load';
+    } else {
+      var ep = campaignEpisode(); learningLevel = ep.id === 'normal' ? 'practice' : 'challenge'; daySel = ep.segment;
+      if (action === 'repair') campaignState.guidanceStep = 'edit';
+      persistCampaignState();
+    }
+    try { localStorage.setItem(LEARNING_LEVEL_KEY, learningLevel); } catch (e) { }
+    toSetup(); collapsePlanningExtras(); renderLearningChrome(); paintSetup(); focusPlannerHome();
+  }
+
   function renderReport(res) {
+    ensureCampaignLearningSnapshot(res);
     resetReportDisclosures(res);
     faultTargets = {}; faultTargetSeq = 0;
     // the individuals table has no coarse-day analogue — hide its card for a coarse report, and
@@ -4189,6 +4907,7 @@
     renderLedger(trip, res.segment, reportPlan);
     bootReportStage(res, trip);
     renderLearningDebrief(res, reportPlan, trip);
+    renderCampaignReport(res);
   }
 
   // §20 Phase 5: coarse-day (arrival/ops/return) report — scored straight off the authored
@@ -4260,6 +4979,7 @@
     renderLedger(trip, seg, plan);
     bootReportStage(res, trip);   // §S3 report-on-stage (coarse animated day): same dusk harbor
     renderLearningDebrief(res, plan, trip);
+    renderCampaignReport(res);
   }
 
   // =========================================================================
@@ -4279,7 +4999,7 @@
   // the feature on their own until then).
   // =========================================================================
   var RSTG = { raf: null, sim: null, resultSim: null, resultSims: [], ctx: null, cv: null, host: null, w: 0, h: 0, sc: 1,
-    fig: {}, boat: null, hoverPid: null, last: 0, markers: [], seg: 'fishday', mapProfile: 'fishday', overview: false, stamp: null };
+    fig: {}, boat: null, hoverPid: null, last: 0, markers: [], seg: 'fishday', mapProfile: 'fishday', overview: false, stamp: null, relationships: null };
   var rsStampKey = null;   // grade|total|segment of the last stamped report — a language re-render never re-thocks
 
   function rsDims() {
@@ -4406,6 +5126,7 @@
       spotlightPid: null, tintMap: null, gapState: null,
       fig: RSTG.fig, guest: {}, boat: RSTG.boat, wakes: [],
       motes: [], cascade: { hops: [], has: false },
+      relationships: RSTG.relationships,
       ghost: [{}, {}, {}], trail: [], chain: [], hotPts: [], frozen: false,
       // S2 render contracts (spec §4): stage.js draws the dusk grade, the marker LIGHT
       // (numeric sev 0..1, amber→hanko) and the hanko stamp; the DOM side (below) owns
@@ -4482,6 +5203,9 @@
     }
     if (!RSTG.resultSim) RSTG.resultSim = RSTG.sim;   // completed run: report facts/inspection always read this object
     if (!RSTG.resultSims.length) RSTG.resultSims = [RSTG.resultSim];
+    // A whole-trip report is the one explicit Day-6 surface: show the named
+    // departing/arriving guest exchange without guessing Day 6 from `ops`.
+    RSTG.relationships = stageRelationshipsFor(RSTG.sim.plan, RSTG.seg === 'all' ? 6 : relationshipTripDay(RSTG.sim));
     cv.hidden = false;
     RSTG.ctx = tryInitStage(cv, { w: d.w, h: d.h });
     if (!RSTG.ctx) cv.hidden = true;
@@ -4550,7 +5274,7 @@
     if (RSTG.raf) cancelAnimationFrame(RSTG.raf);
     RSTG.raf = null; RSTG.sim = null; RSTG.resultSim = null; RSTG.resultSims = []; RSTG.ctx = null; RSTG.cv = null; RSTG.host = null;
     RSTG.fig = {}; RSTG.boat = null; RSTG.hoverPid = null; RSTG.last = 0;
-    RSTG.markers = []; RSTG.mapProfile = 'fishday'; RSTG.overview = false; RSTG.stamp = null;
+    RSTG.markers = []; RSTG.mapProfile = 'fishday'; RSTG.overview = false; RSTG.stamp = null; RSTG.relationships = null;
     var mk = $('rs-markers'); if (mk) mk.innerHTML = '';
     var ro = $('rs-roster'); if (ro) ro.innerHTML = '';
     var w = $('report-stage-wrap'); if (w) w.classList.remove('pawn-hover');
@@ -4621,7 +5345,7 @@
     el.innerHTML = '<h2>' + t.rosterHeading + '</h2><ul>' + facts.participants.map(function (p) {
       return '<li><span class="sr-pawn-state">' + P.role(p.roleId).icon + ' ' + nm(p.name) + ' — ' +
         (t[STATE_KEY[p.state]] || p.state) + '</span></li>';
-    }).join('') + '</ul>';
+    }).join('') + '</ul>' + stageRelationshipMirrorHTML(RSTG.relationships, facts.plan);
   }
   // ---- marker click-through: reuse the rail jump machinery (frame → receipt row; day → drawer socket) ----
   function reportMarkerJump(idx) {
@@ -4971,6 +5695,8 @@
     });
     $('cast-open').addEventListener('click', function () { showIntro(false, true); });   // reopen directly on the lazy cast catalog
     $('intro-start').addEventListener('click', startFromIntro);
+    $('intro-campaign').addEventListener('click', function () { campaignFromIntro('campaign'); });
+    $('intro-resilience').addEventListener('click', function () { campaignFromIntro('resilience'); });
     var introPlan = $('intro-plan');
     if (introPlan) introPlan.addEventListener('click', planFromIntro);
     var introCastWrap = $('intro-cast-wrap') || document.querySelector('.intro-cast-details');
@@ -4980,6 +5706,13 @@
     var vigSkipBtn = $('vig-skip'); if (vigSkipBtn) vigSkipBtn.addEventListener('click', vigSkip);
     var introHow = $('intro-how-btn');
     if (introHow) introHow.addEventListener('click', openRules);
+    $('campaign-next').addEventListener('click', advanceCampaignGuidance);
+    $('campaign-reset').addEventListener('click', resetCampaignProgress);
+    $('campaign-strategy-options').addEventListener('change', function (e) {
+      var input = e.target.closest('input[name="campaign-strategy"]'); if (!input || !campaignIsActive()) return;
+      var ep = campaignEpisode(); if ((CAMPAIGN_EPISODE_STRATEGIES[ep.id] || []).indexOf(input.value) < 0) return;
+      campaignState.selectedStrategies[ep.id] = input.value; persistCampaignState(); renderCampaignBoard();
+    });
     $('rules-open').addEventListener('click', openRules);
     $('rules-close').addEventListener('click', function () { $('rules-modal').classList.remove('show'); modalClosed(); });
     $('rules-modal').addEventListener('click', function (e) { if (e.target === $('rules-modal')) { $('rules-modal').classList.remove('show'); modalClosed(); } });
@@ -4988,6 +5721,7 @@
     $('prediction-modal').addEventListener('click', function (e) { if (e.target === $('prediction-modal')) closePrediction(true); });
     $('prediction-rationale').addEventListener('input', function () { $('prediction-error').classList.add('hidden'); });
     $('prediction-causes').addEventListener('change', function () { $('prediction-error').classList.add('hidden'); });
+    $('campaign-incident-run').addEventListener('click', acceptCampaignIncident);
 
     $('day-select').addEventListener('click', function (e) {
       var b = e.target.closest('.day-btn'); if (!b) return;
@@ -5229,10 +5963,7 @@
       if (RM.matches) drawRunOnce();
     });
     $('btn-drawer').addEventListener('click', function () {
-      dashboardOpen = !dashboardOpen;
-      $('runwrap').classList.toggle('drawer-closed', !dashboardOpen);
-      updateRunButtons();
-      refitStage();   // same resize path window-resize uses, so the stage re-fits the new (now full) width immediately
+      setDashboardOpen(!dashboardOpen, true); // same refit path as window resize; aria/inert stay in lockstep
     });
     $('btn-quit').addEventListener('click', function () {
       if (!sim || sim.finished) return;
@@ -5340,10 +6071,11 @@
     });
     // after a LIVE run's report, every action stays in the live experience
     $('btn-tweak').addEventListener('click', function () {
-      if (appMode === 'live') { if (enterMode('morning')) focusPlannerHome(); }
-      else toSetup();
+      if (appMode === 'live') continueFromGuided();
+      else if (enterMode('morning')) focusPlannerHome();
     });
     $('btn-again').addEventListener('click', function () { if (appMode === 'live') startLive(); else launch(); });
+    $('campaign-report-next').addEventListener('click', campaignReportContinue);
 
     document.querySelectorAll('.spd').forEach(function (b) { b.addEventListener('click', function () { speedMult = parseFloat(b.dataset.spd); updateSpeedControls(); restartTimer(); }); });
     document.querySelectorAll('.pace').forEach(function (b) { b.addEventListener('click', function () { setRunPacing(b.dataset.pace); }); });
@@ -5353,6 +6085,7 @@
     document.addEventListener('keydown', function (e) {
       var top = topModal();
       if (e.key === 'Escape') {
+        if (top === 'campaign-incident-modal') return; // a locked reveal has one explicit, focus-trapped continuation
         if (top === 'prediction-modal') closePrediction(true);
         else if (top === 'rules-modal') { $('rules-modal').classList.remove('show'); modalClosed(); }
         else if (top === 'pick-modal') closePicker();
@@ -5440,11 +6173,12 @@
   }
   function closeModals() {
     var active = document.activeElement;
-    var activeModal = active && active.closest ? active.closest('#detail-modal.show,#inspect-modal.show,#arrow-modal.show,#rules-modal.show,#pick-modal.show,#prediction-modal.show') : null;
+    var activeModal = active && active.closest ? active.closest('#detail-modal.show,#inspect-modal.show,#arrow-modal.show,#rules-modal.show,#pick-modal.show,#prediction-modal.show,#campaign-incident-modal.show') : null;
     var restore = null;
     if (lastFocusResolver) { try { restore = lastFocusResolver(); } catch (e) { restore = null; } }
     if (!restore && lastFocus && document.body.contains(lastFocus)) restore = lastFocus;
-    ['detail-modal', 'inspect-modal', 'arrow-modal', 'rules-modal', 'pick-modal', 'prediction-modal'].forEach(function (m) { var e = $(m); if (e) e.classList.remove('show'); });
+    ['detail-modal', 'inspect-modal', 'arrow-modal', 'rules-modal', 'pick-modal', 'prediction-modal', 'campaign-incident-modal'].forEach(function (m) { var e = $(m); if (e) e.classList.remove('show'); });
+    setCampaignAuthoringInert(false);
     closePawnCard(); clearDetailState(); lastFocus = null; lastFocusResolver = null; arrowReturnKey = null;
     if (activeModal) {
       if (!restore || restore.closest('.hidden')) restore = !$('run').classList.contains('hidden') ? $('btn-pause') : document.querySelector('.daytab.on') || $('launch');
@@ -5527,6 +6261,7 @@
     // The guided CTA always starts from the fully supported Learn rules. The
     // separate planner route preserves the learner's selected level.
     learningLevel = 'learn'; learningObserved = false; pendingPrediction = null; activeLearningRun = null;
+    campaignState.journey = 'guided'; campaignState.guidedComplete = false; persistCampaignState();
     try { localStorage.setItem(LEARNING_LEVEL_KEY, learningLevel); } catch (e) { }
     renderLearningChrome();
   }
@@ -5554,10 +6289,27 @@
     // the day rail, but the first workspace no longer dumps all chapters at once.
     var firstDay = learningLevel === 'challenge' ? 'fishday' : 'load';
     if (!enterMode('morning', learningLevel)) return;
+    campaignState.journey = 'expert'; persistCampaignState(); campaignPlanCfg = null;
     markIntroSeen(); daySel = firstDay;
     collapsePlanningExtras();
     paintSetup();
+    renderLearningChrome();
     focusPlannerHome();
+  }
+  function campaignFromIntro(journey) {
+    var level = journey === 'resilience' ? 'challenge' : 'practice';
+    // Enter/claim Morning before mutating any learner state. Cancelling the
+    // saved-plan ownership prompt therefore leaves the intro and campaign
+    // record byte-for-byte untouched.
+    if (!enterMode('morning', level)) return;
+    markIntroSeen(); learningLevel = level; learningObserved = false; pendingPrediction = null; activeLearningRun = null;
+    campaignState.journey = journey;
+    if (journey === 'resilience' && campaignState.currentEpisode < 1) campaignState.currentEpisode = 1;
+    campaignState.guidanceStep = 'observe';
+    daySel = campaignEpisode().segment; campaignIncidentAcknowledged = false; campaignPendingLaunch = null; campaignActiveRun = null;
+    campaignPlanCfg = campaignCopy(buildCfg());
+    try { localStorage.setItem(LEARNING_LEVEL_KEY, learningLevel); } catch (e) { }
+    persistCampaignState(); collapsePlanningExtras(); renderLearningChrome(); paintSetup(); focusPlannerHome();
   }
 
   // =========================================================================
@@ -6568,8 +7320,7 @@
     if (!activeLearningRun) activeLearningRun = newLearningRun(sim.cfg && sim.cfg.seed, 'fishday');
     if (window.PRS_SOUND) window.PRS_SOUND.ambient('fishday', sim.clockMin, mapProfileFor(sim).id);   // ambient bed start, run-enter
     paused = false; livePausedForFix = false; document.body.classList.add('running');
-    dashboardOpen = false;
-    $('runwrap').classList.add('drawer-closed');
+    setDashboardOpen(false, false);
     closeModals(); speedMult = 2; updateSpeedControls();
     enterScreen('run');
     $('figs').innerHTML = ''; $('banner').classList.remove('show'); $('live-dock').classList.remove('hidden');
@@ -6629,7 +7380,6 @@
   }
   function paintGapFocus(gap) {
     var plan = currentPlan(), to = byId(plan.tasks, gap.taskId); if (!to) return;
-    if (window.PRS_SOUND) window.PRS_SOUND.cue('freeze');   // Live freeze point (sound.js §W3)
     clearStationTints(); var stn = $('st-' + mapAnchorIdFor(to.station, sim)); if (stn) stn.classList.add('terr-red');
     stageTint = {}; stageTint[to.station] = 'red';                // canvas: the gap-focus station goes red
     clearGapFocus();
@@ -6641,6 +7391,10 @@
       f.st = st2; f.el._st = st2;
       stageSpotPid = pid; stageGapState = { pid: pid, state: st2 };  // canvas: gold spotlight + gap taxonomy on this figure
     }
+    var guidedItem = presentationItemName(plan, gap.cardId, nm(to.name));
+    presentCausalBeat({ edgeId: 'guided-stall:' + gap.taskId + ':' + gap.cardId, kind: 'stall', actorPid: pid,
+      fromStationId: to.station, toStationId: to.station, itemLabel: guidedItem,
+      announcement: T().stageBeatStall(presentationPersonName(plan, pid), guidedItem) });
     if (USE_CANVAS && sim) updateStageRoster(sim);               // refresh AT during the freeze (renderSim is paused)
   }
   function focusFirstLiveChannel() {
@@ -6856,16 +7610,21 @@
     buildMotes(sim);                              // re-plan the flying hand-offs against the patched schedule
     // deliveries that already flew before the freeze must not re-fly — but the one the
     // player just committed SHOULD, as visible feedback for the fix
+    var repairedMote = null;
     for (var mi = 0; mi < anim.motes.length; mi++) {
       var m = anim.motes[mi];
       if (m.send <= now) { m.state = 2; m.noPing = true; }
       if (m.role === to.ownerRoleId && m.card === g.cardId) {
+        repairedMote = repairedMote || m;
         m.noPing = false;                             // the just-committed delivery SHOULD ping/fly (visible fix feedback)
         if (m.same || RM.matches) { m.state = 2; pingStation(m.toSt, m.late); }
         else { m.state = 1; m.t0 = 0; m.el.classList.add('on'); }
       }
     }
+    var repairedPid = (to.assignedIds || [])[0]; if (repairedPid) anim.suppressRecovery[repairedPid] = 1;
+    if (repairedMote) presentMoteHandoff(repairedMote, sim, 'repair', 'guided-repair:' + liveState.fixes + ':' + g.taskId + ':' + g.cardId);
     renderSim(sim);
+    if (repairedPid) delete anim.suppressRecovery[repairedPid];
     if (RM.matches) drawRunOnce();
     // §5: stay frozen and step to the next card in this convergence cluster; only when the whole
     // cluster is committed does advanceCluster() release the freeze + camera and resume the run.
@@ -6936,8 +7695,27 @@
   }
 
   function continueFromGuided() {
-    if (!enterMode('morning')) return;
-    daySel = 'load';
+    // Guided deliberately stages every classic fix plus a canonical Load day
+    // so its one food-card lesson is winnable. Carrying those stores wholesale
+    // would pre-solve Campaign. Capture only non-null ic_food handoffs authored
+    // during Live, then let enterMode restore the learner's real Morning plan.
+    var before = morningSnap && morningSnap.dayOv && morningSnap.dayOv.fishday && morningSnap.dayOv.fishday.handoffs || {};
+    var foodRepair = {};
+    Object.keys(dayOv.fishday.handoffs || {}).forEach(function (id) {
+      var handoff = dayOv.fishday.handoffs[id];
+      if (!handoff || handoff.cardId !== 'ic_food') return;
+      if (!Object.prototype.hasOwnProperty.call(before, id) || JSON.stringify(before[id]) !== JSON.stringify(handoff)) foodRepair[id] = campaignCopy(handoff);
+    });
+    if (!enterMode('morning', 'practice')) return;
+    persistenceMuted = true;
+    Object.keys(foodRepair).forEach(function (id) { dayOv.fishday.handoffs[id] = campaignCopy(foodRepair[id]); });
+    daySel = 'load'; placingChip = null; lastFoodStrategyApplied = null;
+    persistenceMuted = false;
+    learningLevel = 'practice'; campaignState.journey = 'campaign'; campaignState.guidedComplete = true;
+    campaignState.currentEpisode = 0; campaignState.guidanceStep = 'observe'; campaignPlanCfg = campaignCopy(buildCfg());
+    campaignPendingLaunch = null; campaignActiveRun = null; campaignIncidentAcknowledged = false; daySel = 'load';
+    try { localStorage.setItem(LEARNING_LEVEL_KEY, learningLevel); } catch (e) { }
+    persistCampaignState(); queuePlanSave(); renderLearningChrome();
     collapsePlanningExtras();
     paintSetup();
     focusPlannerHome();

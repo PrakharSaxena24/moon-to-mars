@@ -100,19 +100,419 @@
   function L(en, jp) { return { en: en, jp: jp }; }
 
   // ---- deterministic teaching scenarios --------------------------------------
-  // Scenarios are constraints over the SAME authored plan, never alternate random
-  // timelines. `normal` is deliberately inert. During the communications-outage
-  // challenge, at-sea phone/chat/notice-board deliveries cannot arrive; marine radio
-  // remains available so the learner can repair the plan with a feasible fallback.
-  var SCENARIOS = {
-    normal: { id: 'normal', name: L('Normal rehearsal', '通常リハーサル'), unavailableAtSea: [] },
-    'comms-outage': { id: 'comms-outage', name: L('At-sea communications outage', '海上通信障害'), unavailableAtSea: ['phone', 'chat', 'board'] }
+  // A modifier is one small, declarative constraint. Curated scenarios compose
+  // those constraints; they never patch the authored plan or roll hidden dice.
+  // This keeps normal mastery frozen while giving the campaign a separate,
+  // explainable resilience result. The legacy `unavailableAtSea` field remains on
+  // every composed scenario because channelFeasibility has shipped that contract.
+  var SCENARIO_MODIFIERS = {
+    'at-sea-comms-loss': {
+      id: 'at-sea-comms-loss', unavailableAtSea: ['phone', 'chat', 'board'],
+      tags: ['communications', 'at-sea']
+    },
+    'storm-weather': {
+      id: 'storm-weather', weatherState: 'storm', fishingAllowed: false,
+      tags: ['weather', 'safety']
+    },
+    'principal-offline': {
+      id: 'principal-offline', unavailableRoleIds: ['owner'],
+      tags: ['delegation', 'authority']
+    },
+    'low-catch-yield': {
+      id: 'low-catch-yield', catchYieldPct: 35,
+      resourceDemand: { fallbackFood: 1 }, tags: ['supply', 'guest-care']
+    }
   };
-  function applyScenario(cfg, id) {
+  function scenarioAddUnique(out, values) {
+    values = values || [];
+    for (var i = 0; i < values.length; i++) if (out.indexOf(values[i]) < 0) out.push(values[i]);
+  }
+  // Public pure composer. Unknown modifier ids are retained as evidence but have
+  // no effect, so imported future content fails safely instead of inventing rules.
+  function composeScenario(modifierIds, meta) {
+    modifierIds = Array.isArray(modifierIds) ? modifierIds.slice() : [];
+    meta = meta || {};
+    var out = {
+      id: meta.id || 'custom', name: clone(meta.name || L('Custom rehearsal', 'カスタムリハーサル')),
+      modifierIds: [], unknownModifierIds: [], unavailableAtSea: [], unavailableRoleIds: [],
+      weatherState: 'normal', fishingAllowed: true, catchYieldPct: 100,
+      resourceDemand: {}, tags: [], revealPhase: meta.revealPhase || 'pre-run',
+      badgeId: meta.badgeId || null, strategyIds: (meta.strategyIds || []).slice()
+    };
+    for (var i = 0; i < modifierIds.length; i++) {
+      var id = modifierIds[i], m = SCENARIO_MODIFIERS[id];
+      if (out.modifierIds.indexOf(id) >= 0 || out.unknownModifierIds.indexOf(id) >= 0) continue;
+      if (!m) { out.unknownModifierIds.push(id); continue; }
+      out.modifierIds.push(id);
+      scenarioAddUnique(out.unavailableAtSea, m.unavailableAtSea);
+      scenarioAddUnique(out.unavailableRoleIds, m.unavailableRoleIds);
+      scenarioAddUnique(out.tags, m.tags);
+      if (m.weatherState) out.weatherState = m.weatherState;
+      if (m.fishingAllowed === false) out.fishingAllowed = false;
+      if (typeof m.catchYieldPct === 'number') out.catchYieldPct = Math.min(out.catchYieldPct, m.catchYieldPct);
+      if (m.resourceDemand) for (var k in m.resourceDemand) {
+        if (!Object.prototype.hasOwnProperty.call(m.resourceDemand, k)) continue;
+        out.resourceDemand[k] = (out.resourceDemand[k] || 0) + m.resourceDemand[k];
+      }
+    }
+    out.modifierIds.sort(); out.unknownModifierIds.sort();
+    out.unavailableAtSea.sort(); out.unavailableRoleIds.sort(); out.tags.sort();
+    return out;
+  }
+
+  // Strategy vectors are deliberately data, not score. The campaign can compare
+  // coordination, reserve, fatigue, delay, and redundancy without minting another
+  // percentage or changing any of the frozen 99 mastery atoms.
+  var SCENARIO_STRATEGIES = {
+    normal: {
+      'standard-plan': { id: 'standard-plan', label: L('Run the authored plan', '作成済み計画を実行'),
+        vector: { coordinationWork: 0, cashCost: 0, fatigueLoad: 0, guestWaitMin: 0, redundancy: 0 }, runStateDelta: {} }
+    },
+    'comms-outage': {
+      'radio-route': { id: 'radio-route', label: L('Use the marine-radio route', '船舶無線ルートを使う'),
+        vector: { coordinationWork: 1, cashCost: 0, fatigueLoad: 2, guestWaitMin: 0, redundancy: 0 }, runStateDelta: { teamCapacity: -2 } },
+      'redundant-paths': { id: 'redundant-paths', label: L('Use independent redundant paths', '独立した冗長経路を使う'),
+        vector: { coordinationWork: 2, cashCost: 0, fatigueLoad: 4, guestWaitMin: 0, redundancy: 1 }, runStateDelta: { teamCapacity: -4 } }
+    },
+    'storm-no-go': {
+      'shore-fallback': { id: 'shore-fallback', label: L('Activate the shore fallback', '陸上フォールバックを発動'),
+        vector: { coordinationWork: 2, cashCost: 0, fatigueLoad: 8, guestWaitMin: 0, redundancy: 1 }, runStateDelta: { teamCapacity: -8, operationalDebt: 1 } },
+      postpone: { id: 'postpone', label: L('Postpone and extend lodging', '延期して宿泊を延長'),
+        vector: { coordinationWork: 1, cashCost: 60000, fatigueLoad: 2, guestWaitMin: 240, redundancy: 1 },
+        runStateDelta: { cashReserve: -60000, teamCapacity: -2, guestWait: 240, operationalDebt: 1 } },
+      'guarded-departure': { id: 'guarded-departure', label: L('Depart with extra safeguards', '追加安全策で出港'),
+        vector: { coordinationWork: 3, cashCost: 0, fatigueLoad: 20, guestWaitMin: 0, redundancy: 0 }, runStateDelta: { teamCapacity: -20, operationalDebt: 3 } }
+    },
+    'principal-unavailable': {
+      'deputy-command': { id: 'deputy-command', label: L('Activate the named deputy', '指名済みの代理を起動'),
+        vector: { coordinationWork: 1, cashCost: 0, fatigueLoad: 4, guestWaitMin: 0, redundancy: 1 }, runStateDelta: { teamCapacity: -4 } },
+      'distributed-command': { id: 'distributed-command', label: L('Use distributed decision authority', '分散した意思決定権限を使う'),
+        vector: { coordinationWork: 3, cashCost: 0, fatigueLoad: 8, guestWaitMin: 0, redundancy: 2 }, runStateDelta: { teamCapacity: -8 } },
+      'intervention-token': { id: 'intervention-token', label: L('Escalate with one intervention', '介入を1回使ってエスカレート'),
+        liveRecovery: true, awardsBadge: false,
+        vector: { coordinationWork: 2, cashCost: 0, fatigueLoad: 3, guestWaitMin: 15, redundancy: 0 },
+        runStateDelta: { interventionTokens: -1, guestWait: 15, operationalDebt: 2 } }
+    },
+    'low-catch': {
+      'fallback-supply': { id: 'fallback-supply', label: L('Buy the planned fallback supply', '計画済みの代替食材を購入'),
+        vector: { coordinationWork: 2, cashCost: 60000, fatigueLoad: 2, guestWaitMin: 0, redundancy: 1 },
+        runStateDelta: { cashReserve: -60000, teamCapacity: -2 } },
+      'menu-substitution': { id: 'menu-substitution', label: L('Use the backup menu', '代替献立に切り替える'),
+        vector: { coordinationWork: 2, cashCost: 0, fatigueLoad: 4, guestWaitMin: 0, redundancy: 1 },
+        runStateDelta: { criticalInventory: -1, teamCapacity: -4 } },
+      'quality-tradeoff': { id: 'quality-tradeoff', label: L('Accept a delayed simplified service', '遅れを受け入れ簡易提供にする'),
+        vector: { coordinationWork: 1, cashCost: 0, fatigueLoad: 2, guestWaitMin: 60, redundancy: 0 },
+        runStateDelta: { teamCapacity: -2, guestWait: 60, operationalDebt: 1 } }
+    }
+  };
+
+  var SCENARIOS = {
+    normal: composeScenario([], { id: 'normal', name: L('Normal rehearsal', '通常リハーサル'),
+      strategyIds: ['standard-plan'] }),
+    'comms-outage': composeScenario(['at-sea-comms-loss'], { id: 'comms-outage',
+      name: L('At-sea communications outage', '海上通信障害'), revealPhase: 'checkpoint',
+      badgeId: 'communications-resilient', strategyIds: ['radio-route', 'redundant-paths'] }),
+    'storm-no-go': composeScenario(['storm-weather'], { id: 'storm-no-go',
+      name: L('Storm / fishing no-go', '嵐・出漁不可'), revealPhase: 'after-lock',
+      badgeId: 'weather-resilient', strategyIds: ['shore-fallback', 'postpone', 'guarded-departure'] }),
+    'principal-unavailable': composeScenario(['principal-offline'], { id: 'principal-unavailable',
+      name: L('Principal unavailable', '責任者が対応不可'), revealPhase: 'after-lock',
+      badgeId: 'delegation-resilient', strategyIds: ['deputy-command', 'distributed-command', 'intervention-token'] }),
+    'low-catch': composeScenario(['low-catch-yield'], { id: 'low-catch',
+      name: L('Low catch', '不漁'), revealPhase: 'checkpoint',
+      badgeId: 'supply-resilient', strategyIds: ['fallback-supply', 'menu-substitution', 'quality-tradeoff'] })
+  };
+  function scenarioProfile(id) { return clone(SCENARIOS[id] || SCENARIOS.normal); }
+  function scenarioStrategy(scenarioId, strategyId) {
+    var family = SCENARIO_STRATEGIES[scenarioId] || {};
+    return family[strategyId] ? clone(family[strategyId]) : null;
+  }
+  function applyScenario(cfg, id, strategyId) {
     var out = clone(cfg || { seed: 1, overrides: {} });
     out.overrides = out.overrides || {};
     out.scenarioId = SCENARIOS[id] ? id : 'normal';
+    delete out.scenarioStrategyId;
+    if (strategyId && SCENARIO_STRATEGIES[out.scenarioId] && SCENARIO_STRATEGIES[out.scenarioId][strategyId]) {
+      out.scenarioStrategyId = strategyId;
+    }
     return out;
+  }
+
+  // ---- minimal versioned carryover + costly recovery -------------------------
+  // RunState is intentionally small. It is campaign/execution state, never plan
+  // authoring data; every reducer returns a new object and cannot repair score.
+  var RUN_STATE_VERSION = 1;
+  var RUN_STATE_LIMITS = {
+    cashReserve: [0, 10000000], teamCapacity: [0, 100], criticalInventory: [0, 99],
+    guestWait: [0, 10080], interventionTokens: [0, 20], operationalDebt: [0, 999]
+  };
+  function runStateNumber(value, fallback, bounds) {
+    if (typeof value !== 'number' || !isFinite(value)) return fallback;
+    return Math.max(bounds[0], Math.min(bounds[1], value));
+  }
+  function runStateBadges(value) {
+    var out = [];
+    if (!Array.isArray(value)) return out;
+    for (var i = 0; i < value.length; i++) {
+      if (typeof value[i] !== 'string' || !value[i] || value[i].length > 80 || out.indexOf(value[i]) >= 0) continue;
+      out.push(value[i]);
+    }
+    return out;
+  }
+  function createRunState(values) {
+    values = values || {};
+    return {
+      version: RUN_STATE_VERSION,
+      cashReserve: runStateNumber(values.cashReserve, 300000, RUN_STATE_LIMITS.cashReserve),
+      teamCapacity: runStateNumber(values.teamCapacity, 100, RUN_STATE_LIMITS.teamCapacity),
+      criticalInventory: runStateNumber(values.criticalInventory, 2, RUN_STATE_LIMITS.criticalInventory),
+      guestWait: runStateNumber(values.guestWait, 0, RUN_STATE_LIMITS.guestWait),
+      interventionTokens: runStateNumber(values.interventionTokens, 1, RUN_STATE_LIMITS.interventionTokens),
+      operationalDebt: runStateNumber(values.operationalDebt, 0, RUN_STATE_LIMITS.operationalDebt),
+      resilienceBadges: runStateBadges(values.resilienceBadges)
+    };
+  }
+  function validateRunState(raw) {
+    var errors = [], fields = Object.keys(RUN_STATE_LIMITS), i, key, value, bounds;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      return { ok: false, errors: ['not-an-object'], state: null };
+    }
+    if (raw.version !== RUN_STATE_VERSION) errors.push('unsupported-version');
+    for (i = 0; i < fields.length; i++) {
+      key = fields[i]; value = raw[key]; bounds = RUN_STATE_LIMITS[key];
+      if (typeof value !== 'number' || !isFinite(value) || value < bounds[0] || value > bounds[1]) errors.push('invalid-' + key);
+    }
+    if (!Array.isArray(raw.resilienceBadges)) errors.push('invalid-resilienceBadges');
+    else {
+      var seen = {};
+      for (i = 0; i < raw.resilienceBadges.length; i++) {
+        value = raw.resilienceBadges[i];
+        if (typeof value !== 'string' || !value || value.length > 80 || seen[value]) {
+          errors.push('invalid-resilienceBadges'); break;
+        }
+        seen[value] = true;
+      }
+    }
+    return { ok: errors.length === 0, errors: errors, state: errors.length ? null : createRunState(raw) };
+  }
+  // Version 0 was the short-lived prototype vocabulary. Missing versions import
+  // through this explicit mapping; unknown future versions fail closed as null.
+  function migrateRunState(raw) {
+    if (raw == null) return createRunState();
+    if (typeof raw !== 'object' || Array.isArray(raw)) return null;
+    if (raw.version === RUN_STATE_VERSION) return validateRunState(raw).state;
+    if (raw.version == null || raw.version === 0) {
+      return createRunState({
+        cashReserve: raw.cashReserve != null ? raw.cashReserve : raw.reserve,
+        teamCapacity: raw.teamCapacity != null ? raw.teamCapacity : raw.capacity,
+        criticalInventory: raw.criticalInventory != null ? raw.criticalInventory : raw.inventory,
+        guestWait: raw.guestWait != null ? raw.guestWait : raw.wait,
+        interventionTokens: raw.interventionTokens != null ? raw.interventionTokens : raw.tokens,
+        operationalDebt: raw.operationalDebt != null ? raw.operationalDebt : raw.debt,
+        resilienceBadges: raw.resilienceBadges != null ? raw.resilienceBadges : raw.badges
+      });
+    }
+    return null;
+  }
+  function runStateFromPlan(plan, values) {
+    var base = {}, k;
+    if (plan && plan.budget && typeof plan.budget.reserve === 'number' && isFinite(plan.budget.reserve)) {
+      base.cashReserve = plan.budget.reserve;
+    }
+    if (values && typeof values === 'object') for (k in values) if (Object.prototype.hasOwnProperty.call(values, k)) base[k] = values[k];
+    return createRunState(base);
+  }
+  function applyRunStateDelta(runState, delta, badgeId) {
+    var before = migrateRunState(runState);
+    if (!before) return { ok: false, reason: 'unsupported-run-state-version', state: null, appliedDelta: {} };
+    if (delta == null) delta = {};
+    if (typeof delta !== 'object' || Array.isArray(delta)) {
+      return { ok: false, reason: 'invalid-run-state-delta', state: before, appliedDelta: {} };
+    }
+    var next = createRunState(before), applied = {}, fields = Object.keys(RUN_STATE_LIMITS);
+    for (var i = 0; i < fields.length; i++) {
+      var key = fields[i];
+      if (!Object.prototype.hasOwnProperty.call(delta, key)) continue;
+      var amount = delta[key];
+      if (typeof amount !== 'number' || !isFinite(amount)) {
+        return { ok: false, reason: 'invalid-run-state-delta', state: before, appliedDelta: {} };
+      }
+      var value = before[key] + amount, bounds = RUN_STATE_LIMITS[key];
+      if (value < bounds[0]) return { ok: false, reason: 'insufficient-' + key, state: before, appliedDelta: {} };
+      if (value > bounds[1]) return { ok: false, reason: 'run-state-limit-' + key, state: before, appliedDelta: {} };
+      next[key] = value; applied[key] = amount;
+    }
+    if (badgeId && next.resilienceBadges.indexOf(badgeId) < 0) next.resilienceBadges.push(badgeId);
+    return { ok: true, reason: 'applied', state: next, appliedDelta: applied };
+  }
+  var RECOVERY_ACTIONS = {
+    'reserve-purchase': { id: 'reserve-purchase', label: L('Spend reserve on an emergency purchase', '予備費で緊急購入'),
+      runStateDelta: { cashReserve: -60000, operationalDebt: 1 } },
+    'use-intervention': { id: 'use-intervention', label: L('Use one intervention token', '介入トークンを1つ使う'),
+      runStateDelta: { interventionTokens: -1, operationalDebt: 1 } },
+    'coordination-surge': { id: 'coordination-surge', label: L('Pull the team into a coordination surge', 'チームを緊急調整に投入'),
+      runStateDelta: { teamCapacity: -10, operationalDebt: 2 } },
+    'consume-backup': { id: 'consume-backup', label: L('Consume one critical backup', '重要な予備を1つ消費'),
+      runStateDelta: { criticalInventory: -1 } },
+    'accept-guest-wait': { id: 'accept-guest-wait', label: L('Accept a 30-minute guest wait', 'ゲストの30分待機を受け入れる'),
+      runStateDelta: { guestWait: 30, operationalDebt: 1 } }
+  };
+  function applyRecovery(runState, recoveryId) {
+    var action = RECOVERY_ACTIONS[recoveryId];
+    if (!action) {
+      var unchanged = migrateRunState(runState);
+      return { ok: false, reason: 'unknown-recovery', recoveryId: recoveryId || null,
+        state: unchanged, appliedDelta: {}, planChanged: false };
+    }
+    var result = applyRunStateDelta(runState, action.runStateDelta);
+    result.recoveryId = recoveryId; result.planChanged = false;
+    return result;
+  }
+
+  function planWithScenario(plan, id) {
+    var out = {}, k;
+    plan = plan || makeTemplate();
+    for (k in plan) if (Object.prototype.hasOwnProperty.call(plan, k)) out[k] = plan[k];
+    out.scenarioId = SCENARIOS[id] ? id : 'normal';
+    return out;
+  }
+  function scenarioRoleForHolder(plan, holderId) {
+    for (var id in plan.roles) if (plan.roles[id] && plan.roles[id].holder === holderId) return id;
+    return null;
+  }
+  function scenarioDecisionReady(plan, roleId) {
+    var roleDef = plan.roles && plan.roles[roleId];
+    return !!(roleDef && roleDef.holder && roleDef.authority && roleDef.authority.canDecide === true);
+  }
+  function scenarioRiskReady(plan, riskId) {
+    var risk = byId(plan.risks || [], riskId);
+    return !!(risk && risk.ownerRoleId && risk.abortCriterion && risk.fallback);
+  }
+  function scenarioCardShared(plan, cardId, roleIds) {
+    var card = byId(plan.infoCards || [], cardId), recipients = card && card.recipientRoleIds;
+    if (!Array.isArray(recipients)) return false;
+    for (var i = 0; i < roleIds.length; i++) if (recipients.indexOf(roleIds[i]) < 0) return false;
+    return true;
+  }
+  function scenarioBaseResult(plan, scenarioId, strategyId) {
+    var evidence = [], success = false, ds, food, owner, deputyRole, card, event, line, resource;
+    if (scenarioId === 'normal') {
+      var normalScore = scoreTrip(planWithScenario(plan, 'normal'));
+      success = normalScore.total === 100 && normalScore.gate.clean;
+      evidence.push(success ? 'mastered-plan' : 'plan-needs-repair');
+    } else if (scenarioId === 'comms-outage') {
+      ds = daySchedule(plan, 'fishday');
+      success = ds.missing.length === 0 && ds.late.length === 0 && ds.unresolved === 0;
+      if (strategyId === 'redundant-paths') {
+        food = day3FoodStrategy(plan);
+        success = success && food.singlePathFailureTolerance >= 1;
+        evidence.push(food.singlePathFailureTolerance >= 1 ? 'independent-backup-path' : 'no-independent-backup-path');
+      } else {
+        var seaRelays = handoffsForSeg(plan, 'fishday').filter(function (h) {
+          var f = channelFeasibility(plan, h, 'fishday');
+          return f.ok && (f.fromContext.atSea || f.toContext.atSea) && h.channel === 'radio';
+        });
+        success = success && seaRelays.length > 0;
+        evidence.push(seaRelays.length > 0 ? 'marine-radio-route' : 'no-marine-radio-route');
+      }
+      evidence.push(ds.unresolved === 0 ? 'all-required-information-delivered' : 'information-path-unresolved');
+    } else if (scenarioId === 'storm-no-go') {
+      var riskReady = scenarioRiskReady(plan, 'rk_sea');
+      if (strategyId === 'shore-fallback') {
+        success = riskReady && dayReadiness(plan, 'ops').length === 0;
+        evidence.push(riskReady ? 'rough-sea-owner-and-abort-set' : 'rough-sea-governance-missing');
+        evidence.push(dayReadiness(plan, 'ops').length === 0 ? 'shore-program-ready' : 'shore-program-not-ready');
+      } else if (strategyId === 'postpone') {
+        success = riskReady && (scenarioDecisionReady(plan, 'pm') || scenarioDecisionReady(plan, 'owner'));
+        evidence.push(riskReady ? 'postpone-fallback-authored' : 'postpone-fallback-not-governed');
+        evidence.push(success ? 'decision-authority-available' : 'decision-authority-missing');
+      } else {
+        success = false; evidence.push('hard-no-go-prohibits-departure');
+      }
+    } else if (scenarioId === 'principal-unavailable') {
+      owner = plan.roles && plan.roles.owner;
+      if (strategyId === 'deputy-command') {
+        deputyRole = owner && owner.deputyId ? scenarioRoleForHolder(plan, owner.deputyId) : null;
+        card = byId(plan.infoCards || [], 'ic_return');
+        success = !!(deputyRole && scenarioDecisionReady(plan, deputyRole) && card && card.recipientRoleIds.indexOf(deputyRole) >= 0);
+        evidence.push(deputyRole ? 'named-deputy-' + deputyRole : 'named-deputy-missing');
+        evidence.push(success ? 'deputy-has-authority-and-information' : 'deputy-lacks-authority-or-information');
+      } else if (strategyId === 'distributed-command') {
+        var site = plan.roles && plan.roles.siteLead, safety = plan.roles && plan.roles.safetyLead;
+        var authorityReady = scenarioDecisionReady(plan, 'siteLead') && scenarioDecisionReady(plan, 'safetyLead') &&
+          scenarioDecisionReady(plan, 'budgetLead') && !!(site && site.deputyId && safety && safety.deputyId);
+        var infoRoutes = [
+          { cardId: 'ic_ferry', roleIds: ['siteLead'] },
+          { cardId: 'ic_weather', roleIds: ['siteLead', 'safetyLead'] },
+          { cardId: 'ic_cash', roleIds: ['siteLead', 'budgetLead'] }
+        ], infoReady = true;
+        for (var ir = 0; ir < infoRoutes.length; ir++) {
+          var shared = scenarioCardShared(plan, infoRoutes[ir].cardId, infoRoutes[ir].roleIds);
+          if (!shared) infoReady = false;
+          evidence.push('distributed-route-' + infoRoutes[ir].cardId + (shared ? '-ready' : '-missing'));
+        }
+        success = authorityReady && infoReady;
+        evidence.push(authorityReady ? 'distributed-authority-and-deputies-ready' : 'distributed-authority-or-deputy-gap');
+        evidence.push(infoReady ? 'distributed-information-routes-ready' : 'distributed-information-route-gap');
+      } else {
+        success = true; evidence.push('live-escalation-requested');
+      }
+    } else if (scenarioId === 'low-catch') {
+      if (strategyId === 'fallback-supply') {
+        event = byId((plan.budget && plan.budget.spendEvents) || [], 'sp_fallback');
+        line = event ? byId(plan.budget.lines || [], event.lineId) : null;
+        card = byId(plan.infoCards || [], 'ic_cash');
+        success = !!(event && line && line.approverRoleId && line.payMethod === event.requiredMethod && card &&
+          card.recipientRoleIds.indexOf(event.actorRoleId) >= 0);
+        evidence.push(success ? 'fallback-purchase-authorized-and-informed' : 'fallback-purchase-blocked');
+      } else if (strategyId === 'menu-substitution') {
+        resource = byId((plan.budget && plan.budget.resources) || [], 'res_food');
+        card = byId(plan.infoCards || [], 'ic_food');
+        success = !!(resource && resource.planned >= resource.target && card && card.recipientRoleIds.indexOf('chef') >= 0);
+        evidence.push(success ? 'backup-menu-inputs-ready' : 'backup-menu-inputs-missing');
+      } else {
+        success = true; evidence.push('simplified-service-with-explicit-wait');
+      }
+    }
+    return { success: success, evidence: evidence };
+  }
+  // Pure scenario fold. Mastery is always read against the normal authored plan;
+  // resilience, recovery cost, and carried consequences are reported separately.
+  function evaluateScenario(plan, scenarioId, strategyId, runState, seed) {
+    scenarioId = SCENARIOS[scenarioId] ? scenarioId : 'normal';
+    var profile = scenarioProfile(scenarioId), family = SCENARIO_STRATEGIES[scenarioId] || {};
+    var explicitStrategy = strategyId != null;
+    if (!strategyId && plan && plan.scenarioStrategyId && family[plan.scenarioStrategyId]) strategyId = plan.scenarioStrategyId;
+    strategyId = family[strategyId] ? strategyId : null;
+    if (!strategyId && !explicitStrategy && profile.strategyIds.length) strategyId = profile.strategyIds[0];
+    var strategy = strategyId ? family[strategyId] : null;
+    var before = runState == null ? runStateFromPlan(plan) : migrateRunState(runState);
+    var masteryScore = scoreTrip(planWithScenario(plan, 'normal'));
+    var replaySeed = (typeof seed === 'number' && isFinite(seed) ? seed : 1) >>> 0;
+    if (!replaySeed) replaySeed = 1;
+    var base = strategy ? scenarioBaseResult(planWithScenario(plan, scenarioId), scenarioId, strategyId) :
+      { success: false, evidence: ['unknown-strategy'] };
+    var badgeEligible = !!(strategy && strategy.awardsBadge !== false && profile.badgeId);
+    var transition = before && base.success ? applyRunStateDelta(before, strategy.runStateDelta,
+      badgeEligible ? profile.badgeId : null) :
+      { ok: !!before, reason: before ? 'scenario-requirements-not-met' : 'unsupported-run-state-version', state: before, appliedDelta: {} };
+    var success = base.success && transition.ok;
+    var recoveredWithDebt = !!(success && strategy && strategy.liveRecovery === true);
+    return {
+      version: 1,
+      replay: { scenarioId: scenarioId, seed: replaySeed, strategyId: strategyId,
+        modifierIds: profile.modifierIds.slice() },
+      scenario: profile, strategy: strategy ? clone(strategy) : null,
+      success: success, status: success ? (recoveredWithDebt ? 'recovered-with-debt' : 'resilient') : 'blocked',
+      reason: success ? (recoveredWithDebt ? 'live-recovery-with-operational-debt' : 'scenario-recovered') :
+        (base.success ? transition.reason : 'scenario-requirements-not-met'),
+      evidence: base.evidence.slice(), appliedDelta: clone(transition.appliedDelta || {}),
+      runStateBefore: before ? clone(before) : null, runStateAfter: transition.state ? clone(transition.state) : null,
+      badgeAwarded: success && badgeEligible ? profile.badgeId : null,
+      resilienceEarned: success && badgeEligible, recoveredWithDebt: recoveredWithDebt,
+      planMastery: { score: masteryScore.total, grade: masteryScore.grade, clean: masteryScore.gate.clean,
+        atomCount: masteryScore.atoms.length }
+    };
   }
 
   // ---- physical route vocabulary -------------------------------------------------
@@ -1189,7 +1589,13 @@
     var k;
     // Scenario selection is metadata on the merged plan. The normal/no-scenario
     // paths remain behaviorally identical; channelFeasibility reads this field.
-    if (cfg && cfg.scenarioId && SCENARIOS[cfg.scenarioId]) plan.scenarioId = cfg.scenarioId;
+    if (cfg && cfg.scenarioId && SCENARIOS[cfg.scenarioId]) {
+      plan.scenarioId = cfg.scenarioId;
+      if (cfg.scenarioStrategyId && SCENARIO_STRATEGIES[cfg.scenarioId] &&
+          SCENARIO_STRATEGIES[cfg.scenarioId][cfg.scenarioStrategyId]) {
+        plan.scenarioStrategyId = cfg.scenarioStrategyId;
+      }
+    }
     // capture the template's DEFAULT seat holders (before any override mutates them) for the §seats remap below
     var SEAT_ROLES = ['owner', 'pm', 'siteLead', 'budgetLead', 'safetyLead', 'logi', 'comms', 'specialist'];
     var SEAT_DEFAULT_HOLDER = {}, SEAT_DEFAULT_PIDS = {};
@@ -2491,9 +2897,20 @@
     // renders at-sea crews aboard hulls); everyone idles in the cabins instead of the lodging.
     var stationSet = (segment === 'voyage') ? VOYAGE_STATIONS : STATIONS;
     var idleStation = (segment === 'voyage') ? 'cabins' : 'lodging';
+    // Scenarios may remove a role-holder from the rehearsal without rewriting
+    // the authored plan.  Keep this as runtime-only participant metadata: the
+    // resilience evaluator tests whether authority/information were delegated,
+    // while scoreTrip continues to read the unchanged normal plan.
+    var runtimeScenario = SCENARIOS[plan.scenarioId || 'normal'] || SCENARIOS.normal;
+    var unavailableRoleIds = (runtimeScenario.unavailableRoleIds || []).slice();
+    var unavailableParticipantIds = [];
     var participants = plan.participants.map(function (p) {
+      var unavailableRoleId = unavailableRoleIds.indexOf(p.roleId) >= 0 ? p.roleId : null;
+      if (unavailableRoleId) unavailableParticipantIds.push(p.id);
       return { id: p.id, name: p.name, roleId: p.roleId, company: p.company, constraints: p.constraints,
-        station: idleStation, x: station(idleStation).x, y: station(idleStation).y, state: 'idle', fatigue: 0, taskId: null };
+        station: idleStation, x: station(idleStation).x, y: station(idleStation).y,
+        state: unavailableRoleId ? 'unavailable' : 'idle', fatigue: 0, taskId: null,
+        scenarioUnavailable: !!unavailableRoleId, unavailableRoleId: unavailableRoleId };
     });
 
     // clock window of the chosen day (or the whole trip)
@@ -2505,13 +2922,24 @@
     }
 
     var replayCfg = { seed: (cfg.seed >>> 0) || 1, overrides: clone(cfg.overrides || {}) };
-    if (cfg.scenarioId && SCENARIOS[cfg.scenarioId]) replayCfg.scenarioId = cfg.scenarioId;
+    if (cfg.scenarioId && SCENARIOS[cfg.scenarioId]) {
+      replayCfg.scenarioId = cfg.scenarioId;
+      if (cfg.scenarioStrategyId && SCENARIO_STRATEGIES[cfg.scenarioId] &&
+          SCENARIO_STRATEGIES[cfg.scenarioId][cfg.scenarioStrategyId]) {
+        replayCfg.scenarioStrategyId = cfg.scenarioStrategyId;
+      }
+    }
+    var replayState = cfg.runState == null ? null : migrateRunState(cfg.runState);
+    if (replayState) replayCfg.runState = clone(replayState);
     var sim = {
       cfg: replayCfg,
       plan: plan, rng: mulberry32((cfg.seed >>> 0) || 1),
+      runState: replayState ? clone(replayState) : null,
       segment: segment || 'all', segTaskIds: inTasks.map(function (t) { return t.id; }), segEnd: segEnd,
       day: d0, clock: d0, tick: 0, finished: null, phaseLabel: null, idleStation: idleStation,
       tasks: tasks, participants: participants, problems: problems,
+      scenarioState: { id: runtimeScenario.id, modifierIds: (runtimeScenario.modifierIds || []).slice(),
+        unavailableRoleIds: unavailableRoleIds, unavailableParticipantIds: unavailableParticipantIds },
       stations: stationSet.map(function (s) { return { id: s.id, name: s.name, icon: s.icon, x: s.x, y: s.y, crewIds: [], dominantProblem: null }; }),
       budget: { total: plan.budget.total, spent: 0, reserve: plan.budget.reserve },
       events: [], bannerOn: false, bannerEverFired: false
@@ -2558,6 +2986,12 @@
     var rank = { stalled: 4, rework: 3, working: 2, waitinfo: 1 };
     for (i = 0; i < sim.participants.length; i++) {
       p = sim.participants[i];
+      if (p.scenarioUnavailable) {
+        p.taskId = null; p.station = sim.idleStation || 'lodging'; p.state = 'unavailable';
+        var unavailableStation = station(p.station); p.x = unavailableStation.x; p.y = unavailableStation.y;
+        (bucket[p.station] || (bucket[p.station] = [])).push(p.id);
+        continue;
+      }
       var cur = null;
       for (var k = 0; k < sim.tasks.length; k++) {
         t = sim.tasks[k];
@@ -2677,6 +3111,12 @@
     var bucket = {}; sim.stations.forEach(function (s) { bucket[s.id] = []; });
     for (i = 0; i < sim.participants.length; i++) {
       p = sim.participants[i];
+      if (p.scenarioUnavailable) {
+        p.taskId = null; p.station = sim.idleStation || 'lodging'; p.state = 'unavailable';
+        var unavailableStation = station(p.station); p.x = unavailableStation.x; p.y = unavailableStation.y;
+        (bucket[p.station] || (bucket[p.station] = [])).push(p.id);
+        continue;
+      }
       var cur = null;
       for (var k = 0; k < sim.tasks.length; k++) { t = sim.tasks[k]; if (t.assignedIds.indexOf(p.id) >= 0 && (t.state === 'working' || t.state === 'stalled')) { cur = t; break; } }
       if (!cur) { // none active now: any finished work? → done, else idle at lodging
@@ -3887,7 +4327,14 @@
     // fishday temporal layer (§6/§8)
     CHEFS: CHEFS, GUESTS: GUESTS, MIN_DT: MIN_DT, DAY_START_MIN: DAY_START_MIN, DAY_END_MIN: DAY_END_MIN,
     CHANNELS: CHANNELS, CHECKPOINTS: CHECKPOINTS,
-    SCENARIOS: SCENARIOS, applyScenario: applyScenario, channelFeasibility: channelFeasibility,
+    SCENARIO_MODIFIERS: clone(SCENARIO_MODIFIERS), SCENARIO_STRATEGIES: clone(SCENARIO_STRATEGIES),
+    SCENARIOS: clone(SCENARIOS), composeScenario: composeScenario, scenarioProfile: scenarioProfile,
+    scenarioStrategy: scenarioStrategy, applyScenario: applyScenario, evaluateScenario: evaluateScenario,
+    channelFeasibility: channelFeasibility,
+    RUN_STATE_VERSION: RUN_STATE_VERSION, RUN_STATE_LIMITS: clone(RUN_STATE_LIMITS),
+    RECOVERY_ACTIONS: clone(RECOVERY_ACTIONS), createRunState: createRunState,
+    validateRunState: validateRunState, migrateRunState: migrateRunState,
+    runStateFromPlan: runStateFromPlan, applyRunStateDelta: applyRunStateDelta, applyRecovery: applyRecovery,
     DAY3_FOOD_STRATEGY_IDS: DAY3_FOOD_STRATEGY_IDS.slice(), DAY3_FOOD_ROOT: clone(DAY3_FOOD_ROOT),
     applyDay3FoodStrategy: applyDay3FoodStrategy, day3FoodStrategy: day3FoodStrategy,
     fishdayTasks: fishdayTasks, resolveSendMin: resolveSendMin, staticArrival: staticArrival, infoArrival: infoArrival,
